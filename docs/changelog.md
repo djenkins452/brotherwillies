@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-02-07 - Comprehensive Help Content Overhaul
+
+**Summary:** Rewrote all context-aware help content to be beginner-friendly with detailed explanations, examples, and a sample preferences setup.
+
+### Changes:
+- Every help section rewritten with "What is this page?" introductions
+- All sports analytics terms explained from scratch (edge, spread, moneyline, Brier score, CLV, etc.)
+- Added concrete examples using Alabama throughout (team the demo user follows)
+- Preferences help includes detailed field-by-field explanations with sample values
+- New `preferences` help_key for the split preferences page
+- Added CBB Hub help section
+- Profile help updated for new personal info fields
+- Default/fallback help section expanded with platform overview
+
+---
+
 ## 2026-02-07 - Header, Profile Dropdown, Profile/Preferences Split
 
 **Summary:** Updated header branding, added profile dropdown menu, split profile into personal info and preferences pages, added profile picture upload support.

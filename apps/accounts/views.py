@@ -94,7 +94,7 @@ def preferences_view(request):
     return render(request, 'accounts/preferences.html', {
         'form': form,
         'profile': profile,
-        'help_key': 'profile',
+        'help_key': 'preferences',
         'nav_active': 'profile',
     })
 

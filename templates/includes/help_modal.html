@@ -9,94 +9,245 @@
             {% if help_key == 'home' %}
                 <h4>Home Dashboard</h4>
                 <ul>
-                    <li>View upcoming games and top value picks at a glance.</li>
-                    <li><strong>Edge</strong> = difference between our model's probability and the market's implied probability.</li>
-                    <li>Positive edge means our model sees more value than the market.</li>
-                    <li>Log in to unlock the full Value Board and personal features.</li>
+                    <li><strong>What is this page?</strong> This is your quick-look dashboard. It shows the top games where our model thinks the market might be off, so you can jump straight to the most interesting matchups.</li>
+                    <li><strong>What does "Edge" mean?</strong> Edge is the gap between what our model thinks the probability of a team winning is versus what the betting market implies. For example, if the market says Alabama has a 60% chance to win, but our model calculates 68%, the edge is +8%. A bigger positive edge means our model sees more value than the market does.</li>
+                    <li><strong>What does "Market %" mean?</strong> This is the implied win probability derived from the current betting odds. Sportsbooks set odds, and those odds can be converted into a percentage. If a team is -200 on the moneyline, that implies roughly a 67% win probability.</li>
+                    <li><strong>What does "House %" mean?</strong> This is the percentage our house model calculates as the team's true win probability, based on team ratings, injuries, home field advantage, and other factors. It's independent of what the betting market says.</li>
+                    <li><strong>Confidence badges (HIGH / MED / LOW)</strong> tell you how much data we have behind the calculation. HIGH means we have recent odds and full injury data. LOW means some data may be stale or incomplete.</li>
+                    <li><strong>YOUR TEAM</strong> badge appears on games involving the favorite team you set in Preferences.</li>
+                    <li>Log in to see the full Value Board with all games, filters, and your personalized model.</li>
                 </ul>
+
             {% elif help_key == 'value_board' %}
                 <h4>Value Board</h4>
                 <ul>
-                    <li>Games ranked by model-vs-market misalignment (edge).</li>
-                    <li><strong>House Edge</strong> = House model probability minus market probability.</li>
-                    <li><strong>User Edge</strong> = Your model probability minus market probability.</li>
-                    <li><strong>Delta</strong> = Your model minus house model (shows where you disagree).</li>
-                    <li>Use filters to focus on specific spreads, odds, or minimum edge.</li>
-                    <li>Your favorite team is always included when the preference is set.</li>
-                    <li><strong>Confidence</strong> levels reflect data freshness and completeness.</li>
+                    <li><strong>What is the Value Board?</strong> It's a ranked list of upcoming games sorted by how much our model disagrees with the betting market. Games at the top have the largest gap between what the model thinks and what the market says — that's where the analysis gets most interesting.</li>
+
+                    <li><strong>House Edge</strong> — This is the house model's probability minus the market's implied probability. Example: If the house model says Alabama has a 72% chance to beat Auburn, and the market implies 65%, the house edge is +7.0%. A positive number means the house model thinks the team is undervalued by the market.</li>
+
+                    <li><strong>User Edge</strong> — Same concept, but using YOUR custom model weights instead of the house model. If you've tuned your model (in "My Model") to weight injuries more heavily, your probabilities will differ from the house model, and your edge may be different too.</li>
+
+                    <li><strong>Delta</strong> — The difference between your model and the house model. If your model says 75% and the house says 72%, the delta is +3%. This shows where YOU disagree with the house model. A large delta means your settings are pulling the analysis in a meaningfully different direction.</li>
+
+                    <li><strong>How do the filters work?</strong> Filters let you narrow down which games appear on the board. You set these in Preferences (/profile/preferences/), and they automatically apply here:
+                        <br>- <strong>Spread filters</strong> limit games to a specific point spread range
+                        <br>- <strong>Odds filters</strong> limit games to a specific moneyline range
+                        <br>- <strong>Minimum edge</strong> hides games below your edge threshold
+                    </li>
+
+                    <li><strong>Favorite team override</strong> — If you've set a favorite team AND enabled "Always include favorite team" in Preferences, that team's games always appear on the board regardless of your filter settings. You'll never miss your team.</li>
+
+                    <li><strong>Confidence (HIGH / MED / LOW)</strong> — This tells you how reliable the data behind the calculation is. HIGH means odds are recent and injury data is complete. MED means some data might be a few hours old. LOW means data may be stale or missing — take those numbers with a grain of salt.</li>
                 </ul>
+
             {% elif help_key == 'cfb_hub' %}
                 <h4>College Football Hub</h4>
                 <ul>
-                    <li>Browse conferences and upcoming games.</li>
-                    <li>Tap a conference to see its teams and matchups.</li>
-                    <li>Tap a game for detailed analysis with house and user model comparisons.</li>
+                    <li><strong>What is this page?</strong> This is your gateway to browse all college football conferences, teams, and upcoming games. Think of it like a schedule page with our model's analysis layered on top.</li>
+                    <li><strong>Conferences</strong> — College football teams are grouped into conferences (like the SEC, Big Ten, Big 12, etc.). Tap any conference to see its teams and their upcoming games.</li>
+                    <li><strong>Conference page</strong> — Shows all teams in that conference along with their upcoming matchups. Each game card shows the teams, kickoff time, and quick edge numbers so you can spot interesting games at a glance.</li>
+                    <li><strong>Game cards</strong> — Each card shows two teams, the game date/time, and the house model's edge. Tap any game card to go to the full game detail page with all the analysis.</li>
+                    <li><strong>What should I look for?</strong> Games with high absolute edge values are where our model disagrees most with the market. Those are the most analytically interesting matchups to dig into.</li>
                 </ul>
+
+            {% elif help_key == 'cbb_hub' %}
+                <h4>College Basketball Hub</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> This is your gateway to browse all college basketball conferences, teams, and upcoming games. It works the same way as the CFB Hub but for basketball.</li>
+                    <li><strong>Conferences</strong> — College basketball teams are grouped into conferences (like the SEC, Big Ten, Big East, etc.). Tap any conference to see its teams and their upcoming games.</li>
+                    <li><strong>Conference page</strong> — Shows all teams in that conference along with their upcoming matchups. Each game card shows the teams, tip-off time, and quick edge numbers.</li>
+                    <li><strong>Game cards</strong> — Each card shows two teams, the game date/time, and the house model's edge. Tap any game card for full analysis.</li>
+                    <li><strong>What should I look for?</strong> Games with high absolute edge values are where our model disagrees most with the market — those are the most analytically interesting matchups.</li>
+                </ul>
+
             {% elif help_key == 'game_detail' %}
                 <h4>Game Detail</h4>
                 <ul>
-                    <li>Side-by-side comparison of market, house, and user model probabilities.</li>
-                    <li><strong>Line movement</strong> arrows show how odds have changed over time.</li>
-                    <li><strong>Injury impacts</strong> are factored into model calculations.</li>
-                    <li>Confidence reflects how recent and complete the underlying data is.</li>
+                    <li><strong>What is this page?</strong> This is the deep-dive analysis for a single game. You'll see side-by-side comparisons of what the market thinks, what our house model thinks, and what your personal model thinks.</li>
+
+                    <li><strong>Market Probability</strong> — The win percentage implied by the current betting odds. This is what sportsbooks and the collective betting market believe. For example, if Alabama is -300 on the moneyline, the market implies roughly a 75% chance of winning.</li>
+
+                    <li><strong>House Model Probability</strong> — What our model calculates as the actual win probability based on team ratings, home field advantage, injuries, recent form, and conference strength. This is an independent calculation — it doesn't look at the market odds.</li>
+
+                    <li><strong>Your Model Probability</strong> — The same calculation but using YOUR custom weight settings from the "My Model" page. If you've cranked up the injury weight, games with key injuries will shift more in your model than in the house model.</li>
+
+                    <li><strong>Line movement</strong> — The arrows (▲ ▼) show how the odds have changed since they were first posted. If the spread moves from -3.5 to -7, that's significant movement, usually meaning sharp money or new information has come in. Movement toward a team means the market is becoming more confident in that team.</li>
+
+                    <li><strong>Injury impacts</strong> — Key player injuries are listed with their estimated impact on the game. A starting quarterback being out has a much larger impact than a backup linebacker. These injuries are factored into the model's probability calculations.</li>
+
+                    <li><strong>Confidence</strong> — Reflects how recent the odds data is and how complete the injury information is. A HIGH confidence game has fresh odds and a full injury picture. A LOW confidence game may be using older data, so treat those numbers more cautiously.</li>
                 </ul>
+
             {% elif help_key == 'my_model' %}
                 <h4>My Model</h4>
                 <ul>
-                    <li>Adjust weights to create your own probability model.</li>
-                    <li><strong>Rating Weight</strong> = how much team strength matters.</li>
-                    <li><strong>HFA Weight</strong> = home field advantage importance.</li>
-                    <li><strong>Injury Weight</strong> = how much injuries affect probabilities.</li>
-                    <li><strong>Recent Form</strong> = emphasis on recent performance.</li>
-                    <li><strong>Conference</strong> = conference strength adjustment.</li>
-                    <li>Your model never overwrites the house model.</li>
+                    <li><strong>What is this page?</strong> This is where you customize your own probability model. The house model uses default weights for various factors — here you can adjust those weights to reflect your own analysis philosophy. Your changes affect the "User" probabilities and edges throughout the site.</li>
+
+                    <li><strong>How weights work:</strong> Each weight is a multiplier (default 1.0). Setting a weight higher than 1.0 means that factor matters MORE in your model. Setting it lower than 1.0 means it matters LESS. Setting it to 0 removes that factor entirely.</li>
+
+                    <li><strong>Rating Weight (default: 1.0)</strong> — Controls how much overall team strength matters. Team ratings measure how good a team is historically and this season. Example: If you think the pre-season rankings and overall records are very predictive, increase this. If you think they're overrated and want to rely more on other factors, decrease it.</li>
+
+                    <li><strong>Home Field Advantage Weight (default: 1.0)</strong> — Controls how much playing at home matters. College football has notoriously strong home field advantages (think Death Valley at LSU or The Swamp at Florida). Example: Set this to 1.5 if you think home field is undervalued, or 0.5 if you think it matters less than conventional wisdom suggests.</li>
+
+                    <li><strong>Injury Weight (default: 1.0)</strong> — Controls how much player injuries affect probabilities. Example: If Alabama's starting QB is out, the house model might shift the probability by 5%. Setting your injury weight to 2.0 would roughly double that shift in your model. Increase this if you believe injuries are more impactful than the default model assumes.</li>
+
+                    <li><strong>Recent Form Weight (default: 1.0)</strong> — Controls emphasis on recent games vs. season-long performance. Example: If a team started 1-3 but has won 5 in a row, a high recent form weight will favor their current hot streak. A low weight will still see that rocky start. Useful for identifying teams that are improving or collapsing late in the season.</li>
+
+                    <li><strong>Conference Weight (default: 1.0)</strong> — Controls the conference strength adjustment. Not all conferences are equal — SEC teams playing each other may both be strong, while a mid-major might have an inflated record from a weaker schedule. Example: Increase this if you think conference strength is very predictive of cross-conference results.</li>
+
+                    <li><strong>Reset to Defaults</strong> — Sets all weights back to 1.0 (matching the house model). Your model will then produce identical results to the house model.</li>
+
+                    <li><strong>Presets</strong> — Once you find weight settings you like, save them as a preset so you can switch between different strategies. Access presets from the Presets page.</li>
                 </ul>
+
             {% elif help_key == 'my_stats' %}
                 <h4>My Statistics</h4>
                 <ul>
-                    <li>Track your analysis activity and model comparison history.</li>
-                    <li>See how often your model agrees with the house model.</li>
-                    <li>Review confidence distribution of games you've analyzed.</li>
-                    <li>Past performance does not predict future outcomes.</li>
+                    <li><strong>What is this page?</strong> This tracks your personal activity on the site — which games you've analyzed, how your model compares to the house model, and patterns in your usage. It's your analytics journal.</li>
+
+                    <li><strong>Games Analyzed</strong> — The number of unique game detail pages you've viewed. Each time you view a game, it's recorded so you can track your analysis activity over time.</li>
+
+                    <li><strong>Favorite Team Games</strong> — How many of the games you've analyzed involved your favorite team. If you set Alabama as your favorite, this counts how many Alabama games you've dug into.</li>
+
+                    <li><strong>Average House Edge</strong> — The average edge across all games you've analyzed. If this number is high, it means you tend to look at games where the house model sees a lot of market disagreement — you're drawn to the more interesting matchups.</li>
+
+                    <li><strong>Average User Edge</strong> — Same as above but for your personal model. Comparing this to the house edge shows whether your custom weights tend to find more or less value than the house model.</li>
+
+                    <li><strong>Agreement Rate</strong> — How often your model and the house model agree on which side has positive edge. A high agreement rate means your weights are producing similar conclusions to the house model. A low rate means your model is identifying different opportunities — which isn't necessarily bad, it just means you're taking a contrarian approach.</li>
+
+                    <li><strong>Confidence Distribution</strong> — Shows the breakdown of HIGH, MED, and LOW confidence games you've analyzed. If most of your analysis is on LOW confidence games, you might want to be extra cautious with those conclusions.</li>
+
+                    <li><strong>Time periods</strong> — Use the 7-day, 30-day, and Season filters to view your activity over different windows.</li>
+
+                    <li><strong>Important:</strong> Past analysis patterns do not predict future outcomes. These stats track your behavior, not your success.</li>
                 </ul>
+
             {% elif help_key == 'performance' %}
                 <h4>Model Performance</h4>
                 <ul>
-                    <li><strong>Accuracy</strong> = how often the model correctly predicted the winner.</li>
-                    <li><strong>Calibration</strong> = how well predicted probabilities match actual outcomes.</li>
-                    <li><strong>CLV</strong> = Closing Line Value, comparing your analysis timing to final market odds.</li>
-                    <li>These are model quality indicators, not financial results.</li>
+                    <li><strong>What is this page?</strong> This shows how well the house model has performed on games that have already been played. It's a report card for the model's predictions, not for any individual user.</li>
+
+                    <li><strong>Accuracy</strong> — The percentage of games where the model correctly predicted which team would win. Example: If the model predicted the higher-probability team would win in 100 games and was right 68 times, accuracy is 68%. Note: a good model won't be right every time — a team with a 70% chance still loses 3 out of 10 games.</li>
+
+                    <li><strong>Brier Score</strong> — A more sophisticated measure of prediction quality. It measures how close the predicted probabilities were to what actually happened. The scale goes from 0 (perfect) to 1 (worst possible). A Brier score of 0.20 is solid. Below 0.15 is excellent. Above 0.30 means the model needs work. Unlike accuracy, the Brier score rewards a model for being confident AND correct, and penalizes it for being confident AND wrong.</li>
+
+                    <li><strong>Why Brier Score matters more than Accuracy:</strong> A model that says every game is 51-49 will have okay accuracy but a bad Brier score because it's never confident. A model that says 80-20 and is right gets a great Brier score. This metric captures not just "did you get it right" but "how well-calibrated were you?"</li>
+
+                    <li><strong>CLV (Closing Line Value)</strong> — Compares when you looked at a game to where the final odds ended up. If you analyzed a game early and the line later moved in the direction the model suggested, that's positive CLV. In sports analytics, consistently beating the closing line is considered one of the strongest signals of analytical edge.</li>
+
+                    <li><strong>Total Games</strong> — The number of completed games used to calculate these metrics. More games means more reliable statistics. Early in a season, take these numbers with a grain of salt.</li>
+
+                    <li><strong>Important:</strong> These are model quality indicators for informational purposes. They measure analytical accuracy, not financial outcomes. Past model performance does not predict future results.</li>
                 </ul>
+
             {% elif help_key == 'parlays' %}
                 <h4>Parlay Analytics</h4>
                 <ul>
-                    <li>Build parlays to analyze combined probabilities.</li>
-                    <li><strong>Correlation risk</strong> flags when legs from the same game may be correlated.</li>
-                    <li>High correlation applies a conservative haircut to probability estimates.</li>
-                    <li>This is analysis only - not betting advice.</li>
+                    <li><strong>What is a parlay?</strong> A parlay combines multiple individual picks ("legs") into one group. For a parlay to succeed, every single leg must be correct. This makes parlays exciting but much harder to get right — the more legs you add, the lower the combined probability.</li>
+
+                    <li><strong>What does this page do?</strong> It lets you build hypothetical parlays and see the combined probability our model assigns. This is an analysis tool — it helps you understand the true mathematical likelihood of a parlay hitting based on our model's probabilities.</li>
+
+                    <li><strong>How combined probability works:</strong> If Leg 1 has a 70% chance and Leg 2 has a 60% chance, the combined probability is 0.70 x 0.60 = 42%. Add a third leg at 65% and it drops to 27%. This is why parlays are hard — even strong individual picks combine into a relatively low overall probability.</li>
+
+                    <li><strong>Correlation Risk</strong> — This flags when two or more legs in your parlay might be connected. Example: If you have Alabama to win AND Alabama's opponent to score under 20 points, those outcomes are correlated — if Alabama wins big, the opponent probably didn't score much. Our tool detects same-game correlations and applies a conservative adjustment (10% haircut) to the probability estimate, because correlated outcomes shouldn't be multiplied as if they're independent.</li>
+
+                    <li><strong>Why the 10% haircut?</strong> When two events are correlated, simply multiplying their probabilities overstates the combined probability. The 10% reduction is a conservative approximation to account for this. In reality, the correlation effect varies by situation, but this gives you a more realistic estimate than ignoring it.</li>
+
+                    <li><strong>Model Probability vs. Market Odds:</strong> The model probability is what our model thinks the parlay's true chance is. Compare this to the implied probability from market odds to see if there's an analytical edge. A bigger gap between model and market suggests the parlay is more analytically interesting.</li>
+
+                    <li><strong>Important:</strong> This is an analytics and modeling tool for educational purposes. It is not betting advice. Always assess risk independently.</li>
                 </ul>
+
             {% elif help_key == 'golf' %}
                 <h4>Golf</h4>
                 <ul>
-                    <li>Golf analytics coming soon.</li>
-                    <li>This section will feature tournament analysis and player modeling.</li>
+                    <li><strong>Coming Soon</strong> — Golf analytics are currently in development.</li>
+                    <li>This section will feature tournament analysis, player modeling, course fit metrics, and historical performance data.</li>
+                    <li>Check back for updates as we build out this feature.</li>
                 </ul>
+
             {% elif help_key == 'profile' %}
-                <h4>Profile & Preferences</h4>
+                <h4>Profile</h4>
                 <ul>
-                    <li>Set your favorite conference and team.</li>
-                    <li>Configure filter preferences (spread, odds, minimum edge).</li>
-                    <li>Your favorite team games always appear on the Value Board.</li>
-                    <li>Access My Model tuning, presets, and personal statistics.</li>
+                    <li><strong>What is this page?</strong> This is your personal information page where you can set your name, email, and profile picture. It's also where you access all your personalization features.</li>
+
+                    <li><strong>First Name / Last Name</strong> — Optional. If set, your name displays on your profile instead of just your username.</li>
+
+                    <li><strong>Profile Picture</strong> — Upload an image to personalize your account. Accepted formats: JPG, PNG, GIF. Keep file size reasonable (under 2MB is ideal).</li>
+
+                    <li><strong>Quick Links</strong> — From here you can jump to:
+                        <br>- <strong>Preferences</strong> — Set your favorite team, conference, and filter settings
+                        <br>- <strong>My Model</strong> — Customize your probability model weights
+                        <br>- <strong>Presets</strong> — Save and load different model configurations
+                        <br>- <strong>My Stats</strong> — View your analysis activity and patterns
+                        <br>- <strong>Performance</strong> — See how the model has performed on completed games
+                        <br>- <strong>Parlays</strong> — Build and analyze multi-game parlays
+                    </li>
                 </ul>
-            {% else %}
-                <h4>Brother Willies</h4>
+
+            {% elif help_key == 'preferences' %}
+                <h4>Preferences</h4>
                 <ul>
-                    <li>Sports analytics platform for college football.</li>
-                    <li>Compare house model probabilities with market odds.</li>
-                    <li>Build your own model by adjusting weights.</li>
-                    <li>Track your analysis activity over time.</li>
-                    <li>For informational and entertainment purposes only.</li>
+                    <li><strong>What is this page?</strong> This is where you personalize how Brother Willies works for you. Your preferences control which games show up on the Value Board and how the site highlights information relevant to you.</li>
+
+                    <li><strong>Favorite Conference</strong> — Pick the conference you follow most (SEC, Big Ten, etc.). This is used to highlight relevant games and prioritize your conference in listings.</li>
+
+                    <li><strong>Favorite Team</strong> — Pick your team. For example, if you select Alabama, games involving Alabama will be tagged with a "YOUR TEAM" badge throughout the site, making them easy to spot.</li>
+
+                    <li><strong>Always Include Favorite Team</strong> — When checked, your favorite team's games will ALWAYS appear on the Value Board, even if they don't meet your filter criteria. Example: If you set a minimum edge of 5% but Alabama's next game only has a 2% edge, it would normally be filtered out. With this box checked, Alabama's game still shows up. Uncheck it if you only want to see games that pass all your filters, regardless of team.</li>
+
+                    <li><strong>Preference Spread Min / Max</strong> — These filter the Value Board by point spread. The point spread is how many points one team is favored by. Example with Alabama as your team:
+                        <br>- Alabama -14.5 vs. Vanderbilt means Alabama is favored by 14.5 points
+                        <br>- If you set Spread Min = 3 and Spread Max = 10, you'd only see games where the spread is between 3 and 10 points
+                        <br>- This filters out blowout games (huge spreads) and near-toss-ups (tiny spreads)
+                        <br>- Leave blank to see all games regardless of spread
+                    </li>
+
+                    <li><strong>Preference Odds Min / Max</strong> — These filter by moneyline odds. Moneyline odds represent which team is favored and by how much:
+                        <br>- Negative odds (like -200) mean the team is favored. -200 means you'd risk $200 to profit $100
+                        <br>- Positive odds (like +150) mean the team is the underdog. +150 means you'd risk $100 to profit $150
+                        <br>- Example: If you set Odds Min = -300 and Odds Max = +300, you'd filter out extreme favorites and extreme underdogs
+                        <br>- Leave blank to see all games regardless of odds
+                    </li>
+
+                    <li><strong>Preference Minimum Edge</strong> — This sets the minimum edge required for a game to appear on the Value Board. Edge = model probability minus market probability.
+                        <br>- Example: If you set this to 3.0, only games where the model sees at least a 3% edge will show up
+                        <br>- Set to 0 to see all games
+                        <br>- Set to 5.0 or higher to only see games with significant model-vs-market disagreement
+                        <br>- A reasonable starting point is 2.0-3.0 — this shows games where the model meaningfully disagrees with the market without being too restrictive
+                    </li>
+
+                    <li><strong>Sample setup for an Alabama fan:</strong>
+                        <br>- Favorite Conference: SEC
+                        <br>- Favorite Team: Alabama
+                        <br>- Always Include Favorite Team: checked
+                        <br>- Spread Min: 1.0 (skip pick'em games)
+                        <br>- Spread Max: 20.0 (skip extreme blowouts)
+                        <br>- Odds Min: -400 (skip extreme favorites)
+                        <br>- Odds Max: 300 (skip extreme underdogs)
+                        <br>- Minimum Edge: 2.0 (show games with at least 2% model edge)
+                        <br>This would give you a focused Value Board of competitive games where the model sees meaningful disagreement with the market, while always including Alabama's games.
+                    </li>
+                </ul>
+
+            {% else %}
+                <h4>Brother Willies Predictions</h4>
+                <ul>
+                    <li><strong>What is this?</strong> Brother Willies Predictions is a sports analytics platform for college football and basketball. We run mathematical models that estimate win probabilities for upcoming games and compare them against the betting market's implied probabilities.</li>
+
+                    <li><strong>How it works:</strong> Our house model looks at team ratings, home field advantage, injuries, recent form, and conference strength to calculate each team's win probability. We compare that to what the betting market says. When our model disagrees with the market, that shows up as "edge" — the bigger the edge, the more the model disagrees.</li>
+
+                    <li><strong>Your custom model:</strong> You can create your own model by adjusting the weights of each factor. Maybe you think injuries matter more than the default model assumes, or home field advantage is overrated. Your custom weights generate your own probabilities that you can compare against both the market and the house model.</li>
+
+                    <li><strong>Key pages:</strong>
+                        <br>- <strong>Value Board</strong> — Ranked list of games by model-vs-market disagreement
+                        <br>- <strong>CFB / CBB Hub</strong> — Browse by conference and team
+                        <br>- <strong>Game Detail</strong> — Deep analysis for individual games
+                        <br>- <strong>My Model</strong> — Customize your probability model
+                        <br>- <strong>Parlays</strong> — Build and analyze multi-game combinations
+                    </li>
+
+                    <li><strong>Important:</strong> This platform is for informational and entertainment purposes only. It provides mathematical analysis, not betting advice. No guarantees of any kind. Always check local laws.</li>
                 </ul>
             {% endif %}
             {% endblock %}
