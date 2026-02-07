@@ -207,6 +207,22 @@ Helper: `user_has_feature(user, feature_key) -> bool`
    ```
 
 **Production hosts:** `brotherwillies.com`, `www.brotherwillies.com`
+**Hosting:** Railway.com (auto-deploys from `main` branch)
+
+### Railway Constraints
+
+- **No shell/CLI access** — cannot run `manage.py` commands directly on Railway
+- **Everything runs via Procfile `release:` phase** on every deploy:
+  1. `python manage.py migrate --noinput` — applies any new migrations
+  2. `python manage.py ensure_superuser` — creates admin from env vars (skips if exists)
+  3. `python manage.py ensure_seed` — runs `seed_demo` only if DB is empty (checks Conference table)
+- **Superuser env vars required in Railway:**
+  - `DJANGO_SUPERUSER_USERNAME` (default: `admin`)
+  - `DJANGO_SUPERUSER_EMAIL` (default: `admin@brotherwillies.com`)
+  - `DJANGO_SUPERUSER_PASSWORD` (required — skips creation if not set)
+- **Idempotent commands live in:** `apps/datahub/management/commands/`
+  - `ensure_superuser.py` — creates superuser from env vars if not exists
+  - `ensure_seed.py` — runs seed_demo only if no Conference rows exist
 
 ---
 

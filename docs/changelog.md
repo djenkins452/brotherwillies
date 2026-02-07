@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-02-07 - Railway Deployment Setup
+
+**Summary:** Production deployment configuration for Railway.com.
+
+### Changes:
+- Added `Procfile` with release phase (migrate, ensure_superuser, ensure_seed) and gunicorn web process
+- Added `runtime.txt` pinning Python 3.11.11
+- Added `dj-database-url` and `whitenoise` to requirements.txt
+- Updated `settings.py`:
+  - `dj_database_url.config()` for DATABASE_URL support (falls back to SQLite locally)
+  - WhiteNoise middleware + compressed static file storage
+  - CSRF_TRUSTED_ORIGINS from env var
+  - Production security settings (SSL redirect, secure cookies, proxy header)
+- Created `ensure_superuser` management command (idempotent, reads from env vars)
+- Created `ensure_seed` management command (idempotent, seeds only if DB is empty)
+- Updated CLAUDE.md with Railway constraints and deployment details
+
+---
+
 ## 2026-02-07 - Initial Build (Steps 0-12)
 
 **Summary:** Full Django project built from scratch. All core functionality implemented and verified.
