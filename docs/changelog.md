@@ -7,7 +7,6 @@
 **Summary:** Production deployment configuration for Railway.com.
 
 ### Changes:
-- Added `Procfile` with release phase (migrate, ensure_superuser, ensure_seed) and gunicorn web process
 - Added `runtime.txt` pinning Python 3.11.11
 - Added `dj-database-url` and `whitenoise` to requirements.txt
 - Updated `settings.py`:
@@ -15,8 +14,9 @@
   - WhiteNoise middleware + compressed static file storage
   - CSRF_TRUSTED_ORIGINS from env var
   - Production security settings (SSL redirect, secure cookies, proxy header)
-- Created `ensure_superuser` management command (idempotent, reads from env vars)
+- Created `ensure_superuser` management command (idempotent, hardcoded creds)
 - Created `ensure_seed` management command (idempotent, seeds only if DB is empty)
+- Custom start command set in Railway dashboard (no Procfile — Railpack's static secret scanner causes build failures)
 - Updated CLAUDE.md with Railway constraints and deployment details
 
 ---

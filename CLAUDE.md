@@ -212,16 +212,14 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 ### Railway Constraints
 
 - **No shell/CLI access** — cannot run `manage.py` commands directly on Railway
-- **Everything runs via Procfile `release:` phase** on every deploy:
-  1. `python manage.py migrate --noinput` — applies any new migrations
-  2. `python manage.py ensure_superuser` — creates admin from env vars (skips if exists)
-  3. `python manage.py ensure_seed` — runs `seed_demo` only if DB is empty (checks Conference table)
-- **Superuser env vars required in Railway:**
-  - `DJANGO_SUPERUSER_USERNAME` (default: `admin`)
-  - `DJANGO_SUPERUSER_EMAIL` (default: `admin@brotherwillies.com`)
-  - `DJANGO_SUPERUSER_PASSWORD` (required — skips creation if not set)
+- **Everything runs via custom start command** (set in Railway Settings → Deploy):
+  ```
+  python manage.py migrate --noinput && python manage.py ensure_superuser && python manage.py ensure_seed && python manage.py collectstatic --noinput && gunicorn brotherwillies.wsgi --bind 0.0.0.0:$PORT
+  ```
+- **No Procfile** — Railpack scans Procfile commands and treats env var references as required build-time secrets, causing build failures. Custom start command avoids this.
+- **No `DJANGO_SUPERUSER_*` env vars** — Railpack's static scanner detects these and fails the build. Superuser credentials are hardcoded in `ensure_superuser.py` (`admin` / `brotherwillies`).
 - **Idempotent commands live in:** `apps/datahub/management/commands/`
-  - `ensure_superuser.py` — creates superuser from env vars if not exists
+  - `ensure_superuser.py` — creates superuser if not exists (hardcoded creds)
   - `ensure_seed.py` — runs seed_demo only if no Conference rows exist
 
 ---
