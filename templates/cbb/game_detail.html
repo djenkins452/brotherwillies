@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ game.away_team.name }} @ {{ game.home_team.name }} - Brother Willies{% endblock %}
+
+{% block content %}
+<div class="card mb-2">
+    {% if data.is_favorite %}
+    <span class="badge badge-fav">Your Team</span>
+    {% endif %}
+    <div class="teams" style="font-size:1.25rem;font-weight:700;">
+        <span class="team-name">{{ game.away_team.name }}</span>
+        <span class="vs">@</span>
+        <span class="team-name">{{ game.home_team.name }}</span>
+    </div>
+    <div class="game-meta mt-1">
+        <span>{{ game.tipoff|date:"D M d, g:i A" }}</span>
+        {% if game.neutral_site %}<span class="badge">Neutral</span>{% endif %}
+        <span class="badge badge-{{ data.confidence_class }}">{{ data.confidence }}</span>
+    </div>
+    {% if data.line_movement %}
+    <div class="text-sm mt-1 {% if data.line_movement == 'up' %}line-up{% else %}line-down{% endif %}">
+        Line moved
+    </div>
+    {% endif %}
+</div>
+
+<p class="section-title">Probability Comparison (Home Win)</p>
+<div class="card">
+    <table class="data-table">
+        <tr>
+            <td>Market</td>
+            <td>{{ data.market_prob|floatformat:0 }}%</td>
+            <td class="text-muted">—</td>
+        </tr>
+        <tr>
+            <td>House Model ({{ data.model_version }})</td>
+            <td>{{ data.house_prob|floatformat:0 }}%</td>
+            <td class="{% if data.house_edge > 0 %}edge-positive{% elif data.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.house_edge|floatformat:1 }}%</td>
+        </tr>
+        {% if data.user_prob is not None %}
+        <tr>
+            <td>Your Model</td>
+            <td>{{ data.user_prob|floatformat:0 }}%</td>
+            <td class="{% if data.user_edge > 0 %}edge-positive{% elif data.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.user_edge|floatformat:1 }}%</td>
+        </tr>
+        <tr>
+            <td>Delta (You − House)</td>
+            <td></td>
+            <td class="{% if data.delta > 0 %}edge-positive{% elif data.delta < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.delta|floatformat:1 }}%</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+
+{% if data.latest_odds %}
+<p class="section-title mt-2">Odds Snapshot</p>
+<div class="card">
+    <div class="text-sm text-muted">{{ data.latest_odds.sportsbook }} &mdash; {{ data.latest_odds.captured_at|timesince }} ago</div>
+    {% if data.latest_odds.spread is not None %}
+    <div class="mt-1">Spread: <strong>{{ data.latest_odds.spread|floatformat:1 }}</strong></div>
+    {% endif %}
+    {% if data.latest_odds.total is not None %}
+    <div>Total: <strong>{{ data.latest_odds.total|floatformat:1 }}</strong></div>
+    {% endif %}
+    {% if data.latest_odds.moneyline_home is not None %}
+    <div class="mt-1 text-sm">ML Home: {{ data.latest_odds.moneyline_home }} | ML Away: {{ data.latest_odds.moneyline_away }}</div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if data.injuries %}
+<p class="section-title mt-2">Injury Impacts</p>
+{% for inj in data.injuries %}
+<div class="card mb-1">
+    <div>
+        <strong>{{ inj.team.name }}</strong>
+        <span class="badge {% if inj.impact_level == 'high' %}badge-red{% elif inj.impact_level == 'med' %}badge-yellow{% else %}badge-green{% endif %}">{{ inj.impact_level }}</span>
+    </div>
+    {% if inj.notes %}<div class="text-sm text-muted">{{ inj.notes }}</div>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if not user.is_authenticated %}
+<div class="login-gate mt-2">
+    <p>Log in to see your model's analysis and track this game.</p>
+    <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
+</div>
+{% endif %}
+{% endblock %}

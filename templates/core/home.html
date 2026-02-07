@@ -4,11 +4,39 @@
 {% block content %}
 <h1 class="page-title">Dashboard</h1>
 
-<p class="section-title">Top Value Games</p>
-
-{% if games_data %}
+{% if cbb_games_data %}
+<p class="section-title">Top CBB Value Games</p>
 <div class="card-grid">
-    {% for g in games_data %}
+    {% for g in cbb_games_data %}
+    <a href="/cbb/game/{{ g.game.id }}/" class="game-card">
+        {% if g.is_favorite %}
+        <span class="badge badge-fav">Your Team</span>
+        {% endif %}
+        <div class="teams">
+            <span class="team-name">{{ g.game.away_team.name }}</span>
+            <span class="vs">@</span>
+            <span class="team-name">{{ g.game.home_team.name }}</span>
+        </div>
+        <div class="game-meta">
+            <span>{{ g.game.tipoff|date:"D M d, g:i A" }}</span>
+            <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
+        </div>
+        <div class="edge-row">
+            <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
+            <span>House: <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span></span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+<div class="mt-2 text-center">
+    <a href="/cbb/value/" class="btn btn-secondary btn-sm">View CBB Value Board</a>
+</div>
+{% endif %}
+
+{% if cfb_games_data %}
+<p class="section-title {% if cbb_games_data %}mt-3{% endif %}">Top CFB Value Games</p>
+<div class="card-grid">
+    {% for g in cfb_games_data %}
     <a href="/cfb/game/{{ g.game.id }}/" class="game-card">
         {% if g.is_favorite %}
         <span class="badge badge-fav">Your Team</span>
@@ -29,15 +57,16 @@
     </a>
     {% endfor %}
 </div>
-{% else %}
+<div class="mt-2 text-center">
+    <a href="/value/" class="btn btn-secondary btn-sm">View CFB Value Board</a>
+</div>
+{% endif %}
+
+{% if not cfb_games_data and not cbb_games_data %}
 <div class="empty-state">
     <p>No upcoming games right now. Seed demo data to get started.</p>
 </div>
 {% endif %}
-
-<div class="mt-3 text-center">
-    <a href="/value/" class="btn btn-primary">View Full Value Board</a>
-</div>
 
 {% if not user.is_authenticated %}
 <div class="login-gate mt-2">

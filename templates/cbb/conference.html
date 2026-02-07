@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ conference.name }} - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">{{ conference.name }}</h1>
+
+<p class="section-title">Teams</p>
+<div class="card-grid">
+    {% for team in teams %}
+    <div class="card">
+        <div class="card-title">{{ team.name }}</div>
+        <div class="text-sm text-muted">Rating: {{ team.rating|floatformat:1 }}</div>
+    </div>
+    {% endfor %}
+</div>
+
+<p class="section-title mt-3">Upcoming Games</p>
+{% if games %}
+<div class="card-grid">
+    {% for game in games %}
+    <a href="/cbb/game/{{ game.id }}/" class="game-card">
+        <div class="teams">
+            <span class="team-name">{{ game.away_team.name }}</span>
+            <span class="vs">@</span>
+            <span class="team-name">{{ game.home_team.name }}</span>
+        </div>
+        <div class="game-meta">
+            <span>{{ game.tipoff|date:"D M d, g:i A" }}</span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state"><p>No upcoming games for this conference.</p></div>
+{% endif %}
+{% endblock %}

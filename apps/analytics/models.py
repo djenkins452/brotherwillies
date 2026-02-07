@@ -9,7 +9,8 @@ class UserGameInteraction(models.Model):
         ('parlay_leg_added', 'Parlay Leg Added'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='game_interactions')
-    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, related_name='interactions')
+    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
+    cbb_game = models.ForeignKey('cbb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     page_key = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -27,7 +28,8 @@ class ModelResultSnapshot(models.Model):
         ('med', 'Medium'),
         ('high', 'High'),
     ]
-    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, related_name='result_snapshots')
+    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
+    cbb_game = models.ForeignKey('cbb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
     captured_at = models.DateTimeField(auto_now_add=True)
     market_prob = models.FloatField()
     house_prob = models.FloatField()

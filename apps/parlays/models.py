@@ -34,7 +34,8 @@ class ParlayLeg(models.Model):
         ('total', 'Total'),
     ]
     parlay = models.ForeignKey(Parlay, on_delete=models.CASCADE, related_name='legs')
-    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE)
+    game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, null=True, blank=True)
+    cbb_game = models.ForeignKey('cbb.Game', on_delete=models.CASCADE, null=True, blank=True)
     market_type = models.CharField(max_length=10, choices=MARKET_CHOICES)
     selection = models.CharField(max_length=100)
     odds = models.CharField(max_length=20, blank=True)

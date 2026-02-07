@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Value Board - Brother Willies{% endblock %}
+{% block title %}CBB Value Board - Brother Willies{% endblock %}
 
 {% block content %}
-<h1 class="page-title">CFB Value Board</h1>
-<div class="mb-2"><a href="/cbb/value/" class="text-sm text-muted">Switch to CBB Value Board &rarr;</a></div>
+<h1 class="page-title">CBB Value Board</h1>
+<div class="mb-2"><a href="/value/" class="text-sm text-muted">Switch to CFB Value Board &rarr;</a></div>
 
 {% if show_bye_message %}
 <div class="card" style="border-color: var(--yellow);">
     <span class="badge badge-fav">Your Team</span>
-    <span class="text-sm text-muted"> No games scheduled this week (bye week).</span>
+    <span class="text-sm text-muted"> No games scheduled this week.</span>
 </div>
 {% endif %}
 
@@ -21,7 +21,7 @@
 </div>
 
 {% for g in games_data %}
-<a href="/cfb/game/{{ g.game.id }}/" class="game-card">
+<a href="/cbb/game/{{ g.game.id }}/" class="game-card">
     {% if g.is_favorite %}
     <span class="badge badge-fav">Your Team</span>
     {% endif %}
@@ -31,7 +31,7 @@
         <span class="team-name">{{ g.game.home_team.name }}</span>
     </div>
     <div class="game-meta">
-        <span>{{ g.game.kickoff|date:"D M d, g:i A" }}</span>
+        <span>{{ g.game.tipoff|date:"D M d, g:i A" }}</span>
         <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
     </div>
     <div class="edge-row">

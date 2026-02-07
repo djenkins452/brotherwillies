@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-02-08 - College Basketball (CBB) App
+
+**Summary:** Full CBB app added alongside existing CFB, with realistic seed data scheduling.
+
+### Changes:
+- Created `apps/cbb/` Django app with models (Conference, Team, Game, OddsSnapshot, InjuryImpact)
+- Game model uses `tipoff` field instead of CFB's `kickoff`; `neutral_site` retained for tournament games
+- CBB model service (`apps/cbb/services/model_service.py`) with HFA=3.5 (vs CFB's 3.0)
+- CBB views: hub, conference detail, game detail, value board — all mirroring CFB patterns
+- CBB templates: `templates/cbb/` (hub, conference, game_detail, value_board)
+- Added CBB to bottom navigation (basketball SVG icon, 6 nav items total)
+- Updated home dashboard to show both "Top CBB Value Games" and "Top CFB Value Games" sections
+- CFB Value Board renamed to "CFB Value Board" with cross-link to CBB Value Board
+- CBB Value Board at `/cbb/value/` with cross-link back to CFB
+- Added `favorite_cbb_conference` and `favorite_cbb_team` fields to UserProfile
+- Added nullable `cbb_game` FK to analytics (UserGameInteraction, ModelResultSnapshot) and parlays (ParlayLeg)
+- CBB seed data: 6 conferences, 30 teams, ~30 games on realistic Tue/Thu/Sat schedule
+- Basketball-specific: evening tipoffs, totals 130-165, basketball injury notes
+- **Fixed seed data realism**: teams no longer double-booked on same day (both CFB and CBB)
+- Demo user favorites: Kansas / Big 12 (CBB), Alabama / SEC (CFB)
+- Updated `ensure_seed.py` to check for both CFB and CBB conferences
+- Updated help modal with CBB hub content
+- Updated CLAUDE.md with CBB app documentation
+
+### New files (15):
+- `apps/cbb/__init__.py`, `apps.py`, `models.py`, `admin.py`, `views.py`, `urls.py`, `value_urls.py`, `tests.py`
+- `apps/cbb/services/__init__.py`, `model_service.py`
+- `apps/cbb/migrations/__init__.py`, `0001_initial.py`
+- `templates/cbb/hub.html`, `conference.html`, `game_detail.html`, `value_board.html`
+
+### Migrations:
+- `cbb.0001_initial` — all CBB models
+- `accounts.0003` — favorite_cbb_conference, favorite_cbb_team fields
+- `analytics.0002` — cbb_game FK + nullable game FK
+- `parlays.0002` — cbb_game FK + nullable game FK
+
+### Verified:
+- `manage.py check` (0 issues), all migrations applied, seed data loaded
+- All key pages return 200: /, /cfb/, /cbb/, /cbb/value/, /value/, /cbb/conference/<slug>/, /cbb/game/<uuid>/
+
+---
+
 ## 2026-02-07 - Comprehensive Help Content Overhaul
 
 **Summary:** Rewrote all context-aware help content to be beginner-friendly with detailed explanations, examples, and a sample preferences setup.

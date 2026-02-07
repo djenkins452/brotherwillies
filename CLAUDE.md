@@ -85,6 +85,7 @@ brotherwillies/
     core/                  # Base layout, home page, help component
     accounts/              # Auth, profile, preferences, My Model, My Stats
     cfb/                   # College football: models, services, views
+    cbb/                   # College basketball: models, services, views
     golf/                  # Golf MVP scaffolding
     parlays/               # Parlay builder/scoring (analytics only)
     analytics/             # Snapshots, CLV tracking, interaction logging
@@ -105,7 +106,8 @@ brotherwillies/
 |-----|---------|
 | `core` | Base layout, home page, global help component |
 | `accounts` | Register/login/logout, profile, preferences, My Model tuning, presets, My Stats, performance |
-| `cfb` | Conferences, teams, games, odds, injuries, house/user model services, Value Board |
+| `cfb` | Conferences, teams, games, odds, injuries, house/user model services, CFB Value Board |
+| `cbb` | College basketball: conferences, teams, games, odds, injuries, model services, CBB Value Board |
 | `golf` | MVP scaffold (models + placeholder pages) |
 | `parlays` | Parlay builder/scoring, correlation detection (analytics only) |
 | `analytics` | ModelResultSnapshot, UserGameInteraction, CLV tracking |
@@ -121,7 +123,11 @@ brotherwillies/
 | `/value/` | Value Board (top 3 for anon, full for auth) |
 | `/cfb/` | CFB hub (conferences + upcoming) |
 | `/cfb/conference/<slug>/` | Conference dashboard |
-| `/cfb/game/<uuid>/` | Game detail |
+| `/cfb/game/<uuid>/` | CFB game detail |
+| `/cbb/` | CBB hub (conferences + upcoming) |
+| `/cbb/value/` | CBB Value Board |
+| `/cbb/conference/<slug>/` | CBB conference dashboard |
+| `/cbb/game/<uuid>/` | CBB game detail |
 | `/golf/` | Golf hub (placeholder) |
 | `/accounts/register/` | Register |
 | `/accounts/login/` | Login |
@@ -164,7 +170,7 @@ brotherwillies/
 
 ---
 
-## Model Services (cfb/services/)
+## Model Services (cfb/services/ and cbb/services/)
 
 1. **House model** (fixed, versioned "v1")
    - `compute_house_win_prob(game, latest_odds, injuries, context) -> float`
@@ -220,7 +226,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 - **No `DJANGO_SUPERUSER_*` env vars** — Railpack's static scanner detects these and fails the build. Superuser credentials are hardcoded in `ensure_superuser.py` (`admin` / `brotherwillies`).
 - **Idempotent commands live in:** `apps/datahub/management/commands/`
   - `ensure_superuser.py` — creates superuser if not exists (hardcoded creds)
-  - `ensure_seed.py` — runs seed_demo only if no Conference rows exist
+  - `ensure_seed.py` — runs seed_demo only if no CFB and CBB Conference rows exist
 
 ---
 
@@ -242,6 +248,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 11 | Analytics snapshots | COMPLETE |
 | 12 | Seed demo data | COMPLETE |
 | 13 | Final polish + verification | COMPLETE |
+| 14 | CBB app (college basketball) | COMPLETE |
 
 ---
 
@@ -254,4 +261,4 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 
 ---
 
-*Last updated: 2026-02-07*
+*Last updated: 2026-02-08*

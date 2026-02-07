@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}College Basketball - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">College Basketball</h1>
+
+<p class="section-title">Conferences</p>
+{% if conferences %}
+<div class="card-grid">
+    {% for conf in conferences %}
+    <a href="/cbb/conference/{{ conf.slug }}/" class="card">
+        <div class="card-title">{{ conf.name }}</div>
+        <div class="text-sm text-muted">{{ conf.teams.count }} teams</div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state"><p>No conferences yet.</p></div>
+{% endif %}
+
+<p class="section-title mt-3">Upcoming Games</p>
+{% if upcoming %}
+<div class="card-grid">
+    {% for game in upcoming %}
+    <a href="/cbb/game/{{ game.id }}/" class="game-card">
+        <div class="teams">
+            <span class="team-name">{{ game.away_team.name }}</span>
+            <span class="vs">@</span>
+            <span class="team-name">{{ game.home_team.name }}</span>
+        </div>
+        <div class="game-meta">
+            <span>{{ game.tipoff|date:"D M d, g:i A" }}</span>
+            <span class="badge badge-{{ game.status }}">{{ game.status }}</span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state"><p>No upcoming games scheduled.</p></div>
+{% endif %}
+{% endblock %}
