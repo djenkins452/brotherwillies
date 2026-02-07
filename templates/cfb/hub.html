@@ -4,6 +4,12 @@
 {% block content %}
 <h1 class="page-title">College Football</h1>
 
+{% if is_offseason %}
+<div class="offseason-banner">
+    <strong>Offseason</strong> &mdash; CFB season runs August through January. The games below are sample data for demonstration purposes only.
+</div>
+{% endif %}
+
 <p class="section-title">Conferences</p>
 <div class="card-grid">
     {% for conf in conferences %}

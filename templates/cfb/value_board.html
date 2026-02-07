@@ -5,6 +5,12 @@
 <h1 class="page-title">CFB Value Board</h1>
 <div class="mb-2"><a href="/cbb/value/" class="text-sm text-muted">Switch to CBB Value Board &rarr;</a></div>
 
+{% if is_offseason %}
+<div class="offseason-banner">
+    <strong>Offseason</strong> &mdash; CFB season runs August through January. The games below are sample data for demonstration purposes only.
+</div>
+{% endif %}
+
 {% if show_bye_message %}
 <div class="card" style="border-color: var(--yellow);">
     <span class="badge badge-fav">Your Team</span>

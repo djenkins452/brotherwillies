@@ -4,6 +4,12 @@ from .models import Conference, Team, Game
 from .services.model_service import compute_game_data
 from apps.analytics.models import UserGameInteraction
 
+CFB_SEASON_MONTHS = [8, 9, 10, 11, 12, 1]
+
+
+def _cfb_is_offseason():
+    return timezone.now().month not in CFB_SEASON_MONTHS
+
 
 def cfb_hub(request):
     conferences = Conference.objects.prefetch_related('teams').all()
@@ -14,6 +20,7 @@ def cfb_hub(request):
     return render(request, 'cfb/hub.html', {
         'conferences': conferences,
         'upcoming': upcoming,
+        'is_offseason': _cfb_is_offseason(),
         'help_key': 'cfb_hub',
         'nav_active': 'cfb',
     })
@@ -138,6 +145,7 @@ def value_board(request):
         'is_gated': is_gated,
         'sort_by': sort_by,
         'show_bye_message': show_bye_message,
+        'is_offseason': _cfb_is_offseason(),
         'help_key': 'value_board',
         'nav_active': 'value',
     })

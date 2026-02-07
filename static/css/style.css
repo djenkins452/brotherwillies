@@ -466,6 +466,18 @@ select.form-control {
     margin-bottom: 10px;
 }
 
+/* ========== Offseason Banner ========== */
+.offseason-banner {
+    background: rgba(234,179,8,0.12);
+    border: 1px solid rgba(234,179,8,0.3);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+    color: var(--yellow);
+    line-height: 1.5;
+}
+
 /* ========== Empty State ========== */
 .empty-state {
     text-align: center;

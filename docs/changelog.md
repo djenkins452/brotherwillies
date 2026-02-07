@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-02-08 - Season-Aware Dashboard & Offseason Banners
+
+**Summary:** Home dashboard only shows in-season sports. CFB pages show an offseason/demo data banner when out of season.
+
+### Changes:
+- Home view now checks sport seasons by month (CFB: Aug-Jan, CBB: Nov-Apr)
+- Dashboard only queries and displays games for sports currently in season
+- CFB hub and value board show a yellow "Offseason" banner when CFB is not in season, explaining the data below is sample/demo data
+- Added `.offseason-banner` CSS style
+
+---
+
 ## 2026-02-08 - College Basketball (CBB) App
 
 **Summary:** Full CBB app added alongside existing CFB, with realistic seed data scheduling.
