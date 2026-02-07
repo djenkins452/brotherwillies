@@ -194,12 +194,17 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 
 ## Git / Deployment
 
-**GitHub repo:** *(not yet configured - user will provide details)*
+**GitHub repo:** `djenkins452/brotherwillies`
+**Branch:** `main`
+**Remote:** `git@ssh.github.com:djenkins452/brotherwillies.git` (SSH port 443)
 
 **On Task Completion:**
 1. Update changelog (`docs/changelog.md`)
 2. Commit changes
-3. Push to GitHub *(commands TBD once repo is configured)*
+3. Push to GitHub:
+   ```bash
+   GIT_SSH_COMMAND="ssh -p 443" git push git@ssh.github.com:djenkins452/brotherwillies.git main
+   ```
 
 **Production hosts:** `brotherwillies.com`, `www.brotherwillies.com`
 
