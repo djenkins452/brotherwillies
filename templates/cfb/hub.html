@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}CFB - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">College Football</h1>
+
+<p class="section-title">Conferences</p>
+<div class="card-grid">
+    {% for conf in conferences %}
+    <a href="/cfb/conference/{{ conf.slug }}/" class="card" style="text-decoration:none;color:inherit;">
+        <div class="card-title">{{ conf.name }}</div>
+        <div class="text-sm text-muted">{{ conf.teams.count }} teams</div>
+    </a>
+    {% empty %}
+    <div class="empty-state"><p>No conferences loaded. Run seed_demo to populate data.</p></div>
+    {% endfor %}
+</div>
+
+<p class="section-title mt-3">Upcoming Games</p>
+{% for game in upcoming %}
+<a href="/cfb/game/{{ game.id }}/" class="game-card">
+    <div class="teams">
+        <span class="team-name">{{ game.away_team.name }}</span>
+        <span class="vs">@</span>
+        <span class="team-name">{{ game.home_team.name }}</span>
+    </div>
+    <div class="game-meta">
+        <span>{{ game.kickoff|date:"D M d, g:i A" }}</span>
+        <span class="badge badge-blue">{{ game.status }}</span>
+    </div>
+</a>
+{% empty %}
+<div class="empty-state"><p>No upcoming games.</p></div>
+{% endfor %}
+{% endblock %}

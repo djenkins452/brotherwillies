@@ -1,0 +1,105 @@
+<div id="help-modal" class="help-overlay" style="display:none;" onclick="closeHelpOutside(event)">
+    <div class="help-sheet">
+        <div class="help-header">
+            <h3>Help</h3>
+            <button class="help-close" onclick="toggleHelp()">&times;</button>
+        </div>
+        <div class="help-body">
+            {% block help_content %}
+            {% if help_key == 'home' %}
+                <h4>Home Dashboard</h4>
+                <ul>
+                    <li>View upcoming games and top value picks at a glance.</li>
+                    <li><strong>Edge</strong> = difference between our model's probability and the market's implied probability.</li>
+                    <li>Positive edge means our model sees more value than the market.</li>
+                    <li>Log in to unlock the full Value Board and personal features.</li>
+                </ul>
+            {% elif help_key == 'value_board' %}
+                <h4>Value Board</h4>
+                <ul>
+                    <li>Games ranked by model-vs-market misalignment (edge).</li>
+                    <li><strong>House Edge</strong> = House model probability minus market probability.</li>
+                    <li><strong>User Edge</strong> = Your model probability minus market probability.</li>
+                    <li><strong>Delta</strong> = Your model minus house model (shows where you disagree).</li>
+                    <li>Use filters to focus on specific spreads, odds, or minimum edge.</li>
+                    <li>Your favorite team is always included when the preference is set.</li>
+                    <li><strong>Confidence</strong> levels reflect data freshness and completeness.</li>
+                </ul>
+            {% elif help_key == 'cfb_hub' %}
+                <h4>College Football Hub</h4>
+                <ul>
+                    <li>Browse conferences and upcoming games.</li>
+                    <li>Tap a conference to see its teams and matchups.</li>
+                    <li>Tap a game for detailed analysis with house and user model comparisons.</li>
+                </ul>
+            {% elif help_key == 'game_detail' %}
+                <h4>Game Detail</h4>
+                <ul>
+                    <li>Side-by-side comparison of market, house, and user model probabilities.</li>
+                    <li><strong>Line movement</strong> arrows show how odds have changed over time.</li>
+                    <li><strong>Injury impacts</strong> are factored into model calculations.</li>
+                    <li>Confidence reflects how recent and complete the underlying data is.</li>
+                </ul>
+            {% elif help_key == 'my_model' %}
+                <h4>My Model</h4>
+                <ul>
+                    <li>Adjust weights to create your own probability model.</li>
+                    <li><strong>Rating Weight</strong> = how much team strength matters.</li>
+                    <li><strong>HFA Weight</strong> = home field advantage importance.</li>
+                    <li><strong>Injury Weight</strong> = how much injuries affect probabilities.</li>
+                    <li><strong>Recent Form</strong> = emphasis on recent performance.</li>
+                    <li><strong>Conference</strong> = conference strength adjustment.</li>
+                    <li>Your model never overwrites the house model.</li>
+                </ul>
+            {% elif help_key == 'my_stats' %}
+                <h4>My Statistics</h4>
+                <ul>
+                    <li>Track your analysis activity and model comparison history.</li>
+                    <li>See how often your model agrees with the house model.</li>
+                    <li>Review confidence distribution of games you've analyzed.</li>
+                    <li>Past performance does not predict future outcomes.</li>
+                </ul>
+            {% elif help_key == 'performance' %}
+                <h4>Model Performance</h4>
+                <ul>
+                    <li><strong>Accuracy</strong> = how often the model correctly predicted the winner.</li>
+                    <li><strong>Calibration</strong> = how well predicted probabilities match actual outcomes.</li>
+                    <li><strong>CLV</strong> = Closing Line Value, comparing your analysis timing to final market odds.</li>
+                    <li>These are model quality indicators, not financial results.</li>
+                </ul>
+            {% elif help_key == 'parlays' %}
+                <h4>Parlay Analytics</h4>
+                <ul>
+                    <li>Build parlays to analyze combined probabilities.</li>
+                    <li><strong>Correlation risk</strong> flags when legs from the same game may be correlated.</li>
+                    <li>High correlation applies a conservative haircut to probability estimates.</li>
+                    <li>This is analysis only - not betting advice.</li>
+                </ul>
+            {% elif help_key == 'golf' %}
+                <h4>Golf</h4>
+                <ul>
+                    <li>Golf analytics coming soon.</li>
+                    <li>This section will feature tournament analysis and player modeling.</li>
+                </ul>
+            {% elif help_key == 'profile' %}
+                <h4>Profile & Preferences</h4>
+                <ul>
+                    <li>Set your favorite conference and team.</li>
+                    <li>Configure filter preferences (spread, odds, minimum edge).</li>
+                    <li>Your favorite team games always appear on the Value Board.</li>
+                    <li>Access My Model tuning, presets, and personal statistics.</li>
+                </ul>
+            {% else %}
+                <h4>Brother Willies</h4>
+                <ul>
+                    <li>Sports analytics platform for college football.</li>
+                    <li>Compare house model probabilities with market odds.</li>
+                    <li>Build your own model by adjusting weights.</li>
+                    <li>Track your analysis activity over time.</li>
+                    <li>For informational and entertainment purposes only.</li>
+                </ul>
+            {% endif %}
+            {% endblock %}
+        </div>
+    </div>
+</div>

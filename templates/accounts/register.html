@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Register - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Create Account</h1>
+
+<div class="card">
+    <form method="post">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}
+            {% for error in field.errors %}
+            <div class="form-error">{{ error }}</div>
+            {% endfor %}
+            {% endif %}
+            {% if field.help_text %}
+            <div class="form-help">{{ field.help_text }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-primary btn-block">Register</button>
+    </form>
+
+    <div class="mt-2 text-center text-sm">
+        Already have an account? <a href="/accounts/login/">Log in</a>
+    </div>
+</div>
+
+<div class="card mt-2">
+    <p class="text-sm text-muted">By creating an account, you acknowledge that this platform is for informational and entertainment purposes only. No guarantees are made regarding the accuracy of any analysis or model outputs. Check local laws regarding sports analytics in your jurisdiction.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Model Performance - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Model Performance</h1>
+
+<div class="stat-grid">
+    <div class="stat-tile">
+        <div class="stat-value">{{ accuracy }}%</div>
+        <div class="stat-label">Directional Accuracy</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ brier_score }}</div>
+        <div class="stat-label">Brier Score</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ total_games }}</div>
+        <div class="stat-label">Games Evaluated</div>
+    </div>
+</div>
+
+<div class="card mb-2">
+    <p class="text-sm text-muted">
+        <strong>Accuracy</strong> measures how often the model correctly predicted the winning team.
+        <strong>Brier Score</strong> measures calibration (lower is better; 0 = perfect, 0.25 = coin flip).
+        These are model quality indicators, not financial results.
+    </p>
+</div>
+
+<p class="section-title mt-2">Recent Results</p>
+{% for snap in snapshots %}
+<div class="card">
+    <div class="card-title text-sm">{{ snap.game }}</div>
+    <div class="gap-row text-sm" style="justify-content:space-between;">
+        <span>Market: {{ snap.market_prob|floatformat:1 }}%</span>
+        <span>House: {{ snap.house_prob|floatformat:1 }}%</span>
+        {% if snap.final_outcome is not None %}
+        <span class="badge {% if snap.final_outcome %}badge-green{% else %}badge-red{% endif %}">
+            {{ snap.final_outcome|yesno:"Home Win,Away Win" }}
+        </span>
+        {% endif %}
+    </div>
+    <div class="text-sm text-muted">{{ snap.captured_at|date:"M d" }} &middot; {{ snap.house_model_version }} &middot; {{ snap.data_confidence }}</div>
+</div>
+{% empty %}
+<div class="empty-state"><p>No completed games with results yet. Performance data will appear after games are finalized.</p></div>
+{% endfor %}
+
+<div class="card mt-3">
+    <p class="text-sm text-muted">Past performance does not predict future outcomes.</p>
+</div>
+{% endblock %}

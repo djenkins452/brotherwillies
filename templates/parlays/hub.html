@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Parlays - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Parlay Analytics</h1>
+
+<div class="mb-2">
+    <a href="/parlays/new/" class="btn btn-primary">Build New Parlay</a>
+</div>
+
+{% if parlays %}
+<p class="section-title">Your Parlays</p>
+{% for parlay in parlays %}
+<a href="/parlays/{{ parlay.id }}/" class="game-card">
+    <div class="gap-row" style="justify-content:space-between;">
+        <span class="card-title text-sm">{{ parlay.legs.count }}-Leg Parlay</span>
+        <span class="badge {% if parlay.correlation_risk == 'high' %}badge-red{% elif parlay.correlation_risk == 'med' %}badge-yellow{% else %}badge-green{% endif %}">
+            {{ parlay.correlation_risk }} corr
+        </span>
+    </div>
+    <div class="text-sm text-muted">{{ parlay.created_at|date:"M d, g:i A" }}</div>
+    <div class="edge-row">
+        {% if parlay.implied_probability %}
+        <span>Implied: {{ parlay.implied_probability|floatformat:1 }}%</span>
+        {% endif %}
+        {% if parlay.house_probability %}
+        <span>House: {{ parlay.house_probability|floatformat:1 }}%</span>
+        {% endif %}
+    </div>
+</a>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <p>No parlays created yet. Build one to analyze combined probabilities.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}My Model - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">My Model</h1>
+
+<div class="card mb-2">
+    <p class="text-sm text-muted">Adjust weights to create your own probability model. Higher values increase the factor's influence. Your model never overwrites the house model.</p>
+</div>
+
+<div class="card">
+    <form method="post">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label for="{{ field.id_for_label }}">
+                {{ field.label }}
+                <span class="text-muted text-sm">(current: {{ field.value|floatformat:2 }})</span>
+            </label>
+            {{ field }}
+        </div>
+        {% endfor %}
+        <div class="gap-row mt-2">
+            <button type="submit" class="btn btn-primary" style="flex:1;">Save Weights</button>
+            <button type="submit" name="reset" value="1" class="btn btn-secondary" style="flex:1;">Reset to House</button>
+        </div>
+    </form>
+</div>
+
+<div class="mt-2 text-center">
+    <a href="/profile/presets/" class="btn btn-secondary btn-sm">Manage Presets</a>
+</div>
+{% endblock %}

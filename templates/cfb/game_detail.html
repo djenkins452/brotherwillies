@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ game.away_team }} @ {{ game.home_team }} - Brother Willies{% endblock %}
+
+{% block content %}
+<div class="card">
+    {% if data.is_favorite %}
+    <span class="badge badge-fav mb-1">Your Team</span>
+    {% endif %}
+
+    <div class="teams" style="font-size:1.1rem;">
+        <span class="team-name">{{ game.away_team.name }}</span>
+        <span class="vs" style="margin:0 12px;">@</span>
+        <span class="team-name">{{ game.home_team.name }}</span>
+    </div>
+    <div class="text-sm text-muted mt-1">
+        {{ game.kickoff|date:"l, M d Y - g:i A" }}
+        {% if game.neutral_site %} &middot; Neutral Site{% endif %}
+    </div>
+    <div class="mt-1">
+        <span class="badge badge-{{ data.confidence_class }}">{{ data.confidence }} confidence</span>
+        {% if data.line_movement %}
+        <span class="{% if data.line_movement == 'up' %}line-up{% else %}line-down{% endif %} text-sm">
+            Line moved
+        </span>
+        {% endif %}
+    </div>
+</div>
+
+<p class="section-title mt-2">Probability Comparison (Home Win)</p>
+<div class="card">
+    <table class="data-table">
+        <thead>
+            <tr><th>Source</th><th>Probability</th><th>Edge</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Market</td>
+                <td>{{ data.market_prob|floatformat:1 }}%</td>
+                <td class="text-muted">--</td>
+            </tr>
+            <tr>
+                <td>House Model ({{ data.model_version }})</td>
+                <td>{{ data.house_prob|floatformat:1 }}%</td>
+                <td class="{% if data.house_edge > 0 %}edge-positive{% elif data.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">
+                    {{ data.house_edge|floatformat:1 }}%
+                </td>
+            </tr>
+            {% if data.user_prob is not None %}
+            <tr>
+                <td>Your Model</td>
+                <td>{{ data.user_prob|floatformat:1 }}%</td>
+                <td class="{% if data.user_edge > 0 %}edge-positive{% elif data.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">
+                    {{ data.user_edge|floatformat:1 }}%
+                </td>
+            </tr>
+            <tr>
+                <td>Delta (You - House)</td>
+                <td></td>
+                <td class="{% if data.delta > 0 %}edge-positive{% elif data.delta < 0 %}edge-negative{% else %}edge-neutral{% endif %}">
+                    {{ data.delta|floatformat:1 }}%
+                </td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if data.latest_odds %}
+<p class="section-title mt-2">Odds Snapshot</p>
+<div class="card">
+    <div class="text-sm text-muted mb-1">
+        {{ data.latest_odds.sportsbook }} &middot; {{ data.latest_odds.captured_at|timesince }} ago
+    </div>
+    {% if data.latest_odds.spread is not None %}
+    <div>Spread: {{ data.latest_odds.spread|floatformat:1 }}</div>
+    {% endif %}
+    {% if data.latest_odds.total is not None %}
+    <div>Total: {{ data.latest_odds.total|floatformat:1 }}</div>
+    {% endif %}
+    {% if data.latest_odds.moneyline_home is not None %}
+    <div>ML Home: {{ data.latest_odds.moneyline_home }} | Away: {{ data.latest_odds.moneyline_away }}</div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if data.injuries %}
+<p class="section-title mt-2">Injury Impacts</p>
+{% for injury in data.injuries %}
+<div class="card">
+    <div class="gap-row" style="justify-content:space-between;">
+        <span>{{ injury.team.name }}</span>
+        <span class="badge {% if injury.impact_level == 'high' %}badge-red{% elif injury.impact_level == 'med' %}badge-yellow{% else %}badge-green{% endif %}">
+            {{ injury.impact_level }}
+        </span>
+    </div>
+    {% if injury.notes %}
+    <div class="text-sm text-muted mt-1">{{ injury.notes }}</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if not user.is_authenticated %}
+<div class="login-gate mt-2">
+    <p>Log in to see your model's analysis and track this game.</p>
+    <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
+</div>
+{% endif %}
+{% endblock %}

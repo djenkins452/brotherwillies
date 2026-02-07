@@ -1,0 +1,13 @@
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('', include('apps.core.urls')),
+    path('accounts/', include('apps.accounts.urls')),
+    path('cfb/', include('apps.cfb.urls')),
+    path('value/', include('apps.cfb.value_urls')),
+    path('golf/', include('apps.golf.urls')),
+    path('parlays/', include('apps.parlays.urls')),
+    path('profile/', include('apps.accounts.profile_urls')),
+]

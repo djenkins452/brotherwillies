@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Build Parlay - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Build Parlay</h1>
+
+<div class="card mb-2">
+    <p class="text-sm text-muted">Select at least 2 games and choose your selections. This is analysis only - not betting advice.</p>
+</div>
+
+<form method="post">
+    {% csrf_token %}
+    <div class="form-group">
+        <label for="sportsbook">Sportsbook (optional)</label>
+        <input type="text" name="sportsbook" class="form-control" placeholder="e.g., DraftKings">
+    </div>
+
+    <p class="section-title">Select Games</p>
+    {% for game in games %}
+    <div class="card">
+        <div class="form-group" style="margin-bottom:8px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" name="games" value="{{ game.id }}" style="width:20px;height:20px;">
+                {{ game.away_team.name }} @ {{ game.home_team.name }}
+            </label>
+            <div class="text-sm text-muted">{{ game.kickoff|date:"D M d, g:i A" }}</div>
+        </div>
+        <div class="gap-row">
+            <select name="selections" class="form-control" style="flex:1;">
+                <option value="{{ game.home_team.name }} ML">{{ game.home_team.name }} ML</option>
+                <option value="{{ game.away_team.name }} ML">{{ game.away_team.name }} ML (away)</option>
+            </select>
+            <select name="market_types" class="form-control" style="flex:1;">
+                <option value="moneyline">Moneyline</option>
+                <option value="spread">Spread</option>
+                <option value="total">Total</option>
+            </select>
+        </div>
+        <input type="hidden" name="odds" value="">
+    </div>
+    {% empty %}
+    <div class="empty-state"><p>No upcoming games available.</p></div>
+    {% endfor %}
+
+    {% if games %}
+    <button type="submit" class="btn btn-primary btn-block mt-2">Analyze Parlay</button>
+    {% endif %}
+</form>
+{% endblock %}

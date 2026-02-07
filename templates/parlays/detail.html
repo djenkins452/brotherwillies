@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Parlay Detail - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Parlay Analysis</h1>
+
+<div class="card mb-2">
+    <div class="gap-row" style="justify-content:space-between;">
+        <span class="card-title">{{ legs|length }}-Leg Parlay</span>
+        <span class="badge {% if parlay.correlation_risk == 'high' %}badge-red{% elif parlay.correlation_risk == 'med' %}badge-yellow{% else %}badge-green{% endif %}">
+            {{ parlay.correlation_risk }} correlation risk
+        </span>
+    </div>
+    <div class="text-sm text-muted">{{ parlay.created_at|date:"M d, Y g:i A" }}</div>
+    {% if parlay.sportsbook %}
+    <div class="text-sm text-muted">Sportsbook: {{ parlay.sportsbook }}</div>
+    {% endif %}
+</div>
+
+<div class="stat-grid">
+    {% if parlay.implied_probability %}
+    <div class="stat-tile">
+        <div class="stat-value">{{ parlay.implied_probability|floatformat:1 }}%</div>
+        <div class="stat-label">Implied Prob</div>
+    </div>
+    {% endif %}
+    {% if parlay.house_probability %}
+    <div class="stat-tile">
+        <div class="stat-value">{{ parlay.house_probability|floatformat:1 }}%</div>
+        <div class="stat-label">House Prob</div>
+    </div>
+    {% endif %}
+    {% if parlay.user_probability %}
+    <div class="stat-tile">
+        <div class="stat-value">{{ parlay.user_probability|floatformat:1 }}%</div>
+        <div class="stat-label">Your Prob</div>
+    </div>
+    {% endif %}
+</div>
+
+{% if parlay.correlation_risk == 'high' %}
+<div class="card mb-2" style="border-color: var(--red);">
+    <p class="text-sm" style="color: var(--red);">
+        High correlation detected. Multiple legs from the same game may be correlated.
+        A conservative 10% haircut has been applied to probability estimates.
+    </p>
+</div>
+{% endif %}
+
+<p class="section-title mt-2">Legs</p>
+{% for leg in legs %}
+<div class="card">
+    <div class="card-title text-sm">{{ leg.game.away_team }} @ {{ leg.game.home_team }}</div>
+    <div class="gap-row text-sm" style="justify-content:space-between;">
+        <span>{{ leg.selection }}</span>
+        <span class="badge badge-blue">{{ leg.market_type }}</span>
+    </div>
+    <div class="edge-row">
+        {% if leg.market_prob %}
+        <span>Market: {{ leg.market_prob|floatformat:1 }}%</span>
+        {% endif %}
+        {% if leg.house_prob %}
+        <span>House: {{ leg.house_prob|floatformat:1 }}%</span>
+        {% endif %}
+        {% if leg.user_prob %}
+        <span>You: {{ leg.user_prob|floatformat:1 }}%</span>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+
+<div class="card mt-3">
+    <p class="text-sm text-muted">This is analysis only, not betting advice. Correlation adjustments are conservative estimates.</p>
+</div>
+
+<div class="mt-2">
+    <a href="/parlays/" class="btn btn-secondary">Back to Parlays</a>
+</div>
+{% endblock %}

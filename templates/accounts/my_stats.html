@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}My Statistics - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">My Statistics</h1>
+
+<div class="filter-bar">
+    <a href="?period=7" class="filter-chip {% if period == '7' %}active{% endif %}">7 Days</a>
+    <a href="?period=30" class="filter-chip {% if period == '30' %}active{% endif %}">30 Days</a>
+    <a href="?period=season" class="filter-chip {% if period == 'season' %}active{% endif %}">Season</a>
+</div>
+
+<div class="stat-grid">
+    <div class="stat-tile">
+        <div class="stat-value">{{ total_analyzed }}</div>
+        <div class="stat-label">Games Analyzed</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ fav_analyzed }}</div>
+        <div class="stat-label">Fav Team Games</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if avg_house_edge > 0 %}edge-positive{% elif avg_house_edge < 0 %}edge-negative{% endif %}">{{ avg_house_edge }}%</div>
+        <div class="stat-label">Avg House Edge</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if avg_user_edge > 0 %}edge-positive{% elif avg_user_edge < 0 %}edge-negative{% endif %}">{{ avg_user_edge }}%</div>
+        <div class="stat-label">Avg User Edge</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ agreement_rate }}%</div>
+        <div class="stat-label">Agreement Rate</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value text-sm">
+            <span class="confidence-high">H:{{ confidence_dist.high }}</span>
+            <span class="confidence-med">M:{{ confidence_dist.med }}</span>
+            <span class="confidence-low">L:{{ confidence_dist.low }}</span>
+        </div>
+        <div class="stat-label">Confidence Dist</div>
+    </div>
+</div>
+
+<p class="section-title mt-2">Recent Activity</p>
+{% for interaction in recent_interactions %}
+<div class="card">
+    <div class="gap-row" style="justify-content:space-between;">
+        <span class="text-sm">{{ interaction.game.away_team }} @ {{ interaction.game.home_team }}</span>
+        <span class="badge badge-blue">{{ interaction.action }}</span>
+    </div>
+    <div class="text-sm text-muted">{{ interaction.created_at|date:"M d, g:i A" }} &middot; {{ interaction.page_key }}</div>
+</div>
+{% empty %}
+<div class="empty-state"><p>No analysis activity yet. Visit the Value Board or game pages to start.</p></div>
+{% endfor %}
+
+<div class="card mt-3">
+    <p class="text-sm text-muted">Past performance does not predict future outcomes.</p>
+</div>
+{% endblock %}

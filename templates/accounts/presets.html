@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Model Presets - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Model Presets</h1>
+
+{% if presets %}
+<p class="section-title">Saved Presets</p>
+{% for preset in presets %}
+<div class="card">
+    <div class="card-title">{{ preset.name }}</div>
+    <div class="text-sm text-muted">
+        Rating: {{ preset.rating_weight|floatformat:2 }} |
+        HFA: {{ preset.hfa_weight|floatformat:2 }} |
+        Injury: {{ preset.injury_weight|floatformat:2 }} |
+        Form: {{ preset.recent_form_weight|floatformat:2 }} |
+        Conf: {{ preset.conference_weight|floatformat:2 }}
+    </div>
+    <div class="gap-row mt-1">
+        <a href="/profile/presets/{{ preset.id }}/load/" class="btn btn-primary btn-sm">Load</a>
+        <a href="/profile/presets/{{ preset.id }}/delete/" class="btn btn-secondary btn-sm">Delete</a>
+    </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <p>No presets saved yet.</p>
+</div>
+{% endif %}
+
+{% if can_create %}
+<p class="section-title mt-3">Save New Preset</p>
+<div class="card">
+    <form method="post">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-primary btn-block">Save Preset</button>
+    </form>
+</div>
+{% else %}
+<div class="card mt-2">
+    <p class="text-sm text-muted">Free tier allows 1 preset. Upgrade to Pro for multiple presets.</p>
+</div>
+{% endif %}
+{% endblock %}

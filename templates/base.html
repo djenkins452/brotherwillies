@@ -1,0 +1,72 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Brother Willies{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header class="top-header">
+        <a href="/" class="logo">BW</a>
+        <div class="header-actions">
+            <button class="icon-btn help-btn" onclick="toggleHelp()" aria-label="Help">?</button>
+            {% if user.is_authenticated %}
+                <a href="/profile/" class="icon-btn profile-btn" aria-label="Profile">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+                </a>
+            {% else %}
+                <a href="/accounts/login/" class="icon-btn profile-btn" aria-label="Login">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+                </a>
+            {% endif %}
+        </div>
+    </header>
+
+    {% if messages %}
+    <div class="messages">
+        {% for message in messages %}
+        <div class="message message-{{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p class="disclaimer">For informational and entertainment purposes only. No guarantees. Check local laws.</p>
+    </footer>
+
+    <nav class="bottom-nav">
+        <a href="/" class="nav-item {% if nav_active == 'home' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg>
+            <span>Home</span>
+        </a>
+        <a href="/value/" class="nav-item {% if nav_active == 'value' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
+            <span>Value</span>
+        </a>
+        <a href="/cfb/" class="nav-item {% if nav_active == 'cfb' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="10" ry="7"/><path d="M12 5v14"/><path d="M5 9h14"/><path d="M5 15h14"/></svg>
+            <span>CFB</span>
+        </a>
+        <a href="/golf/" class="nav-item {% if nav_active == 'golf' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="18" r="3"/><path d="M12 3v12"/><path d="M12 3l6 4-6 2"/></svg>
+            <span>Golf</span>
+        </a>
+        <a href="/profile/" class="nav-item {% if nav_active == 'profile' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+            <span>Profile</span>
+        </a>
+    </nav>
+
+    {% include "includes/help_modal.html" %}
+
+    <script src="{% static 'js/app.js' %}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

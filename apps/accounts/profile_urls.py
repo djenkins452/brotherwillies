@@ -1,0 +1,12 @@
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('', views.profile_view, name='profile'),
+    path('my-model/', views.my_model_view, name='my_model'),
+    path('presets/', views.presets_view, name='presets'),
+    path('presets/<int:preset_id>/load/', views.load_preset, name='load_preset'),
+    path('presets/<int:preset_id>/delete/', views.delete_preset, name='delete_preset'),
+    path('my-stats/', views.my_stats_view, name='my_stats'),
+    path('performance/', views.performance_view, name='performance'),
+]
