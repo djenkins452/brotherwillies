@@ -52,6 +52,18 @@
             {% endif %}
         </div>
         <div class="form-group">
+            <label for="id_zip_code">Zip Code</label>
+            {{ form.zip_code }}
+            {% if profile.timezone %}
+            <div class="text-sm text-muted mt-1">Timezone: {{ profile.timezone }}</div>
+            {% endif %}
+            {% if form.zip_code.errors %}
+            {% for error in form.zip_code.errors %}
+            <div class="form-error">{{ error }}</div>
+            {% endfor %}
+            {% endif %}
+        </div>
+        <div class="form-group">
             <label for="id_profile_picture">Profile Picture</label>
             {% if profile.profile_picture %}
             <div class="text-sm text-muted mb-1">Current: {{ profile.profile_picture.name }}</div>

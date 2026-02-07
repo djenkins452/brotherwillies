@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}{{ conference.name }} - Brother Willies{% endblock %}
 
 {% block content %}
@@ -23,7 +24,7 @@
         <span class="team-name">{{ game.home_team.name }}</span>
     </div>
     <div class="game-meta">
-        <span>{{ game.kickoff|date:"D M d, g:i A" }}</span>
+        <span>{{ game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
     </div>
 </a>
 {% empty %}

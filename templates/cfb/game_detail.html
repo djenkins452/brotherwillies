@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}{{ game.away_team }} @ {{ game.home_team }} - Brother Willies{% endblock %}
 
 {% block content %}
@@ -13,7 +14,7 @@
         <span class="team-name">{{ game.home_team.name }}</span>
     </div>
     <div class="text-sm text-muted mt-1">
-        {{ game.kickoff|date:"l, M d Y - g:i A" }}
+        {{ game.kickoff|date:"l, M d Y - g:i A" }} {% tz_abbr %}
         {% if game.neutral_site %} &middot; Neutral Site{% endif %}
     </div>
     <div class="mt-1">

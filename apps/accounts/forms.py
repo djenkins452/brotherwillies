@@ -21,6 +21,7 @@ class PersonalInfoForm(forms.Form):
     first_name = forms.CharField(max_length=150, required=False)
     last_name = forms.CharField(max_length=150, required=False)
     email = forms.EmailField(required=False)
+    zip_code = forms.CharField(max_length=5, required=False, help_text='US zip code (sets your timezone)')
     profile_picture = forms.ImageField(required=False)
 
     def __init__(self, *args, **kwargs):
@@ -28,6 +29,18 @@ class PersonalInfoForm(forms.Form):
         for name, field in self.fields.items():
             if name != 'profile_picture':
                 field.widget.attrs['class'] = 'form-control'
+        self.fields['zip_code'].widget.attrs.update({
+            'pattern': '[0-9]{5}',
+            'inputmode': 'numeric',
+            'maxlength': '5',
+            'placeholder': 'e.g. 35487',
+        })
+
+    def clean_zip_code(self):
+        val = self.cleaned_data.get('zip_code', '').strip()
+        if val and (len(val) != 5 or not val.isdigit()):
+            raise forms.ValidationError('Enter a valid 5-digit US zip code.')
+        return val
 
 
 class PreferencesForm(forms.ModelForm):

@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-02-08 - User Timezone Support via Zip Code
+
+**Summary:** Users can set their zip code on the profile page. The app resolves it to a US timezone and displays all game times in the user's local timezone with an abbreviation (CST, EST, etc.).
+
+### Changes:
+- Added `zip_code` and `timezone` fields to UserProfile model
+- Created `apps/accounts/timezone_lookup.py` — US zip prefix (3-digit) to IANA timezone mapping
+- Profile page now has a Zip Code field; on save, timezone is resolved automatically
+- Created `brotherwillies/middleware.py` with `UserTimezoneMiddleware` — activates user's timezone per-request
+- Added middleware to settings after `AuthenticationMiddleware`
+- Created `apps/core/templatetags/tz_extras.py` with `{% tz_abbr %}` tag (outputs CST, EST, etc.)
+- All game time displays across 10 templates now append the timezone abbreviation
+- Anonymous users and users without a zip code see times in the server default (America/Chicago)
+
+### Templates updated (10):
+- `cfb/hub.html`, `cfb/value_board.html`, `cfb/game_detail.html`, `cfb/conference.html`
+- `cbb/hub.html`, `cbb/value_board.html`, `cbb/game_detail.html`, `cbb/conference.html`
+- `core/home.html`, `parlays/new.html`
+
+### New files:
+- `apps/accounts/timezone_lookup.py`
+- `brotherwillies/middleware.py`
+- `apps/core/templatetags/__init__.py`
+- `apps/core/templatetags/tz_extras.py`
+
+### Migration:
+- `accounts.0004` — zip_code, timezone fields
+
+### Verified:
+- `manage.py check` (0 issues), migration applied, all key pages return 200
+
+---
+
 ## 2026-02-08 - Season-Aware Dashboard & Offseason Banners
 
 **Summary:** Home dashboard only shows in-season sports. CFB pages show an offseason/demo data banner when out of season.

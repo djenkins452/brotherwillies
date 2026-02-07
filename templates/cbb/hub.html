@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}College Basketball - Brother Willies{% endblock %}
 
 {% block content %}
@@ -29,7 +30,7 @@
             <span class="team-name">{{ game.home_team.name }}</span>
         </div>
         <div class="game-meta">
-            <span>{{ game.tipoff|date:"D M d, g:i A" }}</span>
+            <span>{{ game.tipoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
             <span class="badge badge-{{ game.status }}">{{ game.status }}</span>
         </div>
     </a>

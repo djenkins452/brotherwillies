@@ -6,6 +6,7 @@ from django.utils import timezone
 from datetime import timedelta
 from .forms import RegisterForm, PersonalInfoForm, PreferencesForm, ModelConfigForm, PresetForm
 from .models import UserProfile, UserModelConfig, ModelPreset, UserSubscription, user_has_feature
+from .timezone_lookup import zip_to_timezone
 from apps.analytics.models import UserGameInteraction, ModelResultSnapshot
 from apps.cfb.models import Game
 
@@ -61,7 +62,18 @@ def profile_view(request):
             request.user.save()
             if form.cleaned_data.get('profile_picture'):
                 profile.profile_picture = form.cleaned_data['profile_picture']
-                profile.save()
+            zip_code = form.cleaned_data.get('zip_code', '')
+            profile.zip_code = zip_code
+            if zip_code:
+                resolved_tz = zip_to_timezone(zip_code)
+                if resolved_tz:
+                    profile.timezone = resolved_tz
+                else:
+                    profile.timezone = ''
+                    messages.warning(request, 'Could not determine timezone for that zip code.')
+            else:
+                profile.timezone = ''
+            profile.save()
             messages.success(request, 'Profile updated.')
             return redirect('profile')
     else:
@@ -69,6 +81,7 @@ def profile_view(request):
             'first_name': request.user.first_name,
             'last_name': request.user.last_name,
             'email': request.user.email,
+            'zip_code': profile.zip_code,
         })
 
     return render(request, 'accounts/profile.html', {

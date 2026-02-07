@@ -25,6 +25,8 @@ class UserProfile(models.Model):
     preference_odds_min = models.IntegerField(null=True, blank=True)
     preference_odds_max = models.IntegerField(null=True, blank=True)
     preference_min_edge = models.FloatField(default=0.0)
+    zip_code = models.CharField(max_length=5, blank=True, default='')
+    timezone = models.CharField(max_length=50, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

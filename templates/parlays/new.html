@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}Build Parlay - Brother Willies{% endblock %}
 
 {% block content %}
@@ -23,7 +24,7 @@
                 <input type="checkbox" name="games" value="{{ game.id }}" style="width:20px;height:20px;">
                 {{ game.away_team.name }} @ {{ game.home_team.name }}
             </label>
-            <div class="text-sm text-muted">{{ game.kickoff|date:"D M d, g:i A" }}</div>
+            <div class="text-sm text-muted">{{ game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</div>
         </div>
         <div class="gap-row">
             <select name="selections" class="form-control" style="flex:1;">

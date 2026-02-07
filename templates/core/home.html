@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}Brother Willies - Home{% endblock %}
 
 {% block content %}
@@ -18,7 +19,7 @@
             <span class="team-name">{{ g.game.home_team.name }}</span>
         </div>
         <div class="game-meta">
-            <span>{{ g.game.tipoff|date:"D M d, g:i A" }}</span>
+            <span>{{ g.game.tipoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
             <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
         </div>
         <div class="edge-row">
@@ -47,7 +48,7 @@
             <span class="team-name">{{ g.game.home_team.name }}</span>
         </div>
         <div class="game-meta">
-            <span>{{ g.game.kickoff|date:"D M d, g:i A" }}</span>
+            <span>{{ g.game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
             <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
         </div>
         <div class="edge-row">
