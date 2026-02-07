@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-02-07 - Header, Profile Dropdown, Profile/Preferences Split
+
+**Summary:** Updated header branding, added profile dropdown menu, split profile into personal info and preferences pages, added profile picture upload support.
+
+### Changes:
+- Header logo changed from "BW" to "Brother Willies Predictions"
+- Added profile dropdown menu in header (Profile, Preferences, Admin Console for staff, Log Out)
+- Dropdown closes on outside click and Escape key
+- Split `/profile/` into two pages:
+  - `/profile/` — Personal info (first name, last name, email, profile picture)
+  - `/profile/preferences/` — Filter preferences (favorite team/conference, spread, odds, edge)
+- Added `profile_picture` ImageField to UserProfile model
+- Added Pillow dependency for image handling
+- Configured MEDIA_ROOT/MEDIA_URL in settings for uploaded files
+- New forms: `PersonalInfoForm`, `PreferencesForm` (replaced single `ProfileForm`)
+- New view: `preferences_view`
+- New template: `templates/accounts/preferences.html`
+- Updated CSS: profile dropdown styles, avatar section, responsive logo sizing
+- Updated JS: `toggleProfileDropdown()` with click-outside-to-close
+
+---
+
 ## 2026-02-07 - Railway Deployment Setup
 
 **Summary:** Production deployment configuration for Railway.com.

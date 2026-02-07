@@ -6,11 +6,18 @@ from django.dispatch import receiver
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    profile_picture = models.ImageField(upload_to='profile_pics/', null=True, blank=True)
     favorite_conference = models.ForeignKey(
         'cfb.Conference', on_delete=models.SET_NULL, null=True, blank=True
     )
     favorite_team = models.ForeignKey(
         'cfb.Team', on_delete=models.SET_NULL, null=True, blank=True
+    )
+    favorite_cbb_conference = models.ForeignKey(
+        'cbb.Conference', on_delete=models.SET_NULL, null=True, blank=True
+    )
+    favorite_cbb_team = models.ForeignKey(
+        'cbb.Team', on_delete=models.SET_NULL, null=True, blank=True
     )
     always_include_favorite_team = models.BooleanField(default=True)
     preference_spread_min = models.FloatField(null=True, blank=True)

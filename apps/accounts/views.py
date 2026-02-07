@@ -4,7 +4,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
-from .forms import RegisterForm, ProfileForm, ModelConfigForm, PresetForm
+from .forms import RegisterForm, PersonalInfoForm, PreferencesForm, ModelConfigForm, PresetForm
 from .models import UserProfile, UserModelConfig, ModelPreset, UserSubscription, user_has_feature
 from apps.analytics.models import UserGameInteraction, ModelResultSnapshot
 from apps.cfb.models import Game
@@ -53,15 +53,45 @@ def logout_view(request):
 def profile_view(request):
     profile = request.user.profile
     if request.method == 'POST':
-        form = ProfileForm(request.POST, instance=profile)
+        form = PersonalInfoForm(request.POST, request.FILES)
+        if form.is_valid():
+            request.user.first_name = form.cleaned_data['first_name']
+            request.user.last_name = form.cleaned_data['last_name']
+            request.user.email = form.cleaned_data['email']
+            request.user.save()
+            if form.cleaned_data.get('profile_picture'):
+                profile.profile_picture = form.cleaned_data['profile_picture']
+                profile.save()
+            messages.success(request, 'Profile updated.')
+            return redirect('profile')
+    else:
+        form = PersonalInfoForm(initial={
+            'first_name': request.user.first_name,
+            'last_name': request.user.last_name,
+            'email': request.user.email,
+        })
+
+    return render(request, 'accounts/profile.html', {
+        'form': form,
+        'profile': profile,
+        'help_key': 'profile',
+        'nav_active': 'profile',
+    })
+
+
+@login_required
+def preferences_view(request):
+    profile = request.user.profile
+    if request.method == 'POST':
+        form = PreferencesForm(request.POST, instance=profile)
         if form.is_valid():
             form.save()
             messages.success(request, 'Preferences saved.')
-            return redirect('profile')
+            return redirect('preferences')
     else:
-        form = ProfileForm(instance=profile)
+        form = PreferencesForm(instance=profile)
 
-    return render(request, 'accounts/profile.html', {
+    return render(request, 'accounts/preferences.html', {
         'form': form,
         'profile': profile,
         'help_key': 'profile',

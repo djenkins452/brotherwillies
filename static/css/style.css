@@ -66,9 +66,13 @@ a:hover {
 
 .logo {
     font-weight: 700;
-    font-size: 1.25rem;
+    font-size: 1rem;
     color: var(--accent);
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .header-actions {
@@ -596,6 +600,76 @@ input[type="range"]::-webkit-slider-thumb {
     border-bottom-color: var(--accent);
 }
 
+/* ========== Profile Dropdown ========== */
+.profile-dropdown-wrap {
+    position: relative;
+}
+.profile-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 180px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    z-index: 150;
+    overflow: hidden;
+}
+.profile-dropdown.open {
+    display: block;
+}
+.profile-dropdown-item {
+    display: block;
+    padding: 12px 16px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    text-decoration: none;
+    transition: background 0.1s;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+.profile-dropdown-item:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+.profile-dropdown-divider {
+    height: 1px;
+    background: var(--border);
+}
+.profile-dropdown-logout {
+    color: var(--red);
+}
+.profile-dropdown-logout:hover {
+    color: var(--red);
+}
+
+/* ========== Profile Avatar ========== */
+.profile-avatar-section {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.profile-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.profile-avatar-placeholder {
+    background: var(--bg-input);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+.file-input {
+    padding: 10px;
+}
+
 /* ========== Responsive ========== */
 
 /* Tablet */
@@ -606,6 +680,9 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Desktop */
 @media (min-width: 769px) {
+    .logo {
+        font-size: 1.15rem;
+    }
     .main-content {
         padding: 24px 32px;
         padding-bottom: calc(var(--nav-height) + 80px);

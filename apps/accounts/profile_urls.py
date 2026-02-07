@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path('', views.profile_view, name='profile'),
+    path('preferences/', views.preferences_view, name='preferences'),
     path('my-model/', views.my_model_view, name='my_model'),
     path('presets/', views.presets_view, name='presets'),
     path('presets/<int:preset_id>/load/', views.load_preset, name='load_preset'),

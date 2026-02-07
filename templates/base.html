@@ -10,13 +10,24 @@
 </head>
 <body>
     <header class="top-header">
-        <a href="/" class="logo">BW</a>
+        <a href="/" class="logo">Brother Willies Predictions</a>
         <div class="header-actions">
             <button class="icon-btn help-btn" onclick="toggleHelp()" aria-label="Help">?</button>
             {% if user.is_authenticated %}
-                <a href="/profile/" class="icon-btn profile-btn" aria-label="Profile">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
-                </a>
+                <div class="profile-dropdown-wrap">
+                    <button class="icon-btn profile-btn" onclick="toggleProfileDropdown()" aria-label="Profile menu">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+                    </button>
+                    <div class="profile-dropdown" id="profile-dropdown">
+                        <a href="/profile/" class="profile-dropdown-item">Profile</a>
+                        <a href="/profile/preferences/" class="profile-dropdown-item">Preferences</a>
+                        {% if user.is_staff %}
+                        <a href="/admin/" class="profile-dropdown-item">Admin Console</a>
+                        {% endif %}
+                        <div class="profile-dropdown-divider"></div>
+                        <a href="/accounts/logout/" class="profile-dropdown-item profile-dropdown-logout">Log Out</a>
+                    </div>
+                </div>
             {% else %}
                 <a href="/accounts/login/" class="icon-btn profile-btn" aria-label="Login">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
@@ -53,6 +64,10 @@
         <a href="/cfb/" class="nav-item {% if nav_active == 'cfb' %}active{% endif %}">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="10" ry="7"/><path d="M12 5v14"/><path d="M5 9h14"/><path d="M5 15h14"/></svg>
             <span>CFB</span>
+        </a>
+        <a href="/cbb/" class="nav-item {% if nav_active == 'cbb' %}active{% endif %}">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/><path d="M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10"/></svg>
+            <span>CBB</span>
         </a>
         <a href="/golf/" class="nav-item {% if nav_active == 'golf' %}active{% endif %}">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="18" r="3"/><path d="M12 3v12"/><path d="M12 3l6 4-6 2"/></svg>

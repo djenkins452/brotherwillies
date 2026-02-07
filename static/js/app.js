@@ -16,12 +16,35 @@ function closeHelpOutside(event) {
     }
 }
 
-// Close help on Escape
+// Profile dropdown toggle
+function toggleProfileDropdown() {
+    var dropdown = document.getElementById('profile-dropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('open');
+    }
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', function(e) {
+    var dropdown = document.getElementById('profile-dropdown');
+    if (dropdown && dropdown.classList.contains('open')) {
+        var wrap = dropdown.closest('.profile-dropdown-wrap');
+        if (!wrap.contains(e.target)) {
+            dropdown.classList.remove('open');
+        }
+    }
+});
+
+// Close help on Escape, also close profile dropdown
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         var modal = document.getElementById('help-modal');
         if (modal && modal.style.display === 'flex') {
             toggleHelp();
+        }
+        var dropdown = document.getElementById('profile-dropdown');
+        if (dropdown) {
+            dropdown.classList.remove('open');
         }
     }
 });

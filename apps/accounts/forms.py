@@ -17,11 +17,26 @@ class RegisterForm(UserCreationForm):
             field.widget.attrs['class'] = 'form-control'
 
 
-class ProfileForm(forms.ModelForm):
+class PersonalInfoForm(forms.Form):
+    first_name = forms.CharField(max_length=150, required=False)
+    last_name = forms.CharField(max_length=150, required=False)
+    email = forms.EmailField(required=False)
+    profile_picture = forms.ImageField(required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, field in self.fields.items():
+            if name != 'profile_picture':
+                field.widget.attrs['class'] = 'form-control'
+
+
+class PreferencesForm(forms.ModelForm):
     class Meta:
         model = UserProfile
         fields = [
-            'favorite_conference', 'favorite_team', 'always_include_favorite_team',
+            'favorite_conference', 'favorite_team',
+            'favorite_cbb_conference', 'favorite_cbb_team',
+            'always_include_favorite_team',
             'preference_spread_min', 'preference_spread_max',
             'preference_odds_min', 'preference_odds_max', 'preference_min_edge',
         ]
