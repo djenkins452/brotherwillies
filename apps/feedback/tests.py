@@ -56,7 +56,7 @@ class FeedbackViewTest(TestCase):
     def test_non_partner_gets_403_on_console(self):
         self.client.force_login(self.outsider)
         resp = self.client.get('/feedback/console/')
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
 
     def test_anonymous_redirects_to_login(self):
         resp = self.client.get('/feedback/console/')
@@ -88,7 +88,7 @@ class FeedbackViewTest(TestCase):
             'title': 'Sneaky',
             'description': 'Should fail',
         })
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
         self.assertEqual(PartnerFeedback.objects.count(), 0)
 
     def test_partner_can_view_detail(self):
@@ -194,7 +194,7 @@ class FeedbackViewTest(TestCase):
             title='Blocked', description='D', status='NEW',
         )
         resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'ACCEPTED'})
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
         fb.refresh_from_db()
         self.assertEqual(fb.status, 'NEW')
 
@@ -239,7 +239,7 @@ class FeedbackViewTest(TestCase):
             title='No Touch', description='D',
         )
         resp = self.client.post(f'/feedback/console/{fb.pk}/delete/')
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)
         self.assertTrue(PartnerFeedback.objects.filter(pk=fb.pk).exists())
 
     def test_delete_preserves_query_params(self):
