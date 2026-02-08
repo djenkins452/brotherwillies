@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-02-08 - Header Logo Rebrand
+
+**Summary:** Replaced the blue "Brother Willies Predictions" text header with the new BW logo image alongside "Brother Willie" text in a warm cream/gold color matching the logo artwork.
+
+### Modified files:
+- `templates/base.html` — Header now shows logo image + "Brother Willie" text instead of plain text link
+- `static/css/style.css` — Added `--logo-text` color variable, `.logo-img` and `.logo-text` classes, flex layout for logo, desktop responsive sizing
+- `static/branding/bw_logo.png` — Updated logo image
+
+---
+
 ## 2026-02-08 - AI Performance Commentary & Demo Data (Phase 5)
 
 **Summary:** Added AI-powered performance commentary for mock bet analytics using the user's chosen persona, plus seeded ~30 demo mock bets for the demo user so the analytics dashboard has data out of the box.

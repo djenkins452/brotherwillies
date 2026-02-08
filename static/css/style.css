@@ -19,6 +19,7 @@
     --red: #ef4444;
     --yellow: #eab308;
     --orange: #f97316;
+    --logo-text: #e8d5b7;
     --border: #2d3148;
     --nav-height: 60px;
     --header-height: 52px;
@@ -65,14 +66,31 @@ a:hover {
 }
 
 .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    text-decoration: none;
+}
+.logo-img {
+    height: 36px;
+    width: 36px;
+    object-fit: contain;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+.logo-text {
     font-weight: 700;
     font-size: 1rem;
-    color: var(--accent);
+    color: var(--logo-text);
     letter-spacing: 0.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+}
+.logo:hover .logo-text {
+    color: var(--logo-text);
 }
 
 .header-actions {
@@ -805,8 +823,12 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Desktop */
 @media (min-width: 769px) {
-    .logo {
+    .logo-text {
         font-size: 1.15rem;
+    }
+    .logo-img {
+        height: 40px;
+        width: 40px;
     }
     .main-content {
         padding: 24px 32px;

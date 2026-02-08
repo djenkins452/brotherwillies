@@ -10,7 +10,10 @@
 </head>
 <body>
     <header class="top-header">
-        <a href="/" class="logo">Brother Willies Predictions</a>
+        <a href="/" class="logo">
+            <img src="{% static 'branding/bw_logo.png' %}" alt="BW Logo" class="logo-img">
+            <span class="logo-text">Brother Willie</span>
+        </a>
         <div class="header-actions">
             <button class="icon-btn help-btn" onclick="toggleHelp()" aria-label="Help">?</button>
             {% if user.is_authenticated %}
