@@ -1,14 +1,43 @@
+import base64
+from io import BytesIO
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login, authenticate, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
+from PIL import Image
 from .forms import RegisterForm, PersonalInfoForm, PreferencesForm, ModelConfigForm, PresetForm
 from .models import UserProfile, UserModelConfig, ModelPreset, UserSubscription, user_has_feature
 from .timezone_lookup import zip_to_timezone
 from apps.analytics.models import UserGameInteraction, ModelResultSnapshot
 from apps.cfb.models import Game
+
+
+MAX_AVATAR_SIZE = 200  # px
+MAX_AVATAR_BYTES = 150_000  # ~150 KB base64 limit
+
+
+def _process_profile_picture(uploaded_file):
+    """Resize uploaded image to 200x200 and return a base64 data URI."""
+    img = Image.open(uploaded_file)
+    img = img.convert('RGB')
+
+    # Crop to square (center crop)
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    img = img.crop((left, top, left + side, top + side))
+
+    # Resize to max avatar size
+    img = img.resize((MAX_AVATAR_SIZE, MAX_AVATAR_SIZE), Image.LANCZOS)
+
+    # Encode as JPEG
+    buf = BytesIO()
+    img.save(buf, format='JPEG', quality=75, optimize=True)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    return f'data:image/jpeg;base64,{b64}'
 
 
 def register_view(request):
@@ -61,8 +90,12 @@ def profile_view(request):
             request.user.email = form.cleaned_data['email']
             request.user.save()
             if form.cleaned_data.get('profile_picture'):
-                profile.profile_picture = form.cleaned_data['profile_picture']
-                profile.save()
+                try:
+                    data_uri = _process_profile_picture(form.cleaned_data['profile_picture'])
+                    profile.profile_picture_data = data_uri
+                    profile.save()
+                except Exception:
+                    messages.warning(request, 'Could not process image. Profile info was saved.')
             messages.success(request, 'Profile updated.')
             return redirect('profile')
     else:

@@ -2,13 +2,17 @@
 
 ---
 
-## 2026-02-08 - Profile picture on header/nav icons + more visible icon buttons
+## 2026-02-08 - Store profile picture as base64 in DB (Railway-safe)
 
-**Summary:** Show the user's profile picture in the header profile button and bottom nav Profile tab (falls back to SVG person icon when no picture). Made the `?` help and profile icon buttons more visible with a `2px solid` border that highlights on hover.
+**Summary:** Replaced `ImageField` (filesystem-based, breaks on Railway's ephemeral disk) with a `TextField` storing the image as a base64 data URI. Uploaded images are center-cropped to square, resized to 200×200, and JPEG-compressed (~5-15 KB). Profile picture now shows in the header profile button and bottom nav.
 
 ### Changes:
-- `templates/base.html` — header & bottom nav conditionally render `<img>` for profile picture
+- `apps/accounts/models.py` — replaced `profile_picture` ImageField with `profile_picture_data` TextField
+- `apps/accounts/views.py` — `_process_profile_picture()` resizes/compresses uploads to base64 data URI
 - `apps/accounts/context_processors.py` — new `user_profile` context processor (safe `get_or_create`)
+- `apps/accounts/migrations/0005_*` — removes old field, adds new one
+- `templates/base.html` — header & bottom nav render profile picture from data URI
+- `templates/accounts/profile.html` — profile page uses `profile_picture_data`
 - `brotherwillies/settings.py` — registered context processor
 - `static/css/style.css` — `.icon-btn` border, `.header-avatar`, `.nav-avatar` styles
 

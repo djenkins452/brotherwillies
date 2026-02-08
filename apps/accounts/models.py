@@ -6,7 +6,9 @@ from django.dispatch import receiver
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    profile_picture = models.ImageField(upload_to='profile_pics/', null=True, blank=True)
+    profile_picture_data = models.TextField(blank=True, default='',
+        help_text='Base64-encoded data URI for profile picture (stored in DB, no filesystem needed)'
+    )
     favorite_conference = models.ForeignKey(
         'cfb.Conference', on_delete=models.SET_NULL, null=True, blank=True
     )

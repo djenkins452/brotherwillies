@@ -6,8 +6,8 @@
 
 <div class="card mb-2">
     <div class="profile-avatar-section">
-        {% if profile.profile_picture %}
-            <img src="{{ profile.profile_picture.url }}" alt="Profile picture" class="profile-avatar">
+        {% if profile.profile_picture_data %}
+            <img src="{{ profile.profile_picture_data }}" alt="Profile picture" class="profile-avatar">
         {% else %}
             <div class="profile-avatar profile-avatar-placeholder">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
@@ -53,8 +53,8 @@
         </div>
         <div class="form-group">
             <label for="id_profile_picture">Profile Picture</label>
-            {% if profile.profile_picture %}
-            <div class="text-sm text-muted mb-1">Current: {{ profile.profile_picture.name }}</div>
+            {% if profile.profile_picture_data %}
+            <div class="text-sm text-muted mb-1">Current picture set ✓</div>
             {% endif %}
             <input type="file" name="profile_picture" id="id_profile_picture" accept="image/*" class="form-control file-input">
             {% if form.profile_picture.errors %}
