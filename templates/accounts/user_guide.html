@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% block title %}User Guide - Brother Willies{% endblock %}
+
+{% block content %}
+<style>[id] { scroll-margin-top: 68px; }</style>
+
+<h1 class="page-title">User Guide</h1>
+
+<div class="card mb-2">
+    <p class="section-title" style="margin-bottom:12px;">Contents</p>
+    <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#getting-started">1. Getting Started</a></li>
+        <li style="padding:4px 0;"><a href="#dashboard">2. Dashboard</a></li>
+        <li style="padding:4px 0;"><a href="#value-board">3. Value Board</a></li>
+        <li style="padding:4px 0;"><a href="#game-detail">4. Game Detail</a></li>
+        <li style="padding:4px 0;"><a href="#my-model">5. My Model</a></li>
+        <li style="padding:4px 0;"><a href="#preferences">6. Preferences</a></li>
+        <li style="padding:4px 0;"><a href="#my-stats">7. My Statistics</a></li>
+        <li style="padding:4px 0;"><a href="#performance">8. Model Performance</a></li>
+        <li style="padding:4px 0;"><a href="#parlays">9. Parlays</a></li>
+        <li style="padding:4px 0;"><a href="#glossary">10. Glossary</a></li>
+    </ul>
+</div>
+
+{# ── 1. Getting Started ─────────────────────────────────────────────── #}
+<div class="card mb-2" id="getting-started">
+    <p class="card-title">1. Getting Started</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        Brother Willies is a sports analytics platform that compares a mathematical house model against the
+        betting market to identify where they disagree. The site covers <strong>College Basketball (CBB)</strong>,
+        <strong>College Football (CFB)</strong>, and <strong>Golf</strong>.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Important:</strong> This site is for informational and entertainment purposes only. It does not provide
+        betting advice, picks, or guarantees. All analysis is model-based and reflects statistical probabilities, not certainties.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>How it works:</strong> The house model calculates a win probability for each game based on team ratings,
+        home-field advantage, and injury data. This probability is compared against the market's implied probability
+        (derived from betting odds). The difference is called the <strong>edge</strong> &mdash; a positive edge means the
+        model thinks the home team is more likely to win than the market does.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Data sources:</strong> Schedules and scores come from ESPN and sport-specific APIs (CFBD, CBBD).
+        Betting odds come from The Odds API. Injury reports come from ESPN. All data refreshes automatically.
+    </p>
+</div>
+
+{# ── 2. Dashboard ────────────────────────────────────────────────────── #}
+<div class="card mb-2" id="dashboard">
+    <p class="card-title">2. Dashboard</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        The home page shows a snapshot of what's happening right now.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Live Games:</strong> When games are in progress, they appear at the top with a pulsing
+        <span style="color:#ef4444;">LIVE</span> badge and current scores. Live data updates each time the page refreshes.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Top Value Games:</strong> Below live games, you'll see the upcoming games with the highest house edge
+        for each sport currently in season. These are sorted by the size of the disagreement between the model and the market.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>What the numbers mean on each game card:</strong>
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Mkt</strong> &mdash; Market implied probability (from betting odds)</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>House</strong> &mdash; House model edge vs market (green = model favors home more than market, red = less)</li>
+    </ul>
+</div>
+
+{# ── 3. Value Board ──────────────────────────────────────────────────── #}
+<div class="card mb-2" id="value-board">
+    <p class="card-title">3. Value Board</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        The Value Board is the main analytics page. It shows all upcoming games sorted by edge size.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Sport Tabs:</strong> Tabs at the top let you switch between CBB, CFB, and Golf. Only sports with
+        upcoming games or events appear. The default tab follows the current season (CBB in winter, CFB in fall).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Game Sections:</strong> Games are grouped into collapsible sections: Today, Tomorrow, This Week,
+        and Coming Up. CFB also shows a "Big Matchups" section for high-rated games. Click section headers to
+        expand or collapse them &mdash; your preference is saved.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Sorting:</strong> Use the filter chips to sort by:
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>House Edge</strong> &mdash; Difference between house model and market (default)</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Your Edge</strong> &mdash; Difference between your customized model and market</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Delta</strong> &mdash; Difference between your model and the house model</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Game Cards:</strong> Each card shows a compact data grid with Market, House, and Your probabilities,
+        plus edge values. Your favorite team's card gets a colored accent bar at the top.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Confidence Badges:</strong> Each game has a confidence indicator:
+        <span style="color:var(--green);">HIGH</span> (odds are fresh and injury data exists),
+        <span style="color:var(--yellow);">MED</span> (odds within 12 hours),
+        <span style="color:var(--red);">LOW</span> (stale odds or missing data).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Filters:</strong> Set minimum edge, spread range, and odds range in
+        <a href="/profile/preferences/">Preferences</a> to filter out games that don't meet your criteria.
+    </p>
+</div>
+
+{# ── 4. Game Detail ──────────────────────────────────────────────────── #}
+<div class="card mb-2" id="game-detail">
+    <p class="card-title">4. Game Detail</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        Click any game card to see the full analysis for that matchup.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Status Badges:</strong>
+        <span class="badge badge-blue">SCHEDULED</span> game hasn't started,
+        <span class="badge badge-red">LIVE</span> game is in progress with current scores,
+        <span class="badge badge-gray">FINAL</span> game is complete with final scores.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Probability Table:</strong> The main table shows three columns:
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Market</strong> &mdash; Implied probability from current betting odds</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>House</strong> &mdash; The site's model probability and edge vs market</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>You</strong> &mdash; Your customized model probability and edge (if you've tuned weights in My Model)</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>AI Insight:</strong> At the top of the page, an AI-generated analysis explains why the model and
+        market agree or disagree. This uses the game data plus general sports knowledge to provide context. The
+        AI tone is controlled by your persona setting in <a href="/profile/preferences/">Preferences</a>.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Injuries:</strong> Known injuries are listed with impact levels: HIGH (key player out), MED (rotation
+        player), LOW (minor role). The model adjusts its probability based on these.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Line Movement:</strong> If the odds have shifted, you'll see an arrow indicator:
+        <span style="color:var(--green);">&#9650; up</span> (odds moved toward home team) or
+        <span style="color:var(--red);">&#9660; down</span> (moved away).
+    </p>
+</div>
+
+{# ── 5. My Model ─────────────────────────────────────────────────────── #}
+<div class="card mb-2" id="my-model">
+    <p class="card-title">5. My Model</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        <a href="/profile/my-model/">My Model</a> lets you customize the house model by adjusting weight multipliers.
+        The house model uses a default weight of 1.0 for each factor. Increasing a weight amplifies that factor's
+        influence; decreasing it reduces it.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Weight Sliders:</strong>
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Rating Weight</strong> &mdash; How much team strength ratings matter. Higher = more weight on the better-rated team.</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Home Field Advantage</strong> &mdash; How much playing at home matters. Set to 0 if you think home field doesn't matter.</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Injury Weight</strong> &mdash; How much injury reports affect the prediction. Higher = injuries matter more.</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Recent Form</strong> &mdash; How much recent performance trends matter.</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Conference Weight</strong> &mdash; How much conference strength matters.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Presets:</strong> Save your weight configurations as named presets in
+        <a href="/profile/presets/">Presets</a>. Load a preset to instantly apply a saved configuration.
+        Reset to defaults restores all weights to 1.0.
+    </p>
+</div>
+
+{# ── 6. Preferences ──────────────────────────────────────────────────── #}
+<div class="card mb-2" id="preferences">
+    <p class="card-title">6. Preferences</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        <a href="/profile/preferences/">Preferences</a> controls how the site is personalized for you.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>AI Persona:</strong> Choose the tone for AI Insights on game detail pages:
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Analyst</strong> &mdash; Neutral, professional, data-driven (default)</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>New York Bookie</strong> &mdash; Blunt, street-smart, no-nonsense</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Southern Commentator</strong> &mdash; Folksy, warm, confident</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Ex-Player</strong> &mdash; Direct, experiential, locker-room perspective</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Favorites:</strong> Set your favorite CFB conference and team, CBB team, and golf player. Favorite
+        teams are highlighted on the Value Board with a colored accent bar and "Your Team" badge. Check
+        "Always include favorite team" to ensure your team appears on the Value Board even if it doesn't meet
+        your filter criteria.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Value Board Filters:</strong> Set minimum edge, spread range (min/max), and odds range to filter
+        the Value Board to only show games that match your criteria.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Location:</strong> Enter your zip code to display game times in your local timezone.
+    </p>
+</div>
+
+{# ── 7. My Stats ─────────────────────────────────────────────────────── #}
+<div class="card mb-2" id="my-stats">
+    <p class="card-title">7. My Statistics</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        <a href="/profile/my-stats/">My Stats</a> tracks your activity on the site. Use the time period filters
+        (7 days, 30 days, Season) to adjust the window.
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Games Analyzed</strong> &mdash; Number of games you've viewed or evaluated</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Favorite Team Games</strong> &mdash; How many of those involved your favorite team</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Average House Edge</strong> &mdash; The average edge on games you looked at</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Average User Edge</strong> &mdash; Same, but using your custom model weights</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Agreement Rate</strong> &mdash; How often your model and the house model agree on which team wins</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Confidence Distribution</strong> &mdash; Breakdown of HIGH/MED/LOW confidence games you viewed</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        Past performance does not predict future outcomes.
+    </p>
+</div>
+
+{# ── 8. Model Performance ────────────────────────────────────────────── #}
+<div class="card mb-2" id="performance">
+    <p class="card-title">8. Model Performance</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        <a href="/profile/performance/">Model Performance</a> shows how well the house model has predicted outcomes
+        for completed games. Metrics are computed from snapshots captured before each game.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Key Metrics:</strong>
+    </p>
+    <ul style="padding-left:16px;margin-top:4px;">
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Accuracy</strong> &mdash; Percentage of games where the model correctly predicted the winner (probability > 50% matched the actual outcome)</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Brier Score</strong> &mdash; Calibration quality. 0.000 = perfect predictions. 0.250 = coin flip. Lower is better.</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>By Sport</strong> &mdash; Separate accuracy and Brier score for CFB and CBB</li>
+        <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Trends</strong> &mdash; Performance over the last 7 days and 30 days</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Closing Line Value (CLV):</strong> Measures whether the market moved toward the model's prediction
+        by game time. Positive CLV means the model identified value before the market caught up. This is considered
+        one of the strongest indicators of model quality.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Calibration Table:</strong> Groups predictions by probability range (50-60%, 60-70%, etc.) and
+        compares the predicted win rate against the actual win rate. A well-calibrated model has actual rates close
+        to the predicted rates in each bucket.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>How snapshots work:</strong> The system captures the house model's prediction and the market probability
+        for each game within 24 hours of start time. After the game completes, the actual outcome and closing odds are
+        recorded. Performance metrics are computed from these snapshots.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        Past performance does not predict future outcomes.
+    </p>
+</div>
+
+{# ── 9. Parlays ──────────────────────────────────────────────────────── #}
+<div class="card mb-2" id="parlays">
+    <p class="card-title">9. Parlays</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        The <a href="/parlays/">Parlay Builder</a> is an analytics tool for evaluating multi-game parlays.
+        It does not place bets &mdash; it computes combined probabilities using the house model.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Building a Parlay:</strong> Select 2 or more games, choose a side for each (home or away moneyline),
+        and click Analyze. The system calculates each leg's probability and multiplies them together.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Correlation Risk:</strong> If your parlay includes games from the same conference or division, the
+        system flags potential correlation. Correlated outcomes mean the legs aren't truly independent, which
+        affects the combined probability.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>10% Haircut:</strong> The combined probability is reduced by 10% to account for the inherent
+        difficulty of hitting multi-leg parlays and the vig (sportsbook margin) built into parlay payouts.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        This tool is for analytical comparison only. It does not recommend or encourage parlay betting.
+    </p>
+</div>
+
+{# ── 10. Glossary ────────────────────────────────────────────────────── #}
+<div class="card mb-2" id="glossary">
+    <p class="card-title">10. Glossary</p>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Term</th>
+                    <th>Definition</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Edge</strong></td>
+                    <td>The difference between a model's probability and the market's probability. A +5% edge means the model thinks the team is 5 percentage points more likely to win than the market implies.</td>
+                </tr>
+                <tr>
+                    <td><strong>House Model</strong></td>
+                    <td>The site's fixed probability model (version "v1"). Uses team ratings, home-field advantage, and injury data to compute win probabilities.</td>
+                </tr>
+                <tr>
+                    <td><strong>User Model</strong></td>
+                    <td>Your personalized version of the house model with custom weight multipliers set in My Model.</td>
+                </tr>
+                <tr>
+                    <td><strong>Market Probability</strong></td>
+                    <td>The implied win probability derived from current betting odds. A -150 moneyline implies approximately 60% win probability.</td>
+                </tr>
+                <tr>
+                    <td><strong>Delta</strong></td>
+                    <td>The difference between your user model probability and the house model probability. Shows where you disagree with the house.</td>
+                </tr>
+                <tr>
+                    <td><strong>Spread</strong></td>
+                    <td>The point spread — how many points the favored team is expected to win by. A -7 spread means the favorite is expected to win by 7 points.</td>
+                </tr>
+                <tr>
+                    <td><strong>Total (Over/Under)</strong></td>
+                    <td>The projected combined score of both teams. Typically displayed as a single number (e.g., 145.5).</td>
+                </tr>
+                <tr>
+                    <td><strong>Moneyline</strong></td>
+                    <td>A straight bet on which team wins. Expressed as American odds: -150 means bet $150 to win $100 (favorite), +200 means bet $100 to win $200 (underdog).</td>
+                </tr>
+                <tr>
+                    <td><strong>Confidence</strong></td>
+                    <td>Data quality indicator. HIGH = fresh odds + injury data available. MED = odds within 12 hours. LOW = stale odds or missing data. Higher confidence means more reliable model output.</td>
+                </tr>
+                <tr>
+                    <td><strong>Brier Score</strong></td>
+                    <td>A calibration metric for probability predictions. Ranges from 0 (perfect) to 1 (worst). A coin flip scores 0.250. Lower is better.</td>
+                </tr>
+                <tr>
+                    <td><strong>CLV (Closing Line Value)</strong></td>
+                    <td>Whether the betting market moved toward the model's prediction by game time. Positive CLV suggests the model identified value before the market did.</td>
+                </tr>
+                <tr>
+                    <td><strong>Calibration</strong></td>
+                    <td>How closely a model's predicted probabilities match actual outcomes. If the model says 70% for 100 games, about 70 should actually win.</td>
+                </tr>
+                <tr>
+                    <td><strong>Snapshot</strong></td>
+                    <td>A frozen capture of the model's prediction and market odds for a game, taken within 24 hours of game time. Used for performance tracking.</td>
+                </tr>
+                <tr>
+                    <td><strong>HFA (Home Field Advantage)</strong></td>
+                    <td>The statistical edge a team gets from playing at home. The model applies a fixed bonus (3.0 for CFB, 3.5 for CBB) multiplied by the HFA weight.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="text-center mt-2 mb-2">
+    <a href="#" class="text-sm text-muted">Back to top</a>
+</div>
+
+<div class="text-center mb-3">
+    <p class="text-sm text-muted">For informational and entertainment purposes only. No guarantees. Check local laws.</p>
+</div>
+
+{% endblock %}

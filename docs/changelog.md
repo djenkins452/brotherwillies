@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-02-08 - User Guide page + CLAUDE.md trim
+
+**Summary:** Added comprehensive User Guide at `/profile/user-guide/` with 10 sections covering every feature, accessible from profile dropdown and quick links. Trimmed CLAUDE.md from ~585 lines to ~284 lines by removing implementation details that belong in code/help system, and added Standing Instructions section.
+
+### New files:
+- `templates/accounts/user_guide.html` — comprehensive user guide with TOC, 10 sections, glossary
+
+### Modified files:
+- `apps/accounts/views.py` — added `user_guide_view`
+- `apps/accounts/profile_urls.py` — added `/profile/user-guide/` route
+- `templates/base.html` — added User Guide link to profile dropdown
+- `templates/accounts/profile.html` — added User Guide to quick links
+- `templates/includes/help_modal.html` — added `user_guide` help key
+- `CLAUDE.md` — trimmed to concise project reference, added Standing Instructions, removed implementation details (Build Progress, Model Services formulas, Analytics Pipeline field docs, AI Insight Engine internals, Live Data Ingestion details, Help System docs)
+
+---
+
 ## 2026-02-08 - AI Insight: fix injury language (no injuries ≠ missing data)
 
 **Summary:** Fixed AI Insight treating "no injuries reported" as "missing data." When ESPN/CBBD report no injuries for a game, that's normal — not a data gap. Previously, the AI would flag this as missing data, degrade confidence, and overstate the significance. Now: (1) empty injuries no longer added to `missing_data` list, (2) system prompt instructs AI to briefly note "no injuries reported by the source" and move on.

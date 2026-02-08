@@ -413,4 +413,12 @@ def _compute_clv(snapshots):
     }
 
 
+@login_required
+def user_guide_view(request):
+    return render(request, 'accounts/user_guide.html', {
+        'help_key': 'user_guide',
+        'nav_active': 'profile',
+    })
+
+
 from django.db import models

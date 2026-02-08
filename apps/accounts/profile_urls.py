@@ -10,4 +10,5 @@ urlpatterns = [
     path('presets/<int:preset_id>/delete/', views.delete_preset, name='delete_preset'),
     path('my-stats/', views.my_stats_view, name='my_stats'),
     path('performance/', views.performance_view, name='performance'),
+    path('user-guide/', views.user_guide_view, name='user_guide'),
 ]
