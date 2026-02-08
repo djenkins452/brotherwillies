@@ -106,7 +106,7 @@ brotherwillies/
         ai_insights.py     # AI-powered game explanation engine (OpenAI)
       templatetags/
         tz_extras.py       # {% tz_abbr %} template tag
-    accounts/              # Auth, profile, preferences, My Model, My Stats, User Guide
+    accounts/              # Auth, profile, preferences, My Model, My Stats, User Guide, What's New
       timezone_lookup.py   # zip_to_timezone() via zipcodes library
     cfb/                   # College football: models, services, views
     cbb/                   # College basketball: models, services, views
@@ -119,6 +119,7 @@ brotherwillies/
         cfb/                 # CFB schedule, odds, injuries providers
         golf/                # Golf schedule, odds providers
       team_colors.py       # CFB + CBB team primary colors by slug
+    mockbets/              # Mock bet simulation (no real money, decision analytics)
     feedback/              # Partner-only feedback system
   static/
     css/style.css          # Global dark theme + responsive styles
@@ -136,12 +137,13 @@ brotherwillies/
 | App | Purpose |
 |-----|---------|
 | `core` | Base layout, home page, Value Board, help component, AI Insight, SiteConfig |
-| `accounts` | Auth, profile, preferences, My Model, presets, My Stats, performance, User Guide |
+| `accounts` | Auth, profile, preferences, My Model, presets, My Stats, performance, User Guide, What's New |
 | `cfb` | Conferences, teams, games, odds, injuries, house/user model services |
 | `cbb` | College basketball: same structure as CFB |
 | `golf` | Golf events, golfers, odds, golfer search API |
 | `parlays` | Parlay builder/scoring, correlation detection (analytics only) |
 | `analytics` | ModelResultSnapshot, UserGameInteraction, CLV tracking |
+| `mockbets` | Mock bet simulation — place/track/review simulated bets, settlement engine, decision analytics |
 | `feedback` | Partner-only feedback system (submit, review, status pipeline) |
 | `datahub` | Seed loader, live data ingestion, multi-sport provider layer |
 
@@ -176,6 +178,9 @@ brotherwillies/
 | `/parlays/` | Parlay hub |
 | `/parlays/new/` | Build parlay |
 | `/parlays/<uuid>/` | Parlay detail |
+| `/mockbets/` | My Mock Bets dashboard |
+| `/mockbets/place/` | Place mock bet (AJAX) |
+| `/mockbets/<uuid>/` | Mock bet detail |
 | `/feedback/console/` | Feedback dashboard (partner-only) |
 | `/api/ai-insight/<sport>/<uuid>/` | AI Insight AJAX endpoint |
 
@@ -187,7 +192,8 @@ brotherwillies/
 - **Neutral language** — analyzed, evaluated, modeled (never guarantee/profit)
 - **Footer disclaimer on every page:** "For informational and entertainment purposes only. No guarantees. Check local laws."
 - **Stats pages disclaimer:** "Past performance does not predict future outcomes."
-- **No storage of:** bet amounts, profit, winnings
+- **Mock bets are simulated** — no real money, all figures labeled "Simulated"
+- **No storage of:** real bet amounts, profit, winnings
 
 ---
 
@@ -246,6 +252,8 @@ Helper: `user_has_feature(user, feature_key) -> bool`
   - `refresh_data.py` — refreshes all data (designed for cron)
   - `capture_snapshots.py` — captures pre-game predictions
   - `resolve_outcomes.py` — resolves outcomes for completed games
+- **Mock bet settlement:** `apps/mockbets/management/commands/`
+  - `settle_mockbets.py` — settles pending mock bets for completed games
 
 ---
 
@@ -278,6 +286,7 @@ AI temperature and max tokens are admin-configurable at `/bw-manage/` → Core �
 | `docs/changelog.md` | Change history |
 | `docs/master_prompt.md` | Full project specification (preserved for reference) |
 | `/profile/user-guide/` | User-facing guide (template: `templates/accounts/user_guide.html`) |
+| `/profile/whats-new/` | Release history (template: `templates/accounts/whats_new.html`) |
 
 ---
 
