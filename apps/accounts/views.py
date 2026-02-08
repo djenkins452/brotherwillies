@@ -52,7 +52,7 @@ def logout_view(request):
 
 @login_required
 def profile_view(request):
-    profile = request.user.profile
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
     if request.method == 'POST':
         form = PersonalInfoForm(request.POST, request.FILES)
         if form.is_valid():
@@ -82,7 +82,7 @@ def profile_view(request):
 
 @login_required
 def preferences_view(request):
-    profile = request.user.profile
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
     if request.method == 'POST':
         form = PreferencesForm(request.POST, instance=profile)
         if form.is_valid():
@@ -215,7 +215,8 @@ def my_stats_view(request):
     # Favorite team games
     fav_team_id = None
     try:
-        fav_team_id = request.user.profile.favorite_team_id
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        fav_team_id = profile.favorite_team_id
     except Exception:
         pass
 

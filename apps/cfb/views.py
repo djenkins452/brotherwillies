@@ -89,7 +89,8 @@ def value_board(request):
     # Apply user preference filters
     if request.user.is_authenticated:
         try:
-            profile = request.user.profile
+            from apps.accounts.models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=request.user)
             filtered = []
             for g in games_data:
                 edge = g.get('house_edge', 0)
@@ -134,7 +135,9 @@ def value_board(request):
     show_bye_message = False
     if request.user.is_authenticated:
         try:
-            if request.user.profile.favorite_team and not fav_playing:
+            from apps.accounts.models import UserProfile
+            _profile, _ = UserProfile.objects.get_or_create(user=request.user)
+            if _profile.favorite_team and not fav_playing:
                 show_bye_message = True
         except Exception:
             pass

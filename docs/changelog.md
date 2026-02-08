@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-02-08 - Fix 500 error on /profile/ for users missing UserProfile row
+
+**Summary:** Replaced `request.user.profile` (which crashes with `RelatedObjectDoesNotExist` if no UserProfile row exists) with `UserProfile.objects.get_or_create(user=request.user)` in all affected views.
+
+### Files changed:
+- `apps/accounts/views.py` — `profile_view`, `preferences_view`, `my_stats_view`
+- `apps/cfb/views.py` — `value_board` (preference filters + bye-week check)
+
+### Root cause:
+Users created before the `post_save` signal was wired (or via paths that bypass it) had no `UserProfile` row, causing a 500 on any page that accessed `request.user.profile`.
+
+---
+
 ## 2026-02-08 - Live Data Ingestion (Step 18)
 
 **Summary:** Multi-sport live data ingestion for CBB, PGA Golf, and CFB. Provider architecture fetches from external APIs and normalizes into existing models. Entirely optional — controlled by environment toggles. Seed data still works when live data is disabled.
