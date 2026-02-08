@@ -242,7 +242,8 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 - **No `DJANGO_SUPERUSER_*` env vars** — Railpack's static scanner detects these and fails the build. Superuser credentials are hardcoded in `ensure_superuser.py` (`admin` / `brotherwillies`).
 - **Idempotent commands live in:** `apps/datahub/management/commands/`
   - `ensure_superuser.py` — creates superuser if not exists (hardcoded creds)
-  - `ensure_seed.py` — runs seed_demo only if no CFB and CBB Conference rows exist
+  - `ensure_seed.py` — runs seed_demo if no Conference rows exist, then runs live data ingestion if enabled
+  - `refresh_data.py` — refreshes schedule/odds/injuries for all enabled sports (designed for cron)
 
 ---
 
@@ -268,7 +269,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 15 | Season-aware dashboard + offseason banners | COMPLETE |
 | 16 | User timezone via zip code | COMPLETE |
 | 17 | Security hardening & registration disabled | COMPLETE |
-| 18 | Live data ingestion (CBB → Golf → CFB) | IN PROGRESS |
+| 18 | Live data ingestion (CBB → Golf → CFB) | COMPLETE |
 
 ---
 
@@ -300,7 +301,21 @@ CBBD_API_KEY=                    # CollegeBasketballData.com key
 python manage.py ingest_schedule --sport=cbb|cfb|golf
 python manage.py ingest_odds --sport=cbb|cfb|golf
 python manage.py ingest_injuries --sport=cbb|cfb
+python manage.py refresh_data          # Runs all ingestion for enabled sports (cron use)
 ```
+
+**Data Refresh:**
+- `ensure_seed` runs live ingestion on every deploy (when `LIVE_DATA_ENABLED=true`)
+- For ongoing refresh, set up a Railway cron job:
+  1. Railway dashboard → project → "+ New" → "Cron Job"
+  2. Same GitHub repo, start command: `python manage.py refresh_data`
+  3. Schedule: `*/30 * * * *` (every 30 minutes)
+  4. Copy all env vars from main service
+
+**Dashboard Live Games:**
+- Home page shows "Live Now" section for games with `status='live'`
+- ESPN scoreboard fetches yesterday + today + 7 days to catch late-night games
+- Game status lifecycle: `scheduled` → `live` → `final` (updated on each ingestion run)
 
 ---
 

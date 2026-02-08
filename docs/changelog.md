@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-02-08 - Live games dashboard + cron refresh + data source docs
+
+**Summary:** Home dashboard now shows live/in-progress games in a dedicated "Live Now" section with pulsing red badge and dot. ESPN fetch window expanded to include yesterday's scoreboard for late-night games. Added `refresh_data` management command for Railway cron job. Help system now documents data sources on every page.
+
+### Changes:
+- `apps/core/views.py` — home view queries `status='live'` games separately, renders in "Live Now" section
+- `templates/core/home.html` — "Live Now" section at top with red pulsing LIVE badge, game cards with red left-border
+- `static/css/style.css` — `.badge-live`, `.game-card-live`, `.live-dot`, `.section-title-live`, `@keyframes live-pulse`
+- `apps/datahub/providers/cbb/schedule_provider.py` — ESPN fetch range changed to `range(-1, 8)` (includes yesterday)
+- `apps/datahub/management/commands/refresh_data.py` — new command for Railway cron (refreshes all enabled sports)
+- `apps/datahub/management/commands/ensure_seed.py` — runs live ingestion on deploy when env toggles enabled
+- `templates/includes/help_modal.html` — "Where does this data come from?" on Home, Value Board, CFB/CBB Hub, Game Detail, Golf
+
+### Railway cron setup:
+1. Railway dashboard → "+ New" → "Cron Job"
+2. Start command: `python manage.py refresh_data`
+3. Schedule: `*/30 * * * *`
+4. Copy env vars from main service
+
+---
+
 ## 2026-02-08 - Store profile picture as base64 in DB (Railway-safe)
 
 **Summary:** Replaced `ImageField` (filesystem-based, breaks on Railway's ephemeral disk) with a `TextField` storing the image as a base64 data URI. Uploaded images are center-cropped to square, resized to 200×200, and JPEG-compressed (~5-15 KB). Profile picture now shows in the header profile button and bottom nav.
