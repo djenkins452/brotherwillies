@@ -326,3 +326,32 @@ def flat_bet_sim(request):
     if result is None:
         return JsonResponse({'error': 'No settled bets to simulate'}, status=400)
     return JsonResponse(result)
+
+
+@login_required
+@require_POST
+def ai_commentary(request):
+    """AJAX endpoint for AI performance commentary."""
+    from .services.ai_commentary import generate_commentary
+
+    bets = list(MockBet.objects.filter(user=request.user))
+    kpis = compute_kpis(bets)
+    comparison = compute_comparison(bets)
+    calibration = compute_confidence_calibration(bets)
+    edge = compute_edge_analysis(bets)
+    variance = compute_variance_stats(bets)
+
+    # Get user's persona preference
+    persona = 'analyst'
+    try:
+        persona = request.user.profile.ai_persona or 'analyst'
+    except Exception:
+        pass
+
+    result = generate_commentary(kpis, comparison, calibration, edge, variance, persona)
+    if result['error']:
+        return JsonResponse({'error': result['error']}, status=400)
+    return JsonResponse({
+        'content': result['content'],
+        'meta': result['meta'],
+    })

@@ -1,5 +1,6 @@
 import random
 import math
+from decimal import Decimal
 from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -24,7 +25,11 @@ class Command(BaseCommand):
         random.seed(42)
         now = timezone.now()
 
+        from apps.mockbets.models import MockBet, MockBetSettlementLog
+
         self.stdout.write('Clearing existing demo data...')
+        MockBetSettlementLog.objects.all().delete()
+        MockBet.objects.all().delete()
         ParlayLeg.objects.all().delete()
         Parlay.objects.all().delete()
         ModelResultSnapshot.objects.all().delete()
@@ -355,6 +360,10 @@ class Command(BaseCommand):
             parlay.save()
             self.stdout.write('  Created demo parlay')
 
+        # ── Mock Bets ────────────────────────────────────────────────
+        self.stdout.write('Seeding mock bets...')
+        self._seed_mock_bets(demo_user, games, cbb_games, now, MockBet, MockBetSettlementLog)
+
         self.stdout.write(self.style.SUCCESS('Demo data seeded successfully!'))
 
     def _create_odds_snapshot(self, game, now, snapshot_model, total_range=(42, 62)):
@@ -428,6 +437,218 @@ class Command(BaseCommand):
                 moneyline_home=self._prob_to_ml(new_prob),
                 moneyline_away=self._prob_to_ml(1 - new_prob),
             )
+
+    def _seed_mock_bets(self, user, cfb_games, cbb_games, now, MockBet, MockBetSettlementLog):
+        """Seed 30 mock bets — mix of settled and pending, realistic outcomes."""
+        bet_templates = []
+
+        # CFB settled bets (15 bets, placed 1-14 days ago, settled)
+        cfb_pool = cfb_games[:15] if len(cfb_games) >= 15 else cfb_games
+        for i, game in enumerate(cfb_pool):
+            odds = game.odds_snapshots.first()
+            if not odds:
+                continue
+            is_home = random.random() < 0.6
+            team = game.home_team if is_home else game.away_team
+            ml = odds.moneyline_home if is_home else odds.moneyline_away
+            prob = odds.market_home_win_prob if is_home else (1 - odds.market_home_win_prob)
+
+            bet_type = random.choice(['moneyline', 'moneyline', 'spread', 'total'])
+            if bet_type == 'spread':
+                spread_val = abs(odds.spread) if odds.spread else 7
+                selection = f'{team.name} {"-" if is_home else "+"}{spread_val}'
+                ml = random.choice([-110, -105, -115])
+                prob = 0.5238
+            elif bet_type == 'total':
+                total_val = odds.total if odds.total else 52
+                over_under = random.choice(['Over', 'Under'])
+                selection = f'{over_under} {total_val}'
+                ml = random.choice([-110, -105, -115])
+                prob = 0.5238
+            else:
+                selection = f'{team.name}'
+
+            # Determine result based on implied probability + noise
+            roll = random.random()
+            if roll < prob * 0.95:
+                result = 'win'
+            elif roll < 0.98:
+                result = 'loss'
+            else:
+                result = 'push'
+
+            placed_days_ago = random.randint(1, 14)
+            placed_at = now - timedelta(days=placed_days_ago, hours=random.randint(1, 12))
+            settled_at = placed_at + timedelta(hours=random.randint(3, 8))
+
+            stake = Decimal(str(random.choice([25, 50, 100, 100, 100, 150, 200])))
+            if result == 'win':
+                if ml > 0:
+                    payout = stake * Decimal(ml) / Decimal(100)
+                else:
+                    payout = stake * Decimal(100) / Decimal(abs(ml))
+            elif result == 'push':
+                payout = stake
+            else:
+                payout = Decimal('0.00')
+
+            edge = round(random.uniform(-3, 10), 1) if random.random() < 0.7 else None
+
+            bet_templates.append({
+                'sport': 'cfb',
+                'cfb_game': game,
+                'bet_type': bet_type,
+                'selection': selection,
+                'odds_american': ml,
+                'implied_probability': Decimal(str(round(prob, 4))),
+                'stake_amount': stake,
+                'result': result,
+                'simulated_payout': payout if result == 'win' else (stake if result == 'push' else Decimal('0.00')),
+                'confidence_level': random.choice(['low', 'medium', 'medium', 'high']),
+                'model_source': random.choice(['house', 'house', 'user']),
+                'expected_edge': Decimal(str(edge)) if edge is not None else None,
+                'placed_at': placed_at,
+                'settled_at': settled_at,
+            })
+
+        # CBB settled bets (10 bets)
+        cbb_pool = cbb_games[:10] if len(cbb_games) >= 10 else cbb_games
+        for game in cbb_pool:
+            odds = game.odds_snapshots.first()
+            if not odds:
+                continue
+            is_home = random.random() < 0.55
+            team = game.home_team if is_home else game.away_team
+            ml = odds.moneyline_home if is_home else odds.moneyline_away
+            prob = odds.market_home_win_prob if is_home else (1 - odds.market_home_win_prob)
+            selection = f'{team.name}'
+
+            roll = random.random()
+            if roll < prob * 0.9:
+                result = 'win'
+            elif roll < 0.97:
+                result = 'loss'
+            else:
+                result = 'push'
+
+            placed_days_ago = random.randint(1, 10)
+            placed_at = now - timedelta(days=placed_days_ago, hours=random.randint(1, 8))
+            settled_at = placed_at + timedelta(hours=random.randint(2, 5))
+
+            stake = Decimal(str(random.choice([50, 100, 100, 150])))
+            if result == 'win':
+                if ml > 0:
+                    payout = stake * Decimal(ml) / Decimal(100)
+                else:
+                    payout = stake * Decimal(100) / Decimal(abs(ml))
+            elif result == 'push':
+                payout = stake
+            else:
+                payout = Decimal('0.00')
+
+            bet_templates.append({
+                'sport': 'cbb',
+                'cbb_game': game,
+                'bet_type': 'moneyline',
+                'selection': selection,
+                'odds_american': ml,
+                'implied_probability': Decimal(str(round(prob, 4))),
+                'stake_amount': stake,
+                'result': result,
+                'simulated_payout': payout if result == 'win' else (stake if result == 'push' else Decimal('0.00')),
+                'confidence_level': random.choice(['low', 'medium', 'high']),
+                'model_source': random.choice(['house', 'user']),
+                'expected_edge': Decimal(str(round(random.uniform(-2, 8), 1))) if random.random() < 0.6 else None,
+                'placed_at': placed_at,
+                'settled_at': settled_at,
+            })
+
+        # Pending bets (5 bets — future games)
+        pending_cfb = [g for g in cfb_games if g.status == 'scheduled'][:3]
+        pending_cbb = [g for g in cbb_games if g.status == 'scheduled'][:2]
+        for game in pending_cfb:
+            odds = game.odds_snapshots.first()
+            if not odds:
+                continue
+            team = game.home_team
+            ml = odds.moneyline_home
+            prob = odds.market_home_win_prob
+            bet_templates.append({
+                'sport': 'cfb',
+                'cfb_game': game,
+                'bet_type': 'moneyline',
+                'selection': team.name,
+                'odds_american': ml,
+                'implied_probability': Decimal(str(round(prob, 4))),
+                'stake_amount': Decimal('100.00'),
+                'result': 'pending',
+                'simulated_payout': None,
+                'confidence_level': random.choice(['medium', 'high']),
+                'model_source': 'house',
+                'expected_edge': None,
+                'placed_at': now - timedelta(hours=random.randint(1, 24)),
+                'settled_at': None,
+            })
+        for game in pending_cbb:
+            odds = game.odds_snapshots.first()
+            if not odds:
+                continue
+            team = game.home_team
+            ml = odds.moneyline_home
+            prob = odds.market_home_win_prob
+            bet_templates.append({
+                'sport': 'cbb',
+                'cbb_game': game,
+                'bet_type': 'moneyline',
+                'selection': team.name,
+                'odds_american': ml,
+                'implied_probability': Decimal(str(round(prob, 4))),
+                'stake_amount': Decimal('100.00'),
+                'result': 'pending',
+                'simulated_payout': None,
+                'confidence_level': 'medium',
+                'model_source': 'user',
+                'expected_edge': None,
+                'placed_at': now - timedelta(hours=random.randint(1, 12)),
+                'settled_at': None,
+            })
+
+        # Create all bets
+        settled_count = 0
+        for tmpl in bet_templates:
+            cfb_game = tmpl.pop('cfb_game', None)
+            cbb_game = tmpl.pop('cbb_game', None)
+            bet = MockBet.objects.create(
+                user=user,
+                cfb_game=cfb_game,
+                cbb_game=cbb_game,
+                **tmpl,
+            )
+            if bet.result != 'pending':
+                MockBetSettlementLog.objects.create(
+                    mock_bet=bet,
+                    settled_at=bet.settled_at,
+                    result=bet.result,
+                    payout=bet.simulated_payout or Decimal('0'),
+                    reason=f'Demo seed: {bet.sport.upper()} game resolved',
+                )
+                settled_count += 1
+
+        # Add review flags to some settled bets
+        settled_bets = list(MockBet.objects.filter(user=user, result__in=['win', 'loss']))
+        for bet in random.sample(settled_bets, min(8, len(settled_bets))):
+            bet.review_flag = 'repeat' if bet.result == 'win' else random.choice(['repeat', 'avoid'])
+            notes_pool = [
+                'Good read on the matchup', 'Line moved my direction after placement',
+                'Injury report was key factor', 'Model edge was accurate',
+                'Should have waited for better line', 'Overreacted to recent form',
+                'Confidence was too high for this spot', 'Solid fundamentals play',
+            ]
+            bet.review_notes = random.choice(notes_pool)
+            bet.save(update_fields=['review_flag', 'review_notes'])
+
+        total_bets = len(bet_templates)
+        self.stdout.write(f'  Created {total_bets} mock bets ({settled_count} settled, {total_bets - settled_count} pending)')
 
     @staticmethod
     def _prob_to_ml(prob):

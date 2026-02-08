@@ -308,6 +308,27 @@
     </div>
 </div>
 
+{# ===== AI PERFORMANCE COMMENTARY ===== #}
+{% if kpis.settled_count >= 5 %}
+<div class="card mb-1">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h3 class="card-title" style="margin:0;">AI Performance Commentary</h3>
+        <button onclick="requestAICommentary()" id="aiCommentaryBtn" class="btn btn-sm" style="font-size:0.8rem;">Generate Commentary</button>
+    </div>
+    <p class="text-sm text-muted mt-1">AI-generated analysis of your simulated performance using your chosen persona.</p>
+    <div id="aiCommentaryResult" style="display:none;margin-top:12px;">
+        <div id="aiCommentaryContent" class="text-sm" style="color:var(--text-secondary);line-height:1.7;white-space:pre-wrap;"></div>
+        <div id="aiCommentaryMeta" class="text-sm text-muted mt-1" style="font-size:0.75rem;"></div>
+    </div>
+    <div id="aiCommentaryLoading" style="display:none;margin-top:12px;">
+        <div class="text-sm text-muted">Generating commentary...</div>
+    </div>
+    <div id="aiCommentaryError" style="display:none;margin-top:12px;">
+        <div class="text-sm text-red"></div>
+    </div>
+</div>
+{% endif %}
+
 {% endif %}{# end settled_count > 0 #}
 
 {% if kpis.settled_count == 0 %}
@@ -547,6 +568,57 @@
             });
         })
         .catch(err => console.error('Flat-bet sim error:', err));
+    };
+
+    // ===== AI Performance Commentary =====
+    window.requestAICommentary = function() {
+        const btn = document.getElementById('aiCommentaryBtn');
+        const loading = document.getElementById('aiCommentaryLoading');
+        const result = document.getElementById('aiCommentaryResult');
+        const errorDiv = document.getElementById('aiCommentaryError');
+        if (!btn) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        loading.style.display = 'block';
+        result.style.display = 'none';
+        errorDiv.style.display = 'none';
+
+        fetch('{% url "mockbets:ai_commentary" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: '{}',
+        })
+        .then(r => r.json())
+        .then(data => {
+            loading.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = 'Regenerate';
+            if (data.error) {
+                errorDiv.style.display = 'block';
+                errorDiv.querySelector('div').textContent = data.error;
+                return;
+            }
+            result.style.display = 'block';
+            document.getElementById('aiCommentaryContent').textContent = data.content;
+            if (data.meta) {
+                document.getElementById('aiCommentaryMeta').textContent =
+                    'Model: ' + (data.meta.model || 'unknown') +
+                    ' | Persona: ' + (data.meta.persona || 'analyst') +
+                    ' | ' + (data.meta.elapsed_seconds || 0) + 's';
+            }
+        })
+        .catch(err => {
+            loading.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = 'Generate Commentary';
+            errorDiv.style.display = 'block';
+            errorDiv.querySelector('div').textContent = 'Network error. Please try again.';
+            console.error('AI commentary error:', err);
+        });
     };
 
     function getCsrfToken() {

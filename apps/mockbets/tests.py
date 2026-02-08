@@ -397,3 +397,22 @@ class MockBetAnalyticsTests(TestCase):
         self.assertEqual(data['total_bets'], 2)
         self.assertIn('roi', data)
         self.assertIn('cumulative_pl', data)
+
+    def test_ai_commentary_requires_login(self):
+        self.client.logout()
+        resp = self.client.post('/mockbets/ai-commentary/', content_type='application/json', data='{}')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_ai_commentary_too_few_bets(self):
+        """AI commentary needs at least 5 settled bets."""
+        MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-150,
+            implied_probability=Decimal('0.6000'),
+            stake_amount=Decimal('100.00'), result='win',
+            simulated_payout=Decimal('66.67'),
+            settled_at=timezone.now(),
+        )
+        resp = self.client.post('/mockbets/ai-commentary/', content_type='application/json', data='{}')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('5 settled bets', resp.json()['error'])

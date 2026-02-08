@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-02-08 - AI Performance Commentary & Demo Data (Phase 5)
+
+**Summary:** Added AI-powered performance commentary for mock bet analytics using the user's chosen persona, plus seeded ~30 demo mock bets for the demo user so the analytics dashboard has data out of the box.
+
+### New files:
+- `apps/mockbets/services/ai_commentary.py` — AI commentary service with persona system, structured prompts, OpenAI integration (same pattern as game AI Insight)
+
+### New route:
+- `/mockbets/ai-commentary/` — AJAX POST endpoint for generating AI performance commentary
+
+### Features:
+- **AI Performance Commentary** — "Generate Commentary" button on analytics dashboard. AI reviews KPIs, calibration, edge analysis, and variance data. Uses the user's AI persona preference (Analyst, NY Bookie, Southern Commentator, Ex-Player). Requires 5+ settled bets. Model/temperature/max tokens configurable via Admin Console → Site Configuration.
+- **Demo Mock Bets** — `seed_demo` command now seeds ~30 mock bets for the demo user (15 CFB, 10 CBB, 5 pending) with realistic odds, varied results, settlement logs, and review flags. Analytics dashboard populates immediately after seeding.
+
+### Modified files:
+- `apps/mockbets/views.py` — Added ai_commentary view
+- `apps/mockbets/urls.py` — Added ai-commentary/ route
+- `templates/mockbets/analytics.html` — Added AI Commentary panel with generate button, loading state, error handling
+- `apps/datahub/management/commands/seed_demo.py` — Added _seed_mock_bets method with 30 deterministic bets
+- `templates/includes/help_modal.html` — Added AI commentary info to mock_analytics help
+- `templates/accounts/user_guide.html` — Added AI commentary docs to Section 11
+
+---
+
 ## 2026-02-08 - Mock Bet Analytics Dashboard (Phase 2-4)
 
 **Summary:** Full analytics dashboard for mock bet simulation with interactive Chart.js charts, House vs User comparison, confidence calibration, edge analysis, variance/stress testing, and flat-bet what-if simulation.
