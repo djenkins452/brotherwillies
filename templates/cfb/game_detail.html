@@ -30,6 +30,60 @@
     </div>
 </div>
 
+{% if user.is_authenticated %}
+<div id="ai-insight-container" class="card ai-insight-card mt-2">
+    <div class="ai-insight-header">
+        <span class="badge badge-ai">AI Insight</span>
+        <span id="ai-insight-meta" class="text-sm text-muted"></span>
+    </div>
+    <div id="ai-insight-content" class="ai-insight-body">
+        <div class="ai-insight-loading">
+            <div class="shimmer-line"></div>
+            <div class="shimmer-line" style="width:85%"></div>
+            <div class="shimmer-line" style="width:70%"></div>
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var container = document.getElementById('ai-insight-container');
+    var contentEl = document.getElementById('ai-insight-content');
+    var metaEl = document.getElementById('ai-insight-meta');
+
+    fetch('/api/ai-insight/cfb/{{ game.id }}/', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            container.style.display = 'none';
+        } else {
+            contentEl.innerHTML = formatInsight(data.content);
+            if (data.meta && data.meta.model) {
+                metaEl.textContent = data.meta.model + ' \u00B7 ' + data.meta.elapsed_seconds + 's';
+            }
+        }
+    })
+    .catch(function() {
+        container.style.display = 'none';
+    });
+
+    function formatInsight(text) {
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/^### (.*$)/gm, '<h4>$1</h4>')
+            .replace(/^## (.*$)/gm, '<h4>$1</h4>')
+            .replace(/^- (.*$)/gm, '<li>$1</li>')
+            .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+            .replace(/<\/ul>\s*<ul>/g, '')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>');
+    }
+})();
+</script>
+{% endif %}
+
 <p class="section-title mt-2">Probability Comparison (Home Win)</p>
 <div class="card">
     <table class="data-table">
@@ -104,80 +158,7 @@
 {% endfor %}
 {% endif %}
 
-{% if user.is_authenticated %}
-<div class="mt-2">
-    <button id="ai-insight-btn" class="btn btn-primary btn-block" onclick="loadAIInsight()">
-        <span id="ai-insight-btn-text">AI Insight</span>
-        <span id="ai-insight-spinner" class="spinner" style="display:none;"></span>
-    </button>
-    <div id="ai-insight-container" class="card ai-insight-card mt-1" style="display:none;">
-        <div class="ai-insight-header">
-            <span class="badge badge-ai">AI Insight</span>
-            <span id="ai-insight-meta" class="text-sm text-muted"></span>
-        </div>
-        <div id="ai-insight-content" class="ai-insight-body"></div>
-    </div>
-    <div id="ai-insight-error" class="ai-insight-error mt-1" style="display:none;"></div>
-</div>
-<script>
-function loadAIInsight() {
-    var btn = document.getElementById('ai-insight-btn');
-    var btnText = document.getElementById('ai-insight-btn-text');
-    var spinner = document.getElementById('ai-insight-spinner');
-    var container = document.getElementById('ai-insight-container');
-    var contentEl = document.getElementById('ai-insight-content');
-    var metaEl = document.getElementById('ai-insight-meta');
-    var errorEl = document.getElementById('ai-insight-error');
-
-    btn.disabled = true;
-    btnText.textContent = 'Generating...';
-    spinner.style.display = 'inline-block';
-    errorEl.style.display = 'none';
-    container.style.display = 'none';
-
-    fetch('/api/ai-insight/cfb/{{ game.id }}/', {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        credentials: 'same-origin'
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        spinner.style.display = 'none';
-        if (data.error) {
-            errorEl.textContent = data.error;
-            errorEl.style.display = 'block';
-            btnText.textContent = 'Retry AI Insight';
-            btn.disabled = false;
-        } else {
-            contentEl.innerHTML = formatInsight(data.content);
-            if (data.meta && data.meta.model) {
-                metaEl.textContent = data.meta.model + ' \u00B7 ' + data.meta.elapsed_seconds + 's';
-            }
-            container.style.display = 'block';
-            btn.style.display = 'none';
-        }
-    })
-    .catch(function(err) {
-        spinner.style.display = 'none';
-        errorEl.textContent = 'Network error. Please try again.';
-        errorEl.style.display = 'block';
-        btnText.textContent = 'Retry AI Insight';
-        btn.disabled = false;
-    });
-}
-
-function formatInsight(text) {
-    return text
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^### (.*$)/gm, '<h4>$1</h4>')
-        .replace(/^## (.*$)/gm, '<h4>$1</h4>')
-        .replace(/^- (.*$)/gm, '<li>$1</li>')
-        .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-        .replace(/<\/ul>\s*<ul>/g, '')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/\n/g, '<br>');
-}
-</script>
-{% else %}
+{% if not user.is_authenticated %}
 <div class="login-gate mt-2">
     <p>Log in to see your model's analysis and track this game.</p>
     <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
