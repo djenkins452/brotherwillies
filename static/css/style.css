@@ -1004,3 +1004,21 @@ input[type="range"]::-webkit-slider-thumb {
 .qs-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
 .qs-green { background: rgba(34,197,94,0.2); color: var(--green); }
 .qs-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }
+.fb-trash-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    transition: color 0.15s, background 0.15s;
+}
+.fb-trash-btn:hover {
+    color: var(--red);
+    background: rgba(239,68,68,0.12);
+}

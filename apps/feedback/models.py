@@ -41,6 +41,7 @@ class PartnerFeedback(models.Model):
         default=Status.NEW,
     )
     reviewer_notes = models.TextField(blank=True, default='')
+    is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

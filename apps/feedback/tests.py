@@ -220,6 +220,61 @@ class FeedbackViewTest(TestCase):
         resp = self.client.get(f'/feedback/console/{fb.pk}/status/')
         self.assertEqual(resp.status_code, 405)
 
+    def test_archive_hides_from_list(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Archive Me', description='D', status='NEW',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/')
+        self.assertEqual(resp.status_code, 302)
+        fb.refresh_from_db()
+        self.assertTrue(fb.is_archived)
+        # Should not appear in default console list
+        resp = self.client.get('/feedback/console/')
+        self.assertEqual(len(resp.context['feedback_list']), 0)
+
+    def test_archive_still_in_db(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Still Exists', description='D',
+        )
+        self.client.post(f'/feedback/console/{fb.pk}/archive/')
+        self.assertTrue(PartnerFeedback.objects.filter(pk=fb.pk).exists())
+
+    def test_archived_visible_with_flag(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Show Me', description='D', is_archived=True,
+        )
+        resp = self.client.get('/feedback/console/?archived=1')
+        self.assertEqual(len(resp.context['feedback_list']), 1)
+
+    def test_archive_non_partner_denied(self):
+        self.client.force_login(self.outsider)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='No Touch', description='D',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/')
+        self.assertEqual(resp.status_code, 404)
+        fb.refresh_from_db()
+        self.assertFalse(fb.is_archived)
+
+    def test_archive_preserves_query_params(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Query Archive', description='D',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/', {
+            'return_query': 'status=NEW',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('status=NEW', resp.url)
+
     def test_filter_by_status(self):
         self.client.force_login(self.partner)
         PartnerFeedback.objects.create(
