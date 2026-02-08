@@ -85,7 +85,8 @@ RESPONSE STRUCTURE (follow this order):
 3. KEY DRIVERS — bullet list of fact-based factors, ordered by impact. Enrich with
    relevant historical context (rivalry significance, program strength, conference
    history, coaching matchup) where it adds value.
-4. INJURY IMPACT — if injuries are provided, explain their effect; if none, skip
+4. INJURY IMPACT — if injuries are provided, explain their effect; if none are reported,
+   briefly note that no injuries were reported by the source and move on (this is normal, not a red flag)
 5. LINE MOVEMENT — if movement data is provided, explain; if none, skip
 6. WHAT WOULD CHANGE THIS VIEW — 1-2 conditions that would shift the analysis
 7. CONFIDENCE & LIMITATIONS — data quality and any missing data"""
@@ -236,8 +237,6 @@ def _build_context_from_game(game, data, sport):
     missing_data = []
     if not data.get('latest_odds'):
         missing_data.append('odds data')
-    if not data.get('injuries'):
-        missing_data.append('injury reports')
 
     data_confidence = {
         'level': data.get('confidence', 'low'),

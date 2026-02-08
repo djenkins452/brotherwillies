@@ -2,6 +2,15 @@
 
 ---
 
+## 2026-02-08 - AI Insight: fix injury language (no injuries ≠ missing data)
+
+**Summary:** Fixed AI Insight treating "no injuries reported" as "missing data." When ESPN/CBBD report no injuries for a game, that's normal — not a data gap. Previously, the AI would flag this as missing data, degrade confidence, and overstate the significance. Now: (1) empty injuries no longer added to `missing_data` list, (2) system prompt instructs AI to briefly note "no injuries reported by the source" and move on.
+
+### Modified files:
+- `apps/core/services/ai_insights.py` — removed `injury reports` from `missing_data` when injuries list is empty; updated INJURY IMPACT instruction in system prompt
+
+---
+
 ## 2026-02-08 - Value Board: sport icons, accordion sections, favorite team colors
 
 **Summary:** Overhauled the Value Board with three enhancements: (1) SVG sport icons next to CBB/CFB/Golf tabs, (2) collapsible accordion sections grouping games by timeframe (Today, Tomorrow, This Week, Coming Up) with a "Big Games" section for CFB showing top-rated matchups, and (3) favorite team color highlighting with a school-colored accent bar on game cards. Added `primary_color` field to both Team models with a comprehensive color dictionary covering ~133 FBS and ~360+ D1 basketball teams.
