@@ -890,3 +890,25 @@ input[type="range"]::-webkit-slider-thumb {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
+
+/* ========== Feedback Quick Status ========== */
+.fb-quick-status {
+    appearance: none;
+    -webkit-appearance: none;
+    padding: 4px 28px 4px 10px;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: none;
+    cursor: pointer;
+    min-height: 28px;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%239ca3b4' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+}
+.qs-blue { background: rgba(79,140,255,0.2); color: var(--accent); }
+.qs-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
+.qs-green { background: rgba(34,197,94,0.2); color: var(--green); }
+.qs-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }

@@ -149,6 +149,77 @@ class FeedbackViewTest(TestCase):
         fb.refresh_from_db()
         self.assertEqual(fb.status, 'READY')
 
+    def test_quick_status_new_to_accepted(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Quick Test', description='D', status='NEW',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'ACCEPTED'})
+        self.assertEqual(resp.status_code, 302)
+        fb.refresh_from_db()
+        self.assertEqual(fb.status, 'ACCEPTED')
+
+    def test_quick_status_ready_redirects_to_edit(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Ready Quick', description='D', status='NEW',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'READY'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/update/', resp.url)
+        self.assertIn('status=READY', resp.url)
+        fb.refresh_from_db()
+        self.assertEqual(fb.status, 'NEW')
+
+    def test_quick_status_dismissed_redirects_to_edit(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Dismiss Quick', description='D', status='ACCEPTED',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'DISMISSED'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/update/', resp.url)
+        self.assertIn('status=DISMISSED', resp.url)
+        fb.refresh_from_db()
+        self.assertEqual(fb.status, 'ACCEPTED')
+
+    def test_quick_status_non_partner_denied(self):
+        self.client.force_login(self.outsider)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Blocked', description='D', status='NEW',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'ACCEPTED'})
+        self.assertEqual(resp.status_code, 404)
+        fb.refresh_from_db()
+        self.assertEqual(fb.status, 'NEW')
+
+    def test_quick_status_preserves_query_params(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Query Test', description='D', status='NEW',
+        )
+        resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {
+            'status': 'ACCEPTED',
+            'return_query': 'status=NEW&component=1',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('status=NEW', resp.url)
+        self.assertIn('component=1', resp.url)
+
+    def test_quick_status_get_not_allowed(self):
+        self.client.force_login(self.partner)
+        fb = PartnerFeedback.objects.create(
+            user=self.partner, component=self.component,
+            title='Get Test', description='D', status='NEW',
+        )
+        resp = self.client.get(f'/feedback/console/{fb.pk}/status/')
+        self.assertEqual(resp.status_code, 405)
+
     def test_filter_by_status(self):
         self.client.force_login(self.partner)
         PartnerFeedback.objects.create(

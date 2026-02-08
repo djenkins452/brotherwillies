@@ -1,5 +1,6 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib import messages
+from django.views.decorators.http import require_POST
 
 from .access import partner_required
 from .models import PartnerFeedback, FeedbackComponent
@@ -79,6 +80,33 @@ def feedback_detail(request, pk):
     })
 
 
+@require_POST
+@partner_required
+def feedback_quick_status(request, pk):
+    fb = get_object_or_404(PartnerFeedback, pk=pk)
+    new_status = request.POST.get('status', '')
+    valid_statuses = {c[0] for c in PartnerFeedback.Status.choices}
+
+    if new_status not in valid_statuses:
+        messages.error(request, 'Invalid status.')
+        return redirect('feedback:console')
+
+    # READY and DISMISSED require reviewer notes — redirect to edit page
+    if new_status in (PartnerFeedback.Status.READY, PartnerFeedback.Status.DISMISSED):
+        return redirect(f'/feedback/console/{fb.pk}/update/?status={new_status}')
+
+    fb.status = new_status
+    fb.save(update_fields=['status', 'updated_at'])
+    messages.success(request, f'Status changed to {fb.get_status_display()}.')
+
+    # Preserve current filters when redirecting back
+    query = request.POST.get('return_query', '')
+    url = '/feedback/console/'
+    if query:
+        url += f'?{query}'
+    return redirect(url)
+
+
 @partner_required
 def feedback_update(request, pk):
     fb = get_object_or_404(PartnerFeedback, pk=pk)
@@ -90,6 +118,10 @@ def feedback_update(request, pk):
             return redirect('feedback:detail', pk=fb.pk)
     else:
         form = FeedbackEditForm(instance=fb)
+        # Pre-select status if passed via query param (from quick-status redirect)
+        preset_status = request.GET.get('status', '')
+        if preset_status and preset_status in {c[0] for c in PartnerFeedback.Status.choices}:
+            form.initial['status'] = preset_status
     return render(request, 'feedback/edit.html', {
         'form': form,
         'fb': fb,
