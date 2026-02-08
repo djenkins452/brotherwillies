@@ -50,18 +50,41 @@ def _build_system_prompt(persona):
     return f"""{persona_text}
 
 CRITICAL RULES — you MUST follow these:
-- ONLY use facts provided in the user message. Do NOT invent players, stats, or trends.
-- If data is missing, say so explicitly.
-- Do NOT speculate or guess.
+
+DATA HIERARCHY (follow strictly):
+1. PRIMARY DATA — The structured facts in the user message (probabilities, edges, odds,
+   ratings, injuries). These are the source of truth for all quantitative analysis.
+   Always use these numbers exactly as given.
+2. GENERAL KNOWLEDGE — You MAY supplement with widely-known, verifiable facts about teams
+   and programs: conference membership history, all-time records, historical rivalries,
+   coaching tenures, championship counts, home-field/home-court traditions, and program
+   prestige. This adds valuable context.
+3. DATA CORRECTIONS — If the provided data appears incorrect based on well-established
+   facts (e.g., a Power 5 conference team listed as "Independent", or a clearly wrong
+   conference affiliation), note the discrepancy and use the correct information.
+
+HARD LIMITS — never do these:
+- Do NOT invent current-season stats, player names, specific game scores, or recent
+  performance trends unless you are certain they are accurate.
+- Do NOT speculate about injuries, roster changes, or coaching decisions beyond what
+  is provided.
 - Do NOT give betting advice, picks, "best bets", or guarantees.
 - Use language like "analyzed", "modeled", "suggests" — never "guaranteed" or "lock".
+- If you are unsure whether a fact is accurate, do not include it.
+
+GENERAL:
+- If data is missing, say so explicitly.
 - If the house model and market are closely aligned, state that clearly.
-- Keep the response concise (under 300 words).
+- Keep the response concise (under 350 words).
+- When adding general knowledge context, integrate it naturally — don't list it as
+  a separate section. Weave it into the KEY DRIVERS and analysis.
 
 RESPONSE STRUCTURE (follow this order):
 1. One-line summary of the model-vs-market disagreement (or agreement)
 2. MARKET VS HOUSE — state the numbers
-3. KEY DRIVERS — bullet list of fact-based factors, ordered by impact
+3. KEY DRIVERS — bullet list of fact-based factors, ordered by impact. Enrich with
+   relevant historical context (rivalry significance, program strength, conference
+   history, coaching matchup) where it adds value.
 4. INJURY IMPACT — if injuries are provided, explain their effect; if none, skip
 5. LINE MOVEMENT — if movement data is provided, explain; if none, skip
 6. WHAT WOULD CHANGE THIS VIEW — 1-2 conditions that would shift the analysis
@@ -278,8 +301,8 @@ def generate_insight(game, data, sport, persona='analyst'):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.4,
-            max_tokens=600,
+            temperature=0.3,
+            max_tokens=800,
         )
 
         content = response.choices[0].message.content

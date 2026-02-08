@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-02-08 - AI Insight: general knowledge enrichment
+
+**Summary:** Updated AI system prompt to allow supplementing analysis with well-established general sports knowledge (conference history, program prestige, rivalries, coaching records, championship counts). Previously the AI was limited to ONLY the data we passed, which meant it couldn't correct bad data (e.g., Clemson listed as "Independent" instead of ACC) or add widely-known context.
+
+### Changes:
+- **`apps/core/services/ai_insights.py`** — rewrote CRITICAL RULES section with 3-tier data hierarchy:
+  1. PRIMARY DATA — our structured numbers (always source of truth for quantitative analysis)
+  2. GENERAL KNOWLEDGE — well-known verifiable facts about teams/programs (allowed)
+  3. DATA CORRECTIONS — flag and correct clearly wrong data (e.g., wrong conference)
+- Hard limits remain: no invented current-season stats, no player names unless certain, no betting advice
+- Temperature lowered 0.4 → 0.3 (tighter, less hallucination risk)
+- Max tokens raised 600 → 800 (richer context needs more space)
+- Word limit raised 300 → 350
+
+---
+
 ## 2026-02-08 - Unified Value Board with sport tabs
 
 **Summary:** Consolidated the separate CFB and CBB Value Boards into a single unified `/value/` page with sport tabs. The tab bar auto-detects which sports have upcoming games or events and shows only those. CBB appears first during basketball season (Nov-Apr). Golf events appear when available.
