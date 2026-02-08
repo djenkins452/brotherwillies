@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+{% block title %}What's New - Brother Willies{% endblock %}
+
+{% block content %}
+<style>[id] { scroll-margin-top: 68px; }</style>
+
+<h1 class="page-title">What's New</h1>
+<p class="text-sm mb-2" style="color:var(--text-secondary);">The story of how Brother Willies has evolved &mdash; from first build to today.</p>
+
+{# ── Table of Contents ─────────────────────────────────────────────── #}
+<div class="card mb-2">
+    <p class="section-title" style="margin-bottom:12px;">Releases</p>
+    <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#feb-8-afternoon">Feb 8, 2026 &mdash; Afternoon</a> <span class="text-sm text-muted">&bull; User Guide, AI fixes, Value Board overhaul</span></li>
+        <li style="padding:4px 0;"><a href="#feb-8-morning">Feb 8, 2026 &mdash; Morning</a> <span class="text-sm text-muted">&bull; Preferences redesign, AI engine, feedback system</span></li>
+        <li style="padding:4px 0;"><a href="#feb-8-early">Feb 8, 2026 &mdash; Early</a> <span class="text-sm text-muted">&bull; Unified Value Board, branded auth, live data</span></li>
+        <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
+        <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
+    </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Feb 8 Afternoon                                                     #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="feb-8-afternoon">
+    <p class="card-title">Feb 8, 2026 &mdash; Afternoon</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">User Guide, AI tuning, and the Value Board gets a major facelift</p>
+
+    {# User Guide #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">User Guide</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Added a comprehensive <a href="/profile/user-guide/">User Guide</a> with 10 sections covering every
+            feature on the site &mdash; from getting started to a full glossary of analytics terms. Accessible
+            from the profile dropdown and quick links on the profile page.
+        </p>
+    </div>
+
+    {# AI Injury Fix #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Smarter Injury Handling</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Fixed an issue where the AI would treat "no injuries reported" as "missing data." When a team
+            has a clean bill of health, that's good news &mdash; not a data gap. The AI now correctly notes
+            it and moves on instead of lowering its confidence.
+        </p>
+    </div>
+
+    {# Value Board Overhaul #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Value Board Overhaul</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The Value Board got three big upgrades:
+        </p>
+        <ul style="padding-left:16px;margin-top:4px;">
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Sport icons</strong> &mdash; SVG icons next to each sport tab for quick visual identification</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Collapsible sections</strong> &mdash; Games grouped by Today, Tomorrow, This Week, and Coming Up. CFB also gets a "Big Matchups" section. Your expand/collapse preferences are saved.</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Favorite team colors</strong> &mdash; Your favorite team's game card now shows a colored accent bar at the top using the school's actual primary color. Covers ~130 FBS and ~360 D1 basketball teams.</li>
+        </ul>
+    </div>
+
+    {# Preferences Merge #}
+    <div>
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Unified Favorites</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The three separate favorites sections (CFB, CBB, Golf) were merged into a single "Favorites"
+            accordion with sport sub-groups. Preferences sections were reordered to put the most-used
+            settings first: AI Persona, then Favorites, then Value Board Filters, then Location.
+        </p>
+    </div>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Feb 8 Morning                                                       #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="feb-8-morning">
+    <p class="card-title">Feb 8, 2026 &mdash; Morning</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">AI-powered insights, partner feedback, and a better preferences page</p>
+
+    {# Golfer Search #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Favorite Golfer Search</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            You can now search ~200 PGA Tour players by name and set a favorite golfer in Preferences.
+            The search is instant with keyboard navigation, and your selected golfer shows as a chip
+            you can clear with one tap.
+        </p>
+    </div>
+
+    {# Preferences Redesign #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Preferences Page Redesign</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The preferences page was rebuilt with collapsible accordion sections. Each group (Location,
+            Favorites, Value Board Filters, AI Persona) is a card with an icon, title, and a badge showing
+            your current setting. The AI persona selection uses visual tile cards instead of a dropdown.
+            Expand All / Collapse All controls at the top.
+        </p>
+    </div>
+
+    {# SiteConfig #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Admin-Configurable AI Settings</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            AI temperature and response length are now adjustable from the admin panel without needing a
+            code change or redeployment. Temperature 0 = most factual, higher values = more creative variation.
+        </p>
+    </div>
+
+    {# AI General Knowledge #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Smarter AI Context</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The AI can now supplement its analysis with well-known sports facts &mdash; conference history,
+            program prestige, rivalries, and coaching records. Previously it was limited to only the data
+            we passed in, which meant it couldn't add widely-known context or flag obviously wrong data.
+        </p>
+    </div>
+
+    {# AI Insight Engine #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">AI Insight Engine</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The headline feature: tap "AI Insight" on any game detail page to get an AI-generated explanation
+            of why the house model and market agree or disagree. The AI uses the same data you see on the
+            page &mdash; team ratings, injuries, odds, model probabilities &mdash; and gives you a structured,
+            fact-based summary.
+        </p>
+        <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+            Choose your preferred AI personality in <a href="/profile/preferences/">Preferences</a>:
+        </p>
+        <ul style="padding-left:16px;margin-top:4px;">
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Analyst</strong> &mdash; Neutral, professional, data-driven</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>New York Bookie</strong> &mdash; Blunt, street-smart, no-nonsense</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Southern Commentator</strong> &mdash; Folksy, warm, confident</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Ex-Player</strong> &mdash; Direct, experiential, locker-room perspective</li>
+        </ul>
+    </div>
+
+    {# Partner Feedback #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Partner Feedback System</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Internal partners can now submit structured feedback targeting specific site components and
+            track it through a status pipeline (New &rarr; Accepted &rarr; Ready &rarr; Dismissed).
+            A custom console makes it easy to review, filter, and manage everything.
+        </p>
+    </div>
+
+    {# Help Content #}
+    <div>
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Better Help Content</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Every page's help panel was rewritten to explain exactly where the numbers come from &mdash;
+            model formulas, API sources, confidence thresholds, and how snapshots work.
+        </p>
+    </div>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Feb 8 Early                                                         #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="feb-8-early">
+    <p class="card-title">Feb 8, 2026 &mdash; Early</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Unified Value Board, live data pipeline, branded login, and analytics</p>
+
+    {# Unified Value Board #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Unified Value Board</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The separate CFB and CBB Value Boards were consolidated into a single page at
+            <a href="/value/">/value/</a> with sport tabs. The system auto-detects which sports have
+            upcoming games and shows only those. CBB appears first during basketball season (Nov&ndash;Apr),
+            CFB during football season. Golf events show when available.
+        </p>
+    </div>
+
+    {# Branded Auth #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Branded Sign-In Pages</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            All authentication pages got a bold, modern redesign with a 2-column split layout. The left
+            side features the BW logo with an entrance animation; the right side has a clean form card.
+            On mobile it stacks vertically. Also added the full password reset flow so you can recover
+            your account via email.
+        </p>
+    </div>
+
+    {# Analytics Pipeline #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Analytics &amp; Score Tracking</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The analytics engine now captures model predictions automatically before each game, then
+            records outcomes with real scores after completion. The
+            <a href="/profile/performance/">Model Performance</a> page shows accuracy by sport,
+            calibration tables, time trends, and Closing Line Value (CLV).
+        </p>
+    </div>
+
+    {# Live Dashboard #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Live Games Dashboard</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The home dashboard now shows games in progress at the top with a pulsing
+            <span style="color:#ef4444;">LIVE</span> badge and current scores. Data refreshes
+            automatically on a 30-minute cron cycle.
+        </p>
+    </div>
+
+    {# Profile Picture #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Profile Pictures</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Upload a profile picture and it appears in the header and bottom nav. Images are
+            center-cropped to square and compressed automatically. Works on Railway's ephemeral
+            filesystem by storing the image directly in the database.
+        </p>
+    </div>
+
+    {# Live Data #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Live Data Ingestion</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The entire data pipeline went live. Schedules, scores, and injury reports pull from ESPN
+            and sport-specific APIs (CFBD for football, CBBD for basketball). Betting odds come from
+            The Odds API. Everything is optional and controlled by environment toggles &mdash; the site
+            works perfectly with demo data when live feeds are off.
+        </p>
+    </div>
+
+    {# Security #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Security Hardening</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Public registration was disabled (invite-only access). Login is now protected against
+            brute-force attacks with automatic lockout after 5 failed attempts. The admin panel URL
+            was moved to a non-standard path to avoid bot scanners, and HSTS headers were enabled
+            for production.
+        </p>
+    </div>
+
+    {# Timezone #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Timezone Support</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Enter your zip code in <a href="/profile/preferences/">Preferences</a> and all game
+            times display in your local timezone with an abbreviation (CST, EST, etc.). Works accurately
+            even in split-timezone states like Indiana and the Florida panhandle.
+        </p>
+    </div>
+
+    {# Season-Aware #}
+    <div>
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Season-Aware Dashboard</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The home page now only shows sports that are currently in season. During the offseason,
+            CFB pages display a banner explaining the data is sample/demo data so there's no confusion.
+        </p>
+    </div>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Feb 7 Evening                                                       #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="feb-7-evening">
+    <p class="card-title">Feb 7, 2026 &mdash; Evening</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Help system, profile redesign, College Basketball, and going live</p>
+
+    {# Help Overhaul #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Help System Overhaul</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Every help section was rewritten from scratch to be beginner-friendly. Each page explains
+            what it is, what the numbers mean, and includes real examples using Alabama (the demo user's
+            favorite team). All analytics terms are explained in plain language.
+        </p>
+    </div>
+
+    {# Profile Split #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Profile &amp; Preferences Split</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The old profile page was split into two focused pages: <a href="/profile/">Profile</a>
+            for personal info (name, email, picture) and <a href="/profile/preferences/">Preferences</a>
+            for analytics settings (favorites, filters, AI persona). A profile dropdown menu in the
+            header makes everything one tap away.
+        </p>
+    </div>
+
+    {# CBB #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">College Basketball</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            A complete College Basketball app launched alongside the existing College Football coverage.
+            CBB has its own hub, conference pages, game detail pages, and value board &mdash; all mirroring
+            the CFB patterns. The basketball model uses a slightly higher home-court advantage (3.5 vs 3.0)
+            reflecting the bigger impact of home court in basketball.
+        </p>
+    </div>
+
+    {# Railway #}
+    <div>
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Production Deployment</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Brother Willies went live on <strong>brotherwillies.com</strong>. The site is hosted on
+            Railway with auto-deploys from the main branch, PostgreSQL for the database, and WhiteNoise
+            for serving static files. Migrations, superuser setup, and data seeding all run automatically
+            on every deploy.
+        </p>
+    </div>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Feb 7 Launch                                                        #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="feb-7-launch">
+    <p class="card-title">Feb 7, 2026 &mdash; Launch</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Where it all began</p>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">The Foundation</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Brother Willies was built from scratch in a single session. The entire Django project,
+            7 apps, dark theme UI, and all core functionality came together at once.
+        </p>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">What shipped on day one:</p>
+        <ul style="padding-left:16px;margin-top:4px;">
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>College Football analytics</strong> &mdash; Conferences, teams, games, odds snapshots, injury impacts, and a house model that computes win probabilities using team ratings, home-field advantage, and injuries</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Value Board</strong> &mdash; All upcoming games ranked by the size of disagreement between the model and the market, with sorting and preference-based filtering</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>My Model</strong> &mdash; Five tunable weight sliders (rating, home field, injury, recent form, conference) that let you customize the house model and see your personalized probabilities</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Presets</strong> &mdash; Save and load named weight configurations</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Personal Statistics</strong> &mdash; Track your activity with summary tiles and history, filterable by time period</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Model Performance</strong> &mdash; Accuracy and Brier score tracking from captured prediction snapshots</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Parlay Builder</strong> &mdash; Analytical tool for evaluating multi-game parlays with combined probability, correlation detection, and a 10% vig haircut</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Golf scaffolding</strong> &mdash; Event, golfer, and round models with a placeholder hub page</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Context-aware help</strong> &mdash; Every page has a "?" button that opens a help panel explaining that specific page</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Dark theme UI</strong> &mdash; Mobile-first, card-based design with responsive breakpoints and a fixed bottom navigation bar</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Demo data</strong> &mdash; 5 conferences, 25 teams, 25 games with odds and injuries, pre-configured demo user with Alabama as favorite team</li>
+        </ul>
+    </div>
+
+    <div>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;font-style:italic;">
+            The platform was designed from day one with clear guardrails: analytics only, no betting advice,
+            neutral language, and disclaimers on every page. These principles haven't changed.
+        </p>
+    </div>
+</div>
+
+<div class="text-center mt-2 mb-2">
+    <a href="#" class="text-sm text-muted">Back to top</a>
+</div>
+
+<div class="text-center mb-3">
+    <p class="text-sm text-muted">For informational and entertainment purposes only. No guarantees. Check local laws.</p>
+</div>
+
+{% endblock %}

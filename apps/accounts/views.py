@@ -421,4 +421,11 @@ def user_guide_view(request):
     })
 
 
+def whats_new_view(request):
+    return render(request, 'accounts/whats_new.html', {
+        'help_key': 'whats_new',
+        'nav_active': 'profile',
+    })
+
+
 from django.db import models

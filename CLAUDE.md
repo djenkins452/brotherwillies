@@ -172,6 +172,7 @@ brotherwillies/
 | `/profile/my-stats/` | Personal Statistics |
 | `/profile/performance/` | Model Performance |
 | `/profile/user-guide/` | User Guide |
+| `/profile/whats-new/` | What's New (release history) |
 | `/parlays/` | Parlay hub |
 | `/parlays/new/` | Build parlay |
 | `/parlays/<uuid>/` | Parlay detail |

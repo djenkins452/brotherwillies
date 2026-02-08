@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-02-08 - What's New page (human-readable release history)
+
+**Summary:** Added a "What's New" page at `/profile/whats-new/` that presents the full changelog as a human-readable product evolution story. Grouped by date/time releases with friendly descriptions instead of technical file lists. Accessible from the profile dropdown and linked from the User Guide TOC. No login required.
+
+### New files:
+- `templates/accounts/whats_new.html` — full release history with TOC, 5 release sections
+
+### Modified files:
+- `apps/accounts/views.py` — added `whats_new_view`
+- `apps/accounts/profile_urls.py` — added `/profile/whats-new/` route
+- `templates/base.html` — added "What's New" link to profile dropdown
+- `templates/includes/help_modal.html` — added `whats_new` help key
+- `templates/accounts/user_guide.html` — added What's New link to TOC
+
+---
+
 ## 2026-02-08 - User Guide page + CLAUDE.md trim
 
 **Summary:** Added comprehensive User Guide at `/profile/user-guide/` with 10 sections covering every feature, accessible from profile dropdown and quick links. Trimmed CLAUDE.md from ~585 lines to ~284 lines by removing implementation details that belong in code/help system, and added Standing Instructions section.
