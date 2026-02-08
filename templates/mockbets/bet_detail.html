@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Mock Bet Detail - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Mock Bet Detail</h1>
+
+<div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);">
+    <div class="text-sm" style="color:var(--accent);">Simulated analytics only. No real money involved.</div>
+</div>
+
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% else %}yellow{% endif %}">{{ bet.sport|upper }}</span>
+        {% if bet.result == 'win' %}<span class="badge badge-green">Win</span>
+        {% elif bet.result == 'loss' %}<span class="badge badge-red">Loss</span>
+        {% elif bet.result == 'push' %}<span class="badge badge-gray">Push</span>
+        {% else %}<span class="badge badge-blue">Pending</span>{% endif %}
+    </div>
+
+    <div style="font-size:1.1rem;font-weight:700;">{{ bet.selection }}</div>
+    <div class="text-sm text-muted mt-1">{{ bet.get_bet_type_display }}</div>
+
+    {% if bet.game %}
+    <div class="mt-1">
+        {% if bet.sport == 'cfb' %}
+        <a href="{% url 'cfb:game' bet.cfb_game.id %}" class="text-sm">{{ bet.cfb_game }}</a>
+        {% elif bet.sport == 'cbb' %}
+        <a href="{% url 'cbb:game' bet.cbb_game.id %}" class="text-sm">{{ bet.cbb_game }}</a>
+        {% endif %}
+    </div>
+    {% elif bet.golf_event %}
+    <div class="text-sm mt-1">{{ bet.golf_event.name }}{% if bet.golf_golfer %} &middot; {{ bet.golf_golfer.name }}{% endif %}</div>
+    {% endif %}
+</div>
+
+<p class="section-title mt-2">Bet Details</p>
+<div class="card">
+    <table class="data-table">
+        <tr>
+            <td class="text-muted">Odds</td>
+            <td>{{ bet.odds_american|stringformat:"+d" }}</td>
+        </tr>
+        <tr>
+            <td class="text-muted">Implied Probability</td>
+            <td>{{ bet.implied_probability|floatformat:1 }}%</td>
+        </tr>
+        <tr>
+            <td class="text-muted">Simulated Stake</td>
+            <td>${{ bet.stake_amount|floatformat:2 }}</td>
+        </tr>
+        {% if bet.is_settled %}
+        <tr>
+            <td class="text-muted">Simulated Payout</td>
+            <td>${{ bet.simulated_payout|floatformat:2 }}</td>
+        </tr>
+        <tr>
+            <td class="text-muted">Sim. Net P/L</td>
+            <td class="{% if bet.net_result > 0 %}edge-positive{% elif bet.net_result < 0 %}edge-negative{% else %}edge-neutral{% endif %}">
+                {% if bet.net_result > 0 %}+{% endif %}${{ bet.net_result|floatformat:2 }}
+            </td>
+        </tr>
+        {% endif %}
+        <tr>
+            <td class="text-muted">Confidence</td>
+            <td><span class="badge badge-{% if bet.confidence_level == 'high' %}green{% elif bet.confidence_level == 'medium' %}yellow{% else %}red{% endif %}">{{ bet.get_confidence_level_display }}</span></td>
+        </tr>
+        <tr>
+            <td class="text-muted">Model Source</td>
+            <td>{{ bet.get_model_source_display }}</td>
+        </tr>
+        {% if bet.expected_edge is not None %}
+        <tr>
+            <td class="text-muted">Expected Edge</td>
+            <td class="{% if bet.expected_edge > 0 %}edge-positive{% elif bet.expected_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ bet.expected_edge|floatformat:1 }}%</td>
+        </tr>
+        {% endif %}
+        <tr>
+            <td class="text-muted">Placed</td>
+            <td>{{ bet.placed_at|date:"M d, Y g:i A" }} {% tz_abbr %}</td>
+        </tr>
+        {% if bet.settled_at %}
+        <tr>
+            <td class="text-muted">Settled</td>
+            <td>{{ bet.settled_at|date:"M d, Y g:i A" }} {% tz_abbr %}</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+
+{% if bet.notes %}
+<p class="section-title mt-2">Notes</p>
+<div class="card">
+    <div class="text-sm">{{ bet.notes }}</div>
+</div>
+{% endif %}
+
+{% if bet.is_settled %}
+<p class="section-title mt-2">Decision Review</p>
+<div class="card" id="review-card">
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn btn-sm {% if bet.review_flag == 'repeat' %}btn-primary{% else %}btn-secondary{% endif %}" onclick="reviewBet('repeat')">Would Repeat</button>
+        <button class="btn btn-sm {% if bet.review_flag == 'avoid' %}btn-primary{% else %}btn-secondary{% endif %}" onclick="reviewBet('avoid')">Would Avoid</button>
+    </div>
+    <div class="form-group" style="margin-bottom:8px;">
+        <label for="review-notes">Reflection Notes</label>
+        <textarea id="review-notes" class="form-control" rows="2" maxlength="500" placeholder="What did you learn from this bet?">{{ bet.review_notes }}</textarea>
+    </div>
+    <button class="btn btn-sm btn-secondary" onclick="saveReview()">Save Review</button>
+    <div id="review-msg" class="text-sm mt-1" style="display:none;"></div>
+</div>
+<script>
+function reviewBet(flag) {
+    document.querySelectorAll('#review-card .btn-sm').forEach(function(b) { b.className = 'btn btn-sm btn-secondary'; });
+    event.target.className = 'btn btn-sm btn-primary';
+    window._reviewFlag = flag;
+}
+window._reviewFlag = '{{ bet.review_flag }}';
+function saveReview() {
+    var notes = document.getElementById('review-notes').value;
+    fetch('{% url "mockbets:review_bet" bet.id %}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ review_flag: window._reviewFlag, review_notes: notes })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        var msg = document.getElementById('review-msg');
+        msg.style.display = 'block';
+        if (data.success) {
+            msg.textContent = 'Review saved.';
+            msg.style.color = 'var(--green)';
+        } else {
+            msg.textContent = data.error || 'Error saving review.';
+            msg.style.color = 'var(--red)';
+        }
+    });
+}
+</script>
+{% endif %}
+
+{% if settlement_logs %}
+<p class="section-title mt-2">Settlement Log</p>
+{% for log in settlement_logs %}
+<div class="card">
+    <div class="text-sm"><strong>{{ log.result|upper }}</strong> &middot; Payout: ${{ log.payout|floatformat:2 }}</div>
+    <div class="text-sm text-muted mt-1">{{ log.reason }}</div>
+    <div class="text-sm text-muted">{{ log.settled_at|date:"M d, Y g:i A" }}</div>
+</div>
+{% endfor %}
+{% endif %}
+
+<div class="mt-2">
+    <a href="{% url 'mockbets:my_bets' %}" class="btn btn-secondary btn-sm">Back to My Bets</a>
+</div>
+{% endblock %}

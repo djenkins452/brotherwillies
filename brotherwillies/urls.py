@@ -15,6 +15,7 @@ urlpatterns = [
     path('parlays/', include('apps.parlays.urls')),
     path('profile/', include('apps.accounts.profile_urls')),
     path('feedback/', include('apps.feedback.urls')),
+    path('mockbets/', include('apps.mockbets.urls')),
 ]
 
 if settings.DEBUG:

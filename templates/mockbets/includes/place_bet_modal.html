@@ -1,0 +1,192 @@
+<!-- Mock Bet Placement Modal — include on game detail pages -->
+<div id="mockbet-modal" class="help-overlay" style="display:none;" onclick="if(event.target===this)closeMockBetModal();">
+    <div class="help-sheet" style="max-height:85vh;">
+        <div class="help-header">
+            <h3>Place Mock Bet</h3>
+            <button class="help-close" onclick="closeMockBetModal()">&times;</button>
+        </div>
+        <div class="help-body">
+            <div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);padding:10px 14px;">
+                <div class="text-sm" style="color:var(--accent);">Simulated bet for analytics only. No real money.</div>
+            </div>
+
+            <form id="mockbet-form" onsubmit="return false;">
+                <input type="hidden" id="mb-sport" value="">
+                <input type="hidden" id="mb-game-id" value="">
+                <input type="hidden" id="mb-event-id" value="">
+                <input type="hidden" id="mb-golfer-id" value="">
+
+                <div class="form-group">
+                    <label for="mb-bet-type">Bet Type</label>
+                    <select id="mb-bet-type" class="form-control">
+                        <!-- Populated by JS based on sport -->
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-selection">Selection</label>
+                    <input type="text" id="mb-selection" class="form-control" placeholder="e.g., Alabama -7.5">
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-odds">Odds (American)</label>
+                    <input type="number" id="mb-odds" class="form-control" placeholder="-110" value="">
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-stake">Simulated Stake ($)</label>
+                    <input type="number" id="mb-stake" class="form-control" value="100" min="1" max="10000" step="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-confidence">Confidence Level</label>
+                    <select id="mb-confidence" class="form-control">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-model">Model Source</label>
+                    <select id="mb-model" class="form-control">
+                        <option value="house">House Model</option>
+                        <option value="user">Your Model</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-edge">Expected Edge % (optional)</label>
+                    <input type="number" id="mb-edge" class="form-control" placeholder="e.g., 5.2" step="0.1">
+                </div>
+
+                <div class="form-group">
+                    <label for="mb-notes">Notes (optional)</label>
+                    <textarea id="mb-notes" class="form-control" rows="2" maxlength="500" placeholder="Why are you making this bet?"></textarea>
+                </div>
+
+                <div id="mb-implied" class="text-sm text-muted mb-2"></div>
+                <div id="mb-error" class="text-sm text-red mb-1" style="display:none;"></div>
+
+                <button type="button" class="btn btn-primary btn-block" onclick="submitMockBet()">Place Mock Bet</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+var GAME_BET_TYPES = [
+    ['moneyline', 'Moneyline'],
+    ['spread', 'Spread'],
+    ['total', 'Total (Over/Under)']
+];
+var GOLF_BET_TYPES = [
+    ['outright', 'Outright Winner'],
+    ['top_5', 'Top 5 Finish'],
+    ['top_10', 'Top 10 Finish'],
+    ['top_20', 'Top 20 Finish'],
+    ['make_cut', 'Make the Cut'],
+    ['matchup', 'Head-to-Head Matchup']
+];
+
+function openMockBetModal(opts) {
+    opts = opts || {};
+    document.getElementById('mb-sport').value = opts.sport || '';
+    document.getElementById('mb-game-id').value = opts.game_id || '';
+    document.getElementById('mb-event-id').value = opts.event_id || '';
+    document.getElementById('mb-golfer-id').value = opts.golfer_id || '';
+
+    // Populate bet types
+    var sel = document.getElementById('mb-bet-type');
+    sel.innerHTML = '';
+    var types = opts.sport === 'golf' ? GOLF_BET_TYPES : GAME_BET_TYPES;
+    types.forEach(function(t) {
+        var o = document.createElement('option');
+        o.value = t[0]; o.textContent = t[1];
+        sel.appendChild(o);
+    });
+
+    // Pre-fill selection and odds if provided
+    if (opts.selection) document.getElementById('mb-selection').value = opts.selection;
+    if (opts.odds) document.getElementById('mb-odds').value = opts.odds;
+    if (opts.bet_type) document.getElementById('mb-bet-type').value = opts.bet_type;
+    if (opts.edge) document.getElementById('mb-edge').value = opts.edge;
+
+    document.getElementById('mb-error').style.display = 'none';
+    document.getElementById('mockbet-modal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    updateImplied();
+}
+
+function closeMockBetModal() {
+    document.getElementById('mockbet-modal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+document.getElementById('mb-odds').addEventListener('input', updateImplied);
+
+function updateImplied() {
+    var odds = parseInt(document.getElementById('mb-odds').value);
+    var el = document.getElementById('mb-implied');
+    if (isNaN(odds) || odds === 0) { el.textContent = ''; return; }
+    var prob;
+    if (odds > 0) { prob = 100 / (odds + 100); }
+    else { prob = Math.abs(odds) / (Math.abs(odds) + 100); }
+    el.textContent = 'Implied probability: ' + (prob * 100).toFixed(1) + '%';
+}
+
+function submitMockBet() {
+    var err = document.getElementById('mb-error');
+    err.style.display = 'none';
+
+    var body = {
+        sport: document.getElementById('mb-sport').value,
+        bet_type: document.getElementById('mb-bet-type').value,
+        selection: document.getElementById('mb-selection').value,
+        odds_american: document.getElementById('mb-odds').value,
+        stake_amount: document.getElementById('mb-stake').value,
+        confidence_level: document.getElementById('mb-confidence').value,
+        model_source: document.getElementById('mb-model').value,
+        expected_edge: document.getElementById('mb-edge').value || null,
+        notes: document.getElementById('mb-notes').value,
+        game_id: document.getElementById('mb-game-id').value || null,
+        event_id: document.getElementById('mb-event-id').value || null,
+        golfer_id: document.getElementById('mb-golfer-id').value || null
+    };
+
+    fetch('/mockbets/place/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCsrfToken()
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            closeMockBetModal();
+            // Show success message
+            var msg = document.createElement('div');
+            msg.className = 'message message-success';
+            msg.textContent = 'Mock bet placed successfully!';
+            msg.style.cssText = 'position:fixed;top:60px;left:16px;right:16px;z-index:300;';
+            document.body.appendChild(msg);
+            setTimeout(function() { msg.remove(); }, 3000);
+        } else {
+            err.textContent = data.error || 'Failed to place bet';
+            err.style.display = 'block';
+        }
+    })
+    .catch(function() {
+        err.textContent = 'Network error. Please try again.';
+        err.style.display = 'block';
+    });
+}
+
+function getCsrfToken() {
+    var cookie = document.cookie.split(';').find(function(c) { return c.trim().startsWith('csrftoken='); });
+    return cookie ? cookie.split('=')[1] : '';
+}
+</script>

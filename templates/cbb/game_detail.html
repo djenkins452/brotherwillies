@@ -27,6 +27,12 @@
     {% endif %}
 </div>
 
+{% if user.is_authenticated and game.status != 'final' %}
+<div class="mb-2">
+    <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'cbb',game_id:'{{ game.id }}'{% if data.latest_odds.moneyline_home %},odds:{{ data.latest_odds.moneyline_home }}{% endif %}})">Place Mock Bet</button>
+</div>
+{% endif %}
+
 {% if user.is_authenticated %}
 <div id="ai-insight-container" class="card ai-insight-card mb-2">
     <div class="ai-insight-header">
@@ -143,5 +149,9 @@
     <p>Log in to see your model's analysis and track this game.</p>
     <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
 </div>
+{% endif %}
+
+{% if user.is_authenticated %}
+{% include "mockbets/includes/place_bet_modal.html" %}
 {% endif %}
 {% endblock %}

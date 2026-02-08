@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-02-08 - Mock Bet Simulation System (Phase 1)
+
+**Summary:** Added a comprehensive Mock Bet Simulation system for tracking simulated betting decisions, evaluating outcomes, and analyzing decision quality over time. Covers CFB, CBB, and Golf with sport-specific bet types. No real money — strictly for analytics and learning.
+
+### New app: `apps/mockbets/`
+
+**Models:**
+- `MockBet` — UUID primary key, user FK, sport-specific game/event FKs, bet type (moneyline/spread/total for games; outright/top_5/top_10/top_20/make_cut/matchup for golf), American odds, implied probability, simulated stake/payout, result (pending/win/loss/push), confidence level, model source, expected edge, decision review fields
+- `MockBetSettlementLog` — Audit trail for settlement decisions
+
+**Settlement Engine:**
+- `apps/mockbets/services/settlement.py` — Auto-settles pending bets when games finalize
+- Sport-specific resolution: moneyline, spread (with line parsing), total (over/under), golf positional finishes
+- Atomic transactions with audit logging
+
+**Management Command:**
+- `settle_mockbets --sport=cfb|cbb|golf|all` — Idempotent settlement command for cron integration
+
+**Views & API:**
+- `/mockbets/` — My Mock Bets dashboard with KPI cards (total bets, win rate, net P/L, ROI), sport and result filters
+- `/mockbets/place/` — AJAX endpoint for placing mock bets (validates all inputs, calculates implied probability)
+- `/mockbets/<uuid>/` — Bet detail page with full parameters, settlement log, and decision review
+- `/mockbets/<uuid>/review/` — AJAX endpoint for flagging bets (would repeat/avoid) with reflection notes
+
+**Placement Modal:**
+- Reusable `place_bet_modal.html` partial included on game detail pages
+- Dynamic bet type options based on sport (game vs golf types)
+- Pre-fills odds from game data when available
+- Real-time implied probability calculation
+- Safety disclaimer on every modal
+
+**Game Detail Integration:**
+- "Place Mock Bet" button added to CFB and CBB game detail pages (authenticated users, non-final games only)
+- Placement modal auto-populates sport, game ID, and odds
+
+**Navigation:**
+- "My Mock Bets" link added to profile dropdown menu
+
+**Safety Language:**
+- "Simulated analytics only. No real money involved." disclaimer on My Bets, Bet Detail, and placement modal
+- All financial figures labeled as "Simulated" (Sim. Net P/L, Sim. ROI, Simulated Stake, Simulated Payout)
+
+**Help System:**
+- Added `mock_bets` and `mock_bet_detail` help keys to help modal
+- Added Section 10 (Mock Bets) to User Guide with full feature documentation
+- Glossary renumbered to Section 11
+
+**Tests:**
+- 23 tests covering model calculations, payout logic, API validation, settlement engine, review endpoints
+
+### New files:
+- `apps/mockbets/` — full app (models, views, urls, admin, apps, services, management command, tests)
+- `templates/mockbets/` — my_bets.html, bet_detail.html, includes/place_bet_modal.html
+
+### Modified files:
+- `brotherwillies/settings.py` — added `apps.mockbets` to INSTALLED_APPS
+- `brotherwillies/urls.py` — added `/mockbets/` URL include
+- `templates/base.html` — added "My Mock Bets" to profile dropdown
+- `templates/cfb/game_detail.html` — added Place Mock Bet button + modal include
+- `templates/cbb/game_detail.html` — added Place Mock Bet button + modal include
+- `templates/includes/help_modal.html` — added mock_bets and mock_bet_detail help keys
+- `templates/accounts/user_guide.html` — added Mock Bets section, renumbered Glossary
+
+### Migration:
+- `mockbets.0001_initial` — MockBet and MockBetSettlementLog tables
+
+### Verified:
+- `manage.py check` (0 issues), migration applied, 23 tests passing
+
+---
+
 ## 2026-02-08 - What's New page (human-readable release history)
 
 **Summary:** Added a "What's New" page at `/profile/whats-new/` that presents the full changelog as a human-readable product evolution story. Grouped by date/time releases with friendly descriptions instead of technical file lists. Accessible from the profile dropdown and linked from the User Guide TOC. No login required.

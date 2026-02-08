@@ -234,6 +234,27 @@
                     <li><strong>Note:</strong> Golf analytics are still being expanded. Full tournament modeling, course fit metrics, and historical performance data are coming soon.</li>
                 </ul>
 
+            {% elif help_key == 'mock_bets' %}
+                <h4>My Mock Bets</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> A simulation dashboard where you track hypothetical bets you've placed across CFB, CBB, and Golf. No real money is involved — this is purely for evaluating your decision-making over time.</li>
+                    <li><strong>KPI Cards</strong> — Show your total simulated bets, win rate, net simulated P/L, and simulated ROI across all settled bets. All figures are simulated, not real.</li>
+                    <li><strong>Filters</strong> — Filter by sport (CFB/CBB/Golf) and result (Pending/Win/Loss). Use these to focus your analysis on specific segments.</li>
+                    <li><strong>Placing a mock bet</strong> — From any game detail page, tap "Place Mock Bet" to open the placement modal. Fill in bet type, selection, odds, stake, confidence, and model source. The bet is recorded as a simulation.</li>
+                    <li><strong>Settlement</strong> — Pending bets are automatically settled when the underlying game finalizes. Win/Loss/Push is determined by the game outcome vs your selection. Payouts are calculated from the American odds you locked in.</li>
+                    <li><strong>Decision Review</strong> — After a bet settles, you can flag it as "Would Repeat" or "Would Avoid" and add reflection notes. This builds a feedback loop for improving your analytical process.</li>
+                    <li><strong>Golf bets</strong> — Golf supports realistic bet types: Outright Winner, Top 5/10/20 Finish, Make the Cut, and Head-to-Head Matchups.</li>
+                    <li><strong>Important:</strong> This is a simulated analytics tool. No real money, no payouts, no betting advice. For learning and decision evaluation only.</li>
+                </ul>
+
+            {% elif help_key == 'mock_bet_detail' %}
+                <h4>Mock Bet Detail</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> A detailed view of a single simulated bet showing all parameters (odds, stake, confidence, model source), the settlement result, and your decision review notes.</li>
+                    <li><strong>Settlement Log</strong> — Shows the audit trail of how and why the bet was settled, including the specific game outcome that determined the result.</li>
+                    <li><strong>Decision Review</strong> — Flag this bet as "Would Repeat" or "Would Avoid" and add reflection notes to improve your future analysis.</li>
+                </ul>
+
             {% elif help_key == 'profile' %}
                 <h4>Profile</h4>
                 <ul>

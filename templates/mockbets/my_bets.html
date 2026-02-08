@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}My Mock Bets - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">My Mock Bets</h1>
+
+<div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);">
+    <div class="text-sm" style="color:var(--accent);">Simulated analytics only. No real money involved.</div>
+</div>
+
+{% if settled_count > 0 %}
+<div class="stat-grid mb-2">
+    <div class="stat-tile">
+        <div class="stat-value">{{ total_bets }}</div>
+        <div class="stat-label">Total Bets</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ win_pct|floatformat:1 }}%</div>
+        <div class="stat-label">Win Rate</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if net_pl > 0 %}text-green{% elif net_pl < 0 %}text-red{% endif %}">${{ net_pl|floatformat:2 }}</div>
+        <div class="stat-label">Sim. Net P/L</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if roi > 0 %}text-green{% elif roi < 0 %}text-red{% endif %}">{{ roi|floatformat:1 }}%</div>
+        <div class="stat-label">Sim. ROI</div>
+    </div>
+</div>
+{% endif %}
+
+<div class="filter-bar">
+    <a href="{% url 'mockbets:my_bets' %}" class="filter-chip {% if not current_sport %}active{% endif %}">All</a>
+    <a href="{% url 'mockbets:my_bets' %}?sport=cfb{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'cfb' %}active{% endif %}">CFB</a>
+    <a href="{% url 'mockbets:my_bets' %}?sport=cbb{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'cbb' %}active{% endif %}">CBB</a>
+    <a href="{% url 'mockbets:my_bets' %}?sport=golf{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'golf' %}active{% endif %}">Golf</a>
+</div>
+
+<div class="filter-bar">
+    <a href="{% url 'mockbets:my_bets' %}{% if current_sport %}?sport={{ current_sport }}{% endif %}" class="filter-chip {% if not current_result %}active{% endif %}">All Results</a>
+    <a href="{% url 'mockbets:my_bets' %}?result=pending{% if current_sport %}&sport={{ current_sport }}{% endif %}" class="filter-chip {% if current_result == 'pending' %}active{% endif %}">Pending</a>
+    <a href="{% url 'mockbets:my_bets' %}?result=win{% if current_sport %}&sport={{ current_sport }}{% endif %}" class="filter-chip {% if current_result == 'win' %}active{% endif %}">Wins</a>
+    <a href="{% url 'mockbets:my_bets' %}?result=loss{% if current_sport %}&sport={{ current_sport }}{% endif %}" class="filter-chip {% if current_result == 'loss' %}active{% endif %}">Losses</a>
+</div>
+
+{% if bets %}
+{% for bet in bets %}
+<a href="{% url 'mockbets:bet_detail' bet.id %}" class="game-card">
+    <div class="teams" style="justify-content:flex-start;gap:8px;">
+        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% else %}yellow{% endif %}" style="font-size:0.65rem;">{{ bet.sport|upper }}</span>
+        <span class="team-name">{{ bet.selection }}</span>
+    </div>
+    <div class="game-meta mt-1">
+        <span>{{ bet.bet_type }} &middot; {{ bet.odds_american|stringformat:"+d" }}</span>
+        <span>
+            {% if bet.result == 'win' %}<span class="badge badge-green">Win</span>
+            {% elif bet.result == 'loss' %}<span class="badge badge-red">Loss</span>
+            {% elif bet.result == 'push' %}<span class="badge badge-gray">Push</span>
+            {% else %}<span class="badge badge-blue">Pending</span>{% endif %}
+        </span>
+    </div>
+    <div class="edge-row">
+        <span class="text-sm text-muted">Stake: ${{ bet.stake_amount|floatformat:2 }}</span>
+        {% if bet.is_settled and bet.net_result is not None %}
+        <span class="text-sm {% if bet.net_result > 0 %}text-green{% elif bet.net_result < 0 %}text-red{% endif %}">
+            {% if bet.net_result > 0 %}+{% endif %}${{ bet.net_result|floatformat:2 }}
+        </span>
+        {% endif %}
+    </div>
+    <div class="text-sm text-muted mt-1">
+        {{ bet.placed_at|date:"M d, Y g:i A" }}
+        {% if bet.review_flag %}
+        &middot; <span class="{% if bet.review_flag == 'repeat' %}text-green{% else %}text-red{% endif %}">{{ bet.get_review_flag_display }}</span>
+        {% endif %}
+    </div>
+</a>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <p>No mock bets yet.</p>
+    <p class="text-sm text-muted">Place your first simulated bet from any game detail page.</p>
+</div>
+{% endif %}
+{% endblock %}
