@@ -70,6 +70,7 @@ python manage.py check
 - SQLite (dev) / PostgreSQL (prod-ready)
 - Django templates + CSS + vanilla JS (no React)
 - Dark theme, card-based, mobile-first UI
+- `zipcodes` library for per-zip-code timezone resolution
 - No external APIs yet (deterministic seed data)
 
 ## Project Structure
@@ -87,7 +88,7 @@ brotherwillies/
       templatetags/
         tz_extras.py       # {% tz_abbr %} template tag
     accounts/              # Auth, profile, preferences, My Model, My Stats
-      timezone_lookup.py   # US zip prefix → IANA timezone mapping
+      timezone_lookup.py   # zip_to_timezone() via zipcodes library
     cfb/                   # College football: models, services, views
     cbb/                   # College basketball: models, services, views
     golf/                  # Golf MVP scaffolding

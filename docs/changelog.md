@@ -2,38 +2,15 @@
 
 ---
 
-## 2026-02-08 - Switch to zipcodes library for accurate timezone resolution
-
-**Summary:** Replaced the manual 3-digit zip prefix mapping with the `zipcodes` Python library, which resolves per-zip-code for accurate timezone handling in split-timezone states (Indiana, Tennessee, Florida panhandle, etc.).
-
-### Changes:
-- Added `zipcodes>=1.3` to requirements.txt
-- Rewrote `apps/accounts/timezone_lookup.py` to use `zipcodes.matching()` instead of a 400-line manual mapping dict
-- Eliminates incorrect timezone for border areas (e.g. Hammond IN, Valparaiso IN, Panama City FL)
-
----
-
-## 2026-02-08 - Move Zip Code to Preferences Page
-
-**Summary:** Zip code field moved from Profile page to Preferences page where it belongs alongside other user settings. Resolved timezone displays in green below the zip code field after saving.
-
-### Changes:
-- Moved zip code input from `profile.html` to `preferences.html`
-- Updated `PreferencesForm` to include `zip_code` with validation (5-digit US zip)
-- Updated `preferences_view` to handle zip code saving and timezone resolution
-- Removed zip code handling from `profile_view` and `PersonalInfoForm`
-- Resolved timezone shown in green text below zip code field on preferences page
-
----
-
 ## 2026-02-08 - User Timezone Support via Zip Code
 
-**Summary:** Users can set their zip code to automatically resolve their timezone. All game times display in the user's local timezone with an abbreviation (CST, EST, etc.).
+**Summary:** Users can set their zip code on the Preferences page to automatically resolve their timezone. All game times display in the user's local timezone with an abbreviation (CST, EST, etc.). Uses the `zipcodes` Python library for per-zip-code accuracy in split-timezone states (Indiana, Tennessee, Florida panhandle).
 
 ### Changes:
 - Added `zip_code` and `timezone` fields to UserProfile model
-- Created `apps/accounts/timezone_lookup.py` — US zip prefix (3-digit) to IANA timezone mapping
-- Zip code field on Preferences page; on save, timezone is resolved automatically
+- Added `zipcodes>=1.3` to requirements.txt for per-zip-code timezone resolution
+- Created `apps/accounts/timezone_lookup.py` — `zip_to_timezone()` wrapper around `zipcodes.matching()`
+- Zip code field on Preferences page with 5-digit validation; timezone resolved on save and displayed in green
 - Created `brotherwillies/middleware.py` with `UserTimezoneMiddleware` — activates user's timezone per-request
 - Added middleware to settings after `AuthenticationMiddleware`
 - Created `apps/core/templatetags/tz_extras.py` with `{% tz_abbr %}` tag (outputs CST, EST, etc.)
