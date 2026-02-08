@@ -16,6 +16,8 @@
                     <li><strong>Confidence badges (HIGH / MED / LOW)</strong> tell you how much data we have behind the calculation. HIGH means we have recent odds and full injury data. LOW means some data may be stale or incomplete.</li>
                     <li><strong>YOUR TEAM</strong> badge appears on games involving the favorite team you set in Preferences.</li>
                     <li>Log in to see the full Value Board with all games, filters, and your personalized model.</li>
+
+                    <li><strong>Where does this data come from?</strong> Game schedules and scores are pulled from ESPN's public API, which covers all Division I college football and basketball games. Betting odds (moneyline, point spread, over/under) come from The Odds API, which aggregates real-time lines from major US sportsbooks. Injury data is sourced from ESPN's injury reports. Our model then runs its own calculations on top of this data to produce the probabilities and edge numbers you see. When live data is not available (offseason or demo mode), sample data is shown instead — look for an "Offseason" banner at the top of the page.</li>
                 </ul>
 
             {% elif help_key == 'value_board' %}
@@ -38,6 +40,14 @@
                     <li><strong>Favorite team override</strong> — If you've set a favorite team AND enabled "Always include favorite team" in Preferences, that team's games always appear on the board regardless of your filter settings. You'll never miss your team.</li>
 
                     <li><strong>Confidence (HIGH / MED / LOW)</strong> — This tells you how reliable the data behind the calculation is. HIGH means odds are recent and injury data is complete. MED means some data might be a few hours old. LOW means data may be stale or missing — take those numbers with a grain of salt.</li>
+
+                    <li><strong>Where does this data come from?</strong> The Value Board combines data from multiple sources:
+                        <br>- <strong>Game schedules and scores</strong> come from ESPN's public API (for both CFB and CBB). Games are refreshed regularly to capture schedule changes and final scores.
+                        <br>- <strong>Betting odds</strong> (moneyline, point spread, over/under totals) come from <strong>The Odds API</strong>, which aggregates real-time lines from major US sportsbooks like DraftKings, FanDuel, BetMGM, and others. Odds are captured as snapshots so you can see how lines move over time.
+                        <br>- <strong>Injury data</strong> is sourced from ESPN's injury reports, including player status (out, doubtful, questionable, probable) and estimated impact level.
+                        <br>- <strong>Edge and probability numbers</strong> are calculated by our own model — they are NOT taken from any external source. The model uses the raw data above as inputs and produces independent probability estimates.
+                        <br>- During the offseason or when live data feeds are disabled, the board shows sample/demo data for illustration purposes.
+                    </li>
                 </ul>
 
             {% elif help_key == 'cfb_hub' %}
@@ -48,6 +58,8 @@
                     <li><strong>Conference page</strong> — Shows all teams in that conference along with their upcoming matchups. Each game card shows the teams, kickoff time, and quick edge numbers so you can spot interesting games at a glance.</li>
                     <li><strong>Game cards</strong> — Each card shows two teams, the game date/time, and the house model's edge. Tap any game card to go to the full game detail page with all the analysis.</li>
                     <li><strong>What should I look for?</strong> Games with high absolute edge values are where our model disagrees most with the market. Those are the most analytically interesting matchups to dig into.</li>
+
+                    <li><strong>Where does this data come from?</strong> CFB game schedules are pulled from the <strong>CollegeFootballData.com (CFBD) API</strong> during the season, with ESPN's public API providing supplementary schedule and injury data. Betting odds come from <strong>The Odds API</strong>, aggregating lines from major US sportsbooks. During the CFB offseason (roughly February through July), the page shows sample data for demonstration — you'll see an "Offseason" banner when this is the case.</li>
                 </ul>
 
             {% elif help_key == 'cbb_hub' %}
@@ -58,6 +70,8 @@
                     <li><strong>Conference page</strong> — Shows all teams in that conference along with their upcoming matchups. Each game card shows the teams, tip-off time, and quick edge numbers.</li>
                     <li><strong>Game cards</strong> — Each card shows two teams, the game date/time, and the house model's edge. Tap any game card for full analysis.</li>
                     <li><strong>What should I look for?</strong> Games with high absolute edge values are where our model disagrees most with the market — those are the most analytically interesting matchups.</li>
+
+                    <li><strong>Where does this data come from?</strong> CBB game schedules are fetched from <strong>ESPN's public API</strong>, which covers all Division I men's college basketball games. Historical game data comes from the <strong>CollegeBasketballData.com (CBBD) API</strong>. Betting odds are sourced from <strong>The Odds API</strong>, which aggregates real-time lines from major US sportsbooks. Injury reports come from ESPN. All edge and probability numbers are calculated by our own model using this data as input.</li>
                 </ul>
 
             {% elif help_key == 'game_detail' %}
@@ -76,6 +90,13 @@
                     <li><strong>Injury impacts</strong> — Key player injuries are listed with their estimated impact on the game. A starting quarterback being out has a much larger impact than a backup linebacker. These injuries are factored into the model's probability calculations.</li>
 
                     <li><strong>Confidence</strong> — Reflects how recent the odds data is and how complete the injury information is. A HIGH confidence game has fresh odds and a full injury picture. A LOW confidence game may be using older data, so treat those numbers more cautiously.</li>
+
+                    <li><strong>Where does this data come from?</strong>
+                        <br>- <strong>Odds and line movement</strong> come from <strong>The Odds API</strong>, which pulls real-time lines from major US sportsbooks (DraftKings, FanDuel, BetMGM, and others). We capture multiple snapshots over time, which is how we show line movement — each snapshot records the odds at a specific point in time.
+                        <br>- <strong>Injury reports</strong> are sourced from <strong>ESPN</strong>, including player name, status (out, doubtful, questionable, probable), and our estimate of the injury's impact on the game outcome.
+                        <br>- <strong>Game schedule data</strong> comes from ESPN (CBB) or CFBD (CFB).
+                        <br>- <strong>All probabilities and edges</strong> are calculated by our model — they are independent estimates, not copied from any sportsbook or external source.
+                    </li>
                 </ul>
 
             {% elif help_key == 'my_model' %}
@@ -161,9 +182,11 @@
             {% elif help_key == 'golf' %}
                 <h4>Golf</h4>
                 <ul>
-                    <li><strong>Coming Soon</strong> — Golf analytics are currently in development.</li>
-                    <li>This section will feature tournament analysis, player modeling, course fit metrics, and historical performance data.</li>
-                    <li>Check back for updates as we build out this feature.</li>
+                    <li><strong>What is this page?</strong> Golf analytics for PGA Tour events. When active tournaments are available, you'll see tournament fields, golfer odds, and implied probabilities.</li>
+
+                    <li><strong>Where does this data come from?</strong> Tournament schedules and golfer fields are pulled from <strong>ESPN's public PGA API</strong>. Outright winner odds come from <strong>The Odds API</strong>, covering major tournaments (The Masters, PGA Championship, The Open Championship, and the U.S. Open). Odds are shown as American moneyline with implied probabilities calculated from those lines.</li>
+
+                    <li><strong>Note:</strong> Golf analytics are still being expanded. Full tournament modeling, course fit metrics, and historical performance data are coming soon.</li>
                 </ul>
 
             {% elif help_key == 'profile' %}
@@ -245,6 +268,14 @@
                         <br>- <strong>Game Detail</strong> — Deep analysis for individual games
                         <br>- <strong>My Model</strong> — Customize your probability model
                         <br>- <strong>Parlays</strong> — Build and analyze multi-game combinations
+                    </li>
+
+                    <li><strong>Where does our data come from?</strong> We pull from multiple trusted sources to power the analysis:
+                        <br>- <strong>ESPN Public API</strong> — Game schedules, scores, and injury reports for college basketball and football. Also tournament fields for PGA golf. Free, no authentication required.
+                        <br>- <strong>The Odds API</strong> — Real-time betting odds aggregated from major US sportsbooks (DraftKings, FanDuel, BetMGM, and others). Covers moneyline, point spread, and over/under totals for CFB and CBB, plus outright winner odds for PGA golf majors.
+                        <br>- <strong>CollegeFootballData.com (CFBD)</strong> — CFB-specific schedules, scores, and historical stats.
+                        <br>- <strong>CollegeBasketballData.com (CBBD)</strong> — CBB-specific historical game data.
+                        <br>All edge and probability calculations are produced by our own model — they are independent analyses, not taken from any sportsbook.
                     </li>
 
                     <li><strong>Important:</strong> This platform is for informational and entertainment purposes only. It provides mathematical analysis, not betting advice. No guarantees of any kind. Always check local laws.</li>
