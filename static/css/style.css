@@ -13,13 +13,12 @@
     --text-primary: #e8e9ed;
     --text-secondary: #9ca3b4;
     --text-muted: #6b7280;
-    --accent: #4f8cff;
-    --accent-hover: #3a7aef;
+    --accent: #e8d5b7;
+    --accent-hover: #d4be9a;
     --green: #22c55e;
     --red: #ef4444;
     --yellow: #eab308;
     --orange: #f97316;
-    --logo-text: #e8d5b7;
     --border: #2d3148;
     --nav-height: 60px;
     --header-height: 52px;
@@ -82,7 +81,7 @@ a:hover {
 .logo-text {
     font-weight: 700;
     font-size: 1rem;
-    color: var(--logo-text);
+    color: var(--accent);
     letter-spacing: 0.5px;
     white-space: nowrap;
     overflow: hidden;
@@ -90,7 +89,7 @@ a:hover {
     min-width: 0;
 }
 .logo:hover .logo-text {
-    color: var(--logo-text);
+    color: var(--accent);
 }
 
 .header-actions {
@@ -163,7 +162,7 @@ a:hover {
 .message-success { background: rgba(34,197,94,0.15); color: var(--green); }
 .message-error { background: rgba(239,68,68,0.15); color: var(--red); }
 .message-warning { background: rgba(234,179,8,0.15); color: var(--yellow); }
-.message-info { background: rgba(79,140,255,0.15); color: var(--accent); }
+.message-info { background: rgba(232,213,183,0.15); color: var(--accent); }
 
 /* ========== Bottom Nav ========== */
 .bottom-nav {
@@ -250,7 +249,7 @@ a:hover {
 .badge-green { background: rgba(34,197,94,0.2); color: var(--green); }
 .badge-red { background: rgba(239,68,68,0.2); color: var(--red); }
 .badge-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
-.badge-blue { background: rgba(79,140,255,0.2); color: var(--accent); }
+.badge-blue { background: rgba(232,213,183,0.2); color: var(--accent); }
 .badge-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }
 .badge-fav {
     background: rgba(234,179,8,0.15);
@@ -337,11 +336,11 @@ a:hover {
 }
 .btn-primary {
     background: var(--accent);
-    color: #fff;
+    color: #1a1a2e;
 }
 .btn-primary:hover {
     background: var(--accent-hover);
-    color: #fff;
+    color: #1a1a2e;
 }
 .btn-secondary {
     background: var(--bg-input);
@@ -601,7 +600,7 @@ select.form-control {
 .filter-chip.active {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: #1a1a2e;
 }
 
 /* ========== Game Card ========== */
@@ -880,13 +879,13 @@ input[type="range"]::-webkit-slider-thumb {
 .sport-tab-count {
     font-size: 0.7rem;
     font-weight: 700;
-    background: rgba(79,140,255,0.15);
+    background: rgba(232,213,183,0.15);
     color: var(--accent);
     padding: 1px 6px;
     border-radius: 10px;
 }
 .sport-tab.active .sport-tab-count {
-    background: rgba(79,140,255,0.3);
+    background: rgba(232,213,183,0.3);
 }
 
 /* Sport tab icons */
@@ -917,7 +916,7 @@ input[type="range"]::-webkit-slider-thumb {
     transition: background 0.15s;
 }
 .vb-section-header:hover {
-    background: rgba(79, 140, 255, 0.05);
+    background: rgba(232, 213, 183, 0.05);
 }
 .vb-section-icon {
     flex-shrink: 0;
@@ -932,7 +931,7 @@ input[type="range"]::-webkit-slider-thumb {
 .vb-section-count {
     font-size: 0.7rem;
     font-weight: 700;
-    background: rgba(79, 140, 255, 0.15);
+    background: rgba(232, 213, 183, 0.15);
     color: var(--accent);
     padding: 1px 8px;
     border-radius: 10px;
@@ -1020,7 +1019,7 @@ input[type="range"]::-webkit-slider-thumb {
     font-size: 0.85rem;
 }
 .badge-ai {
-    background: rgba(79,140,255,0.2);
+    background: rgba(232,213,183,0.2);
     color: var(--accent);
 }
 .spinner {
@@ -1072,7 +1071,7 @@ input[type="range"]::-webkit-slider-thumb {
     background-repeat: no-repeat;
     background-position: right 8px center;
 }
-.qs-blue { background: rgba(79,140,255,0.2); color: var(--accent); }
+.qs-blue { background: rgba(232,213,183,0.2); color: var(--accent); }
 .qs-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
 .qs-green { background: rgba(34,197,94,0.2); color: var(--green); }
 .qs-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }

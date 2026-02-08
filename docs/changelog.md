@@ -2,14 +2,16 @@
 
 ---
 
-## 2026-02-08 - Header Logo Rebrand
+## 2026-02-08 - Full Color Rebrand (Warm Gold)
 
-**Summary:** Replaced the blue "Brother Willies Predictions" text header with the new BW logo image alongside "Brother Willie" text in a warm cream/gold color matching the logo artwork.
+**Summary:** Replaced blue accent color scheme with warm cream/gold (`#e8d5b7`) throughout the entire app, matching the new BW logo. Header now shows logo image + "Brother Willie" text. All buttons, links, tabs, badges, charts, and auth pages updated to the new palette.
 
 ### Modified files:
-- `templates/base.html` — Header now shows logo image + "Brother Willie" text instead of plain text link
-- `static/css/style.css` — Added `--logo-text` color variable, `.logo-img` and `.logo-text` classes, flex layout for logo, desktop responsive sizing
+- `templates/base.html` — Header now shows logo image + "Brother Willie" text
+- `static/css/style.css` — `--accent` changed from `#4f8cff` to `#e8d5b7`, `--accent-hover` to `#d4be9a`, all rgba blue references updated, button/chip text changed to dark for contrast
+- `static/css/auth.css` — Sign In button, links, input focus, and logo glow animation all switched from blue to warm gold
 - `static/branding/bw_logo.png` — Updated logo image
+- `templates/mockbets/analytics.html` — Chart.js accent color updated
 
 ---
 
