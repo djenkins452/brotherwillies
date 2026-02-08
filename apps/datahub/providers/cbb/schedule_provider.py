@@ -1,4 +1,8 @@
-"""CBB Schedule Provider — fetches games from the CBBD API."""
+"""CBB Schedule Provider — fetches games from ESPN + CBBD APIs.
+
+ESPN provides current/upcoming games (reliable, no auth needed).
+CBBD provides season history (3000-game cap, oldest first).
+"""
 
 import logging
 from datetime import timedelta
@@ -14,6 +18,7 @@ from apps.datahub.providers.name_utils import normalize_team_name
 
 logger = logging.getLogger(__name__)
 
+ESPN_BASE = 'https://site.api.espn.com'
 CBBD_BASE_URL = 'https://api.collegebasketballdata.com'
 
 
@@ -22,59 +27,101 @@ class CBBScheduleProvider(AbstractProvider):
     data_type = 'schedule'
 
     def __init__(self):
-        api_key = settings.CBBD_API_KEY
-        if not api_key:
-            raise ValueError("CBBD_API_KEY not configured")
-        self.client = APIClient(
-            base_url=CBBD_BASE_URL,
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Accept': 'application/json',
-            },
-            rate_limit_delay=1.0,
+        self.espn_client = APIClient(
+            base_url=ESPN_BASE,
+            rate_limit_delay=0.5,
         )
+        # CBBD client (optional, for historical data)
+        api_key = settings.CBBD_API_KEY
+        self.cbbd_client = None
+        if api_key:
+            self.cbbd_client = APIClient(
+                base_url=CBBD_BASE_URL,
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Accept': 'application/json',
+                },
+                rate_limit_delay=1.0,
+            )
 
     def fetch(self):
-        """Fetch current season games from CBBD API."""
+        """Fetch games from ESPN scoreboard (today + upcoming days)."""
         now = timezone.now()
-        # CBB season spans two calendar years; use the later year
-        year = now.year if now.month >= 10 else now.year
-        season = year
+        all_games = []
 
-        games = self.client.get('/games', params={
-            'year': season,
-            'division': 'D1',
-        })
-        return games
+        # Fetch multiple days from ESPN (today + next 7 days)
+        for offset in range(8):
+            date = now + timedelta(days=offset)
+            date_str = date.strftime('%Y%m%d')
+            try:
+                data = self.espn_client.get(
+                    '/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard',
+                    params={'dates': date_str, 'groups': '50', 'limit': 200},
+                )
+                events = data.get('events', [])
+                all_games.extend(events)
+                logger.info(f"ESPN CBB {date_str}: {len(events)} events")
+            except Exception as e:
+                logger.warning(f"ESPN CBB {date_str} failed: {e}")
+
+        return all_games
 
     def normalize(self, raw):
-        """Transform CBBD game records into standardized dicts."""
+        """Transform ESPN event records into standardized dicts."""
         normalized = []
-        for g in raw:
-            home_team = g.get('homeTeam') or g.get('home_team', '')
-            away_team = g.get('awayTeam') or g.get('away_team', '')
+        for event in raw:
+            competitions = event.get('competitions', [])
+            if not competitions:
+                continue
+            comp = competitions[0]
+
+            home_team = ''
+            away_team = ''
+            home_conf = ''
+            away_conf = ''
+            for competitor in comp.get('competitors', []):
+                team_data = competitor.get('team', {})
+                name = team_data.get('displayName', '') or team_data.get('name', '')
+                name = normalize_team_name(name)
+                conf = ''
+                # ESPN sometimes nests conference in groups
+                groups = team_data.get('groups', {})
+                if isinstance(groups, dict):
+                    conf = groups.get('shortName', '') or groups.get('name', '')
+
+                if competitor.get('homeAway') == 'home':
+                    home_team = name
+                    home_conf = conf
+                else:
+                    away_team = name
+                    away_conf = conf
+
             if not home_team or not away_team:
                 continue
 
-            home_conf = g.get('homeConference') or g.get('home_conference', '')
-            away_conf = g.get('awayConference') or g.get('away_conference', '')
-
-            start_date = g.get('startDate') or g.get('start_date', '')
+            start_date = event.get('date', '')
             if not start_date:
                 continue
 
-            home_score = g.get('homeScore') or g.get('home_score')
-            away_score = g.get('awayScore') or g.get('away_score')
-            status = 'final' if home_score is not None and away_score is not None else 'scheduled'
+            status_data = event.get('status', {}).get('type', {})
+            espn_state = status_data.get('state', '')
+            if espn_state == 'post':
+                status = 'final'
+            elif espn_state == 'in':
+                status = 'live'
+            else:
+                status = 'scheduled'
+
+            neutral_site = comp.get('neutralSite', False)
 
             normalized.append({
-                'home_team': normalize_team_name(home_team),
-                'away_team': normalize_team_name(away_team),
+                'home_team': home_team,
+                'away_team': away_team,
                 'home_conference': home_conf,
                 'away_conference': away_conf,
                 'start_date': start_date,
                 'status': status,
-                'neutral_site': bool(g.get('neutralSite') or g.get('neutral_site', False)),
+                'neutral_site': bool(neutral_site),
             })
 
         return normalized

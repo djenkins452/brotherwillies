@@ -57,10 +57,21 @@ _MASCOT_PATTERN = re.compile(
     r'Buffaloes|Utes|Golden Bears|Cardinal|Bruins|Trojans|Panthers|'
     r'Wolfpack|Demon Deacons|Yellow Jackets|Fighting Irish|Hokies|'
     r'Orange|Terrapins|Nittany Lions|Badgers|Cornhuskers|Golden Gophers|'
-    r'Illini|Scarlet Knights|Owls|Bearcats|Musketeers|Bluejays|'
-    r'Friars|Pirates|Hoyas|Red Storm|Peacocks|Gaels)$',
+    r'Fighting Illini|Illini|Scarlet Knights|Owls|Bearcats|Musketeers|Bluejays|'
+    r'Friars|Pirates|Hoyas|Red Storm|Peacocks|Gaels|'
+    # Additional mascots from The Odds API
+    r'Broncos|Lancers|49ers|Rams|Paladins|Rainbow Warriors|Lions|'
+    r'Wolf Pack|Lobos|Lumberjacks|Golden Eagles|Vikings|Hornets|'
+    r'Toreros|Dons|Bulls|Thunderbirds|Tommies|Texans|Green Wave|'
+    r'Golden Hurricane|Blazers|Anteaters|Tritons|Gauchos|Miners|'
+    r'Shockers|Cowboys|Bobcats|Flyers|Penguins|Zips|Rockets|'
+    r'Titans|Jaguars|Dolphins|Eagles|Hawks|Falcons|Flames|Raiders)$',
     re.IGNORECASE,
 )
+
+# Normalize "St " -> "State " when it appears at a word boundary mid-name
+# (e.g. "Michigan St" -> "Michigan State", but not "St. Thomas")
+_ST_PATTERN = re.compile(r'\bSt\b(?!\.)')  # "St" not followed by "."
 
 
 def normalize_team_name(name):
@@ -68,14 +79,15 @@ def normalize_team_name(name):
 
     1. Check alias table (case-insensitive)
     2. Strip common mascot suffixes
-    3. Return cleaned name
+    3. Normalize "St" -> "State"
+    4. Return cleaned name
     """
     if not name:
         return name
 
     name = name.strip()
 
-    # Check alias table
+    # Check alias table first (exact match on full name)
     alias_key = name.lower()
     if alias_key in TEAM_ALIASES:
         return TEAM_ALIASES[alias_key]
@@ -83,7 +95,15 @@ def normalize_team_name(name):
     # Strip mascot suffix
     cleaned = _MASCOT_PATTERN.sub('', name).strip()
     if cleaned:
-        return cleaned
+        name = cleaned
+
+    # Check alias table again after mascot strip
+    alias_key = name.lower()
+    if alias_key in TEAM_ALIASES:
+        return TEAM_ALIASES[alias_key]
+
+    # Normalize "St" -> "State" (e.g. "Michigan St" -> "Michigan State")
+    name = _ST_PATTERN.sub('State', name)
 
     return name
 
