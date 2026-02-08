@@ -42,12 +42,17 @@
 **Always update these when features change:**
 1. **Context-aware help** — `templates/includes/help_modal.html` (keyed by `help_key` per page)
 2. **User Guide** — `templates/accounts/user_guide.html` (at `/profile/user-guide/`)
-3. **Changelog** — `docs/changelog.md`
+3. **What's New** — `templates/accounts/whats_new.html` (at `/profile/whats-new/`)
+4. **Changelog** — `docs/changelog.md`
 
 **On task completion:**
 1. Update changelog
 2. Commit changes
 3. Push: `GIT_SSH_COMMAND="ssh -p 443" git push git@ssh.github.com:djenkins452/brotherwillies.git main`
+
+**Session closeout:** Run `/closeout` to review all docs, commit, and push.
+
+**Parallel sessions:** Multiple Claude sessions may work on the same branch. Always pull --rebase before pushing.
 
 ---
 

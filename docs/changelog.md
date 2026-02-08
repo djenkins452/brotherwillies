@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-02-08 - Session closeout command + CLAUDE.md updates
+
+**Summary:** Added `/closeout` slash command for Claude Code that reviews all documentation, help systems, and tracking before ending a coding session. Updated CLAUDE.md Standing Instructions to include What's New page and parallel session safety notes.
+
+### New files:
+- `.claude/commands/closeout.md` — session closeout skill (changelog, What's New, help system, User Guide, CLAUDE.md review, safe git commit/push with rebase for parallel sessions)
+
+### Modified files:
+- `CLAUDE.md` — added What's New to Standing Instructions (#3), added `/closeout` reference, added parallel sessions note
+
+---
+
 ## 2026-02-08 - Mock Bet Simulation System (Phase 1)
 
 **Summary:** Added a comprehensive Mock Bet Simulation system for tracking simulated betting decisions, evaluating outcomes, and analyzing decision quality over time. Covers CFB, CBB, and Golf with sport-specific bet types. No real money — strictly for analytics and learning.
