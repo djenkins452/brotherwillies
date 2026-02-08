@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-02-08 - Golf Event Seeding for Production
+
+**Summary:** Added idempotent `seed_golf_events` management command that creates upcoming major tournament events with 30-golfer fields and realistic outright odds. Wired into `ensure_seed` so production (Railway) gets golf data on every deploy, regardless of live data toggle.
+
+### New files:
+- `apps/datahub/management/commands/seed_golf_events.py` — Seeds 4 majors (The Masters, PGA Championship, U.S. Open, The Open Championship) with 30 golfers and odds snapshots per event. Idempotent via `get_or_create` on slug.
+
+### Modified files:
+- `apps/datahub/management/commands/ensure_seed.py` — Added `call_command('seed_golf_events')` after `seed_golfers`
+
+---
+
 ## 2026-02-08 - Golf Mock Bet Integration
 
 **Summary:** Built out the full golf section for mock bet placement. Added golf event detail pages with golfer odds tables, per-golfer "Mock Bet" buttons, golfer search autocomplete in the mock bet modal, golf demo seed data, and updated all standing docs.

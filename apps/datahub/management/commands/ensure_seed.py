@@ -22,6 +22,9 @@ class Command(BaseCommand):
         # Ensure golfer list is populated
         call_command('seed_golfers')
 
+        # Ensure golf events with fields and odds exist
+        call_command('seed_golf_events')
+
         # Run live data ingestion if enabled
         if not settings.LIVE_DATA_ENABLED:
             self.stdout.write('Live data disabled — skipping ingestion')
