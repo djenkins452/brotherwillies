@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-02-08 - Switch to zipcodes library for accurate timezone resolution
+
+**Summary:** Replaced the manual 3-digit zip prefix mapping with the `zipcodes` Python library, which resolves per-zip-code for accurate timezone handling in split-timezone states (Indiana, Tennessee, Florida panhandle, etc.).
+
+### Changes:
+- Added `zipcodes>=1.3` to requirements.txt
+- Rewrote `apps/accounts/timezone_lookup.py` to use `zipcodes.matching()` instead of a 400-line manual mapping dict
+- Eliminates incorrect timezone for border areas (e.g. Hammond IN, Valparaiso IN, Panama City FL)
+
+---
+
 ## 2026-02-08 - Move Zip Code to Preferences Page
 
 **Summary:** Zip code field moved from Profile page to Preferences page where it belongs alongside other user settings. Resolved timezone displays in green below the zip code field after saving.
