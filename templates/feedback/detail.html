@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ fb.title }} - Feedback - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Feedback Detail</h1>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+        <div class="card-title" style="margin-bottom: 0;">{{ fb.title }}</div>
+        <span class="badge {% if fb.status == 'NEW' %}badge-blue{% elif fb.status == 'ACCEPTED' %}badge-yellow{% elif fb.status == 'READY' %}badge-green{% else %}badge-gray{% endif %}">{{ fb.get_status_display }}</span>
+    </div>
+
+    <div style="margin-bottom: 16px;">
+        <span class="badge badge-blue" style="margin-right: 4px;">{{ fb.component.name }}</span>
+        <span class="text-sm" style="color: var(--text-muted);">by {{ fb.user.username }}</span>
+    </div>
+
+    <p class="section-title">Description</p>
+    <div style="color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; white-space: pre-wrap; margin-bottom: 16px;">{{ fb.description }}</div>
+
+    {% if fb.reviewer_notes %}
+    <p class="section-title">Reviewer Notes</p>
+    <div style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; white-space: pre-wrap; margin-bottom: 16px; padding: 12px; background: var(--bg-input); border-radius: var(--radius-sm);">{{ fb.reviewer_notes }}</div>
+    {% endif %}
+
+    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); padding-top: 12px; border-top: 1px solid var(--border);">
+        <span>Created: {{ fb.created_at|date:"M j, Y g:i A" }}</span>
+        <span>Updated: {{ fb.updated_at|date:"M j, Y g:i A" }}</span>
+    </div>
+</div>
+
+<div style="display: flex; gap: 8px;">
+    <a href="{% url 'feedback:update' pk=fb.pk %}" class="btn btn-primary btn-sm">Edit</a>
+    <a href="{% url 'feedback:console' %}" class="btn btn-secondary btn-sm">&larr; Back to Console</a>
+</div>
+{% endblock %}

@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-02-08 - Partner feedback system
+
+**Summary:** Added a private, partner-only feedback system for internal product operations. Three authorized partners (djenkins, jsnyder, msnyder) can submit structured feedback targeting specific site components, review it through a status pipeline (New → Accepted → Ready → Dismissed), and manage everything via a custom admin console. The system is future-safe for AI-driven action — feedback marked as READY exposes a structured `is_ready_for_ai` property. No public visibility, no Django Admin usage, no auto-modifications.
+
+### New app: `apps/feedback/`
+- **Models:** `FeedbackComponent` (categorization) + `PartnerFeedback` (UUID primary key, status workflow, reviewer notes)
+- **Access control:** `is_partner()` helper + `@partner_required` decorator — returns 404 for non-partners
+- **Submission form:** Component dropdown, title, description — available at `/feedback/new/`
+- **Custom admin console:** Dashboard with status counts, filters (status/component/user), full CRUD — at `/feedback/console/`
+- **Validation:** Status change to READY or DISMISSED requires reviewer notes
+- **Seed command:** `seed_feedback` populates 10 components + demo feedback items (runs via `ensure_seed` on deploy)
+- **Tests:** 16 tests covering access control, CRUD, form validation, filtering
+- **Help content:** Added `feedback` help key to help modal
+- **Nav integration:** "Feedback" link in profile dropdown (partner-only)
+
+### Routes:
+| Route | Purpose |
+|-------|---------|
+| `/feedback/new/` | Submit feedback |
+| `/feedback/console/` | Feedback dashboard |
+| `/feedback/console/<uuid>/` | Feedback detail |
+| `/feedback/console/<uuid>/update/` | Edit feedback |
+
+### New/modified files:
+- `apps/feedback/` — new app (models, views, forms, urls, access, tests, seed command)
+- `templates/feedback/` — new templates (new, console, detail, edit)
+- `templates/includes/help_modal.html` — added feedback help key
+- `templates/base.html` — added Feedback link in profile dropdown
+- `brotherwillies/settings.py` — added `apps.feedback` to INSTALLED_APPS
+- `brotherwillies/urls.py` — added feedback URL include
+- `apps/datahub/management/commands/ensure_seed.py` — calls `seed_feedback` on deploy
+- `docs/changelog.md` — this entry
+
+---
+
 ## 2026-02-08 - AI Insight engine (OpenAI-powered game explanations)
 
 **Summary:** Added an AI-powered explanation engine to game detail pages. Logged-in users can tap "AI Insight" to get a factual, structured summary of why the house model and market agree or disagree on a game. The AI uses ONLY data already shown on the page (team ratings, injuries, odds, model probabilities) — no speculation, no invented facts. Users can choose from 4 AI personas (Analyst, New York Bookie, Southern Commentator, Ex-Player) in Preferences.

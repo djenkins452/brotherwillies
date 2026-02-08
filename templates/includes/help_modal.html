@@ -287,6 +287,21 @@
                     </li>
                 </ul>
 
+            {% elif help_key == 'feedback' %}
+                <h4>Partner Feedback</h4>
+                <ul>
+                    <li><strong>What is this?</strong> This is an internal feedback system for authorized partners only. Submit structured feedback about any part of the site — it gets tracked through a review pipeline.</li>
+                    <li><strong>Components</strong> — Each feedback item targets a specific part of the site (e.g., AI Explanations, Value Board, Model Accuracy). Pick the most relevant component when submitting.</li>
+                    <li><strong>Status workflow:</strong>
+                        <br>- <strong>New</strong> — Just submitted, awaiting review
+                        <br>- <strong>Accepted</strong> — Reviewed and accepted for action
+                        <br>- <strong>Ready</strong> — Fully scoped and ready for implementation (requires reviewer notes)
+                        <br>- <strong>Dismissed</strong> — Reviewed and set aside (requires reviewer notes)
+                    </li>
+                    <li><strong>Reviewer Notes</strong> — Required when marking feedback as Ready or Dismissed. This captures the reasoning behind the decision.</li>
+                    <li><strong>Important:</strong> Feedback does not automatically change the system. All changes require explicit human approval and implementation.</li>
+                </ul>
+
             {% else %}
                 <h4>Brother Willies Predictions</h4>
                 <ul>

@@ -16,6 +16,9 @@ class Command(BaseCommand):
             call_command('seed_demo')
             self.stdout.write(self.style.SUCCESS('Seed data loaded'))
 
+        # Ensure feedback components exist
+        call_command('seed_feedback')
+
         # Run live data ingestion if enabled
         if not settings.LIVE_DATA_ENABLED:
             self.stdout.write('Live data disabled — skipping ingestion')

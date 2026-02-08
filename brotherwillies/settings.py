@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'apps.parlays',
     'apps.analytics',
     'apps.datahub',
+    'apps.feedback',
     'axes',
 ]
 

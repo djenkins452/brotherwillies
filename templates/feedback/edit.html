@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Edit Feedback - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Edit Feedback</h1>
+
+<div class="card">
+    <div style="margin-bottom: 12px;">
+        <span class="badge badge-blue">{{ fb.component.name }}</span>
+        <span class="text-sm" style="color: var(--text-muted); margin-left: 4px;">by {{ fb.user.username }}</span>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="id_title">Title</label>
+            {{ form.title }}
+            {% if form.title.errors %}
+                <div class="form-error">{{ form.title.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="id_description">Description</label>
+            {{ form.description }}
+            {% if form.description.errors %}
+                <div class="form-error">{{ form.description.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="id_status">Status</label>
+            {{ form.status }}
+            {% if form.status.errors %}
+                <div class="form-error">{{ form.status.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="id_reviewer_notes">Reviewer Notes</label>
+            {{ form.reviewer_notes }}
+            {% if form.reviewer_notes.errors %}
+                <div class="form-error">{{ form.reviewer_notes.errors.0 }}</div>
+            {% endif %}
+            <div class="form-help">Required when setting status to Ready or Dismissed.</div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="{% url 'feedback:detail' pk=fb.pk %}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

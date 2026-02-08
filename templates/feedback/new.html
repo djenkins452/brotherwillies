@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Submit Feedback - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Submit Feedback</h1>
+
+<div class="card">
+    <p class="text-sm" style="color: var(--text-secondary); margin-bottom: 16px;">
+        This feedback is reviewed internally and does not change the system automatically.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="id_component">Component</label>
+            {{ form.component }}
+            {% if form.component.errors %}
+                <div class="form-error">{{ form.component.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="id_title">Title</label>
+            {{ form.title }}
+            {% if form.title.errors %}
+                <div class="form-error">{{ form.title.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="id_description">Description</label>
+            {{ form.description }}
+            {% if form.description.errors %}
+                <div class="form-error">{{ form.description.errors.0 }}</div>
+            {% endif %}
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Submit Feedback</button>
+    </form>
+</div>
+
+<div class="mt-2">
+    <a href="{% url 'feedback:console' %}" class="btn btn-secondary btn-sm">&larr; Back to Console</a>
+</div>
+{% endblock %}

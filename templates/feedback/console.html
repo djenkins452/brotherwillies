@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Feedback Console - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Feedback Console</h1>
+
+<!-- Status summary -->
+<div class="stat-grid">
+    <div class="stat-tile">
+        <div class="stat-value">{{ total_count }}</div>
+        <div class="stat-label">Total</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value" style="color: var(--accent);">{{ status_counts.NEW }}</div>
+        <div class="stat-label">New</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value" style="color: var(--yellow);">{{ status_counts.ACCEPTED }}</div>
+        <div class="stat-label">Accepted</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value" style="color: var(--green);">{{ status_counts.READY }}</div>
+        <div class="stat-label">Ready</div>
+    </div>
+</div>
+
+<!-- Action -->
+<div class="mb-2">
+    <a href="{% url 'feedback:new' %}" class="btn btn-primary">+ New Feedback</a>
+</div>
+
+<!-- Filters -->
+<form method="get" class="card mb-2">
+    <p class="section-title">Filters</p>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <select name="status" class="form-control" style="flex: 1; min-width: 120px;">
+            <option value="">All Statuses</option>
+            {% for value, label in status_choices %}
+                <option value="{{ value }}" {% if value == current_status %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="component" class="form-control" style="flex: 1; min-width: 120px;">
+            <option value="">All Components</option>
+            {% for c in components %}
+                <option value="{{ c.id }}" {% if c.id|stringformat:"d" == current_component %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="user" class="form-control" style="flex: 1; min-width: 120px;">
+            <option value="">All Users</option>
+            {% for u in partner_users %}
+                <option value="{{ u }}" {% if u == current_user %}selected{% endif %}>{{ u }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="mt-1" style="display: flex; gap: 8px;">
+        <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+        <a href="{% url 'feedback:console' %}" class="btn btn-secondary btn-sm">Clear</a>
+    </div>
+</form>
+
+<!-- Feedback list -->
+{% for fb in feedback_list %}
+<a href="{% url 'feedback:detail' pk=fb.pk %}" class="game-card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+        <div class="card-title" style="margin-bottom: 0;">{{ fb.title }}</div>
+        <span class="badge {% if fb.status == 'NEW' %}badge-blue{% elif fb.status == 'ACCEPTED' %}badge-yellow{% elif fb.status == 'READY' %}badge-green{% else %}badge-gray{% endif %}">{{ fb.get_status_display }}</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-secondary);">
+        <span>{{ fb.component.name }}</span>
+        <span>{{ fb.user.username }} &middot; {{ fb.created_at|date:"M j, Y" }}</span>
+    </div>
+</a>
+{% empty %}
+<div class="empty-state">
+    <p>No feedback found.</p>
+    <a href="{% url 'feedback:new' %}" class="btn btn-primary">Submit First Feedback</a>
+</div>
+{% endfor %}
+{% endblock %}

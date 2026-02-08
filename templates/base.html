@@ -25,6 +25,9 @@
                     <div class="profile-dropdown" id="profile-dropdown">
                         <a href="/profile/" class="profile-dropdown-item">Profile</a>
                         <a href="/profile/preferences/" class="profile-dropdown-item">Preferences</a>
+                        {% if user.username == 'djenkins' or user.username == 'jsnyder' or user.username == 'msnyder' %}
+                        <a href="/feedback/console/" class="profile-dropdown-item">Feedback</a>
+                        {% endif %}
                         {% if user.is_staff %}
                         <a href="/bw-manage/" class="profile-dropdown-item">Admin Console</a>
                         {% endif %}

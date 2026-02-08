@@ -14,6 +14,7 @@ urlpatterns = [
     path('golf/', include('apps.golf.urls')),
     path('parlays/', include('apps.parlays.urls')),
     path('profile/', include('apps.accounts.profile_urls')),
+    path('feedback/', include('apps.feedback.urls')),
 ]
 
 if settings.DEBUG:
