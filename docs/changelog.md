@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-02-08 - Golf Mock Bet Integration
+
+**Summary:** Built out the full golf section for mock bet placement. Added golf event detail pages with golfer odds tables, per-golfer "Mock Bet" buttons, golfer search autocomplete in the mock bet modal, golf demo seed data, and updated all standing docs.
+
+### New files:
+- `templates/golf/event_detail.html` — Golf event detail page with field/odds table (desktop) and card layout (mobile), Place Mock Bet buttons per golfer
+- `apps/golf/urls.py` — Added `<slug:slug>/` route for event detail
+
+### Modified files:
+- `apps/golf/views.py` — Added `event_detail()` view with latest odds per golfer, field from GolfRound, event open/closed status
+- `templates/golf/hub.html` — Event cards now link to event detail pages; updated placeholder text
+- `templates/core/value_board.html` — Golf event links now point to `/golf/<slug>/` instead of `/golf/`
+- `templates/mockbets/includes/place_bet_modal.html` — Added golfer search autocomplete field (visible when sport=golf), debounced AJAX to `/golf/api/golfer-search/`, pre-filled golfer display
+- `static/css/style.css` — Added golf event detail styles (table, mobile cards, golfer search dropdown)
+- `apps/datahub/management/commands/seed_demo.py` — Seeds 3 golf events, 16 golfers, odds snapshots, 6 settled + 3 pending golf mock bets
+- `templates/includes/help_modal.html` — Added `golf_event` help key; updated `golf` help key with mock bet info
+- `templates/accounts/user_guide.html` — Updated golf bets section with event detail page instructions
+- `templates/accounts/whats_new.html` — Added "Golf Mock Bets" release entry
+- `docs/changelog.md` — This entry
+
+---
+
 ## 2026-02-08 - AI Insight Loading Message
 
 **Summary:** Added a visible "Acquiring your AI insights, one moment please..." message with a pulsing animation below the shimmer lines while the AI Insight is loading on game detail pages (CFB and CBB).

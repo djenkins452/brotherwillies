@@ -227,11 +227,27 @@
             {% elif help_key == 'golf' %}
                 <h4>Golf</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> Golf analytics for PGA Tour events. When active tournaments are available, you'll see tournament fields, golfer odds, and implied probabilities.</li>
+                    <li><strong>What is this page?</strong> Browse PGA Tour events. Tap any tournament to see the full field, outright odds, implied probabilities, and place mock bets on individual golfers.</li>
 
                     <li><strong>Where does this data come from?</strong> Tournament schedules and golfer fields are pulled from <strong>ESPN's public PGA API</strong>. Outright winner odds come from <strong>The Odds API</strong>, covering major tournaments (The Masters, PGA Championship, The Open Championship, and the U.S. Open). Odds are shown as American moneyline with implied probabilities calculated from those lines.</li>
 
+                    <li><strong>Mock Bets:</strong> From any event detail page, tap "Mock Bet" next to a golfer to open the placement modal. Golf supports 6 bet types: Outright Winner, Top 5/10/20 Finish, Make the Cut, and Head-to-Head Matchup. You can also search for any golfer using the search field in the modal.</li>
+
                     <li><strong>Note:</strong> Golf analytics are still being expanded. Full tournament modeling, course fit metrics, and historical performance data are coming soon.</li>
+                </ul>
+
+            {% elif help_key == 'golf_event' %}
+                <h4>Golf Event Detail</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> The detail view for a single golf tournament. Shows the full field of golfers with their outright winner odds and implied probabilities, sorted by favorites first.</li>
+
+                    <li><strong>Field &amp; Odds:</strong> Each golfer is listed with their current outright odds (American format) and implied probability. Golfers without odds data are shown at the bottom of the field.</li>
+
+                    <li><strong>Place Mock Bet:</strong> Tap "Mock Bet" next to any golfer to open the mock bet modal pre-filled with that golfer's name, odds, and the Outright Winner bet type. You can change the bet type to Top 5/10/20, Make the Cut, or Head-to-Head Matchup in the modal.</li>
+
+                    <li><strong>Golfer Search:</strong> Inside the modal, use the "Search Golfer" field to find any golfer by name. This is useful for placing bets on golfers not shown in the odds table, or for switching your selection.</li>
+
+                    <li><strong>Where does this data come from?</strong> Golfer fields come from ESPN. Outright winner odds come from The Odds API. All mock bets are simulated — no real money involved.</li>
                 </ul>
 
             {% elif help_key == 'mock_bets' %}

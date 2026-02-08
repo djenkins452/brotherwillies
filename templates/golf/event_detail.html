@@ -94,7 +94,7 @@
 </div>
 {% endif %}
 
-{% if user.is_authenticated %}
+{% if user.is_authenticated and event_open %}
 {% include "mockbets/includes/place_bet_modal.html" %}
 {% endif %}
 {% endblock %}
