@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-02-08 - Home Page → Mock Bet Analytics + Games Nav Item
+
+**Summary:** Restructured navigation so Home (`/`) shows the mock bet analytics dashboard (summary, charts, performance stats) and the previous dashboard (live games + top value picks) moves to a new "Games" nav item at `/games/`.
+
+### Modified files:
+- `apps/core/urls.py` — Added `/games/` route
+- `apps/core/views.py` — New `home()` renders analytics dashboard; old home renamed to `games()`
+- `templates/base.html` — Added "Games" nav item between Home and Value in bottom nav
+- `templates/core/home.html` — Updated title from "Dashboard" to "Games"
+- `brotherwillies/settings.py` — `LOGIN_REDIRECT_URL` updated from `/mockbets/analytics/` to `/`
+
+---
+
 ## 2026-02-08 - Spread Indicators on Game Cards
 
 **Summary:** Added spread (+/-) display next to each team name across all game cards and detail pages. Follows the industry-standard convention: negative spread = favorite, positive = underdog (e.g., Texas Tech -11.5 / West Virginia +11.5). Makes it immediately clear who is favored without reading the AI Insight.

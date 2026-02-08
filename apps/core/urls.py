@@ -5,6 +5,7 @@ app_name = 'core'
 
 urlpatterns = [
     path('', views.home, name='home'),
+    path('games/', views.games, name='games'),
     path('value/', views.value_board, name='value_board'),
     path('api/ai-insight/<str:sport>/<uuid:game_id>/', views.ai_insight_view, name='ai_insight'),
 ]

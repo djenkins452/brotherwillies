@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from django.shortcuts import render, redirect, get_object_or_404
@@ -23,6 +24,75 @@ def _is_in_season(sport):
 
 
 def home(request):
+    """Home page — mock bet analytics dashboard."""
+    if not request.user.is_authenticated:
+        return redirect('accounts:login')
+
+    from apps.mockbets.models import MockBet
+    from apps.mockbets.services.analytics import (
+        compute_kpis, compute_chart_data, compute_comparison,
+        compute_confidence_calibration, compute_edge_analysis,
+        compute_variance_stats,
+    )
+
+    bets = MockBet.objects.filter(user=request.user).select_related(
+        'cfb_game__home_team', 'cfb_game__away_team',
+        'cbb_game__home_team', 'cbb_game__away_team',
+        'golf_event', 'golf_golfer',
+    )
+
+    # Apply filters
+    sport = request.GET.get('sport')
+    if sport in ('cfb', 'cbb', 'golf'):
+        bets = bets.filter(sport=sport)
+
+    bet_type = request.GET.get('bet_type')
+    if bet_type:
+        bets = bets.filter(bet_type=bet_type)
+
+    confidence = request.GET.get('confidence')
+    if confidence in ('low', 'medium', 'high'):
+        bets = bets.filter(confidence_level=confidence)
+
+    model_source = request.GET.get('model_source')
+    if model_source in ('house', 'user'):
+        bets = bets.filter(model_source=model_source)
+
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+    if date_from:
+        bets = bets.filter(placed_at__date__gte=date_from)
+    if date_to:
+        bets = bets.filter(placed_at__date__lte=date_to)
+
+    all_bets = list(bets)
+    kpis = compute_kpis(all_bets)
+    chart_data = compute_chart_data(all_bets)
+    comparison = compute_comparison(all_bets)
+    calibration = compute_confidence_calibration(all_bets)
+    edge = compute_edge_analysis(all_bets)
+    variance = compute_variance_stats(all_bets)
+
+    return render(request, 'mockbets/analytics.html', {
+        'kpis': kpis,
+        'chart_data_json': json.dumps(chart_data),
+        'comparison': comparison,
+        'calibration': calibration,
+        'edge': edge,
+        'variance': variance,
+        'current_sport': sport or '',
+        'current_bet_type': bet_type or '',
+        'current_confidence': confidence or '',
+        'current_model_source': model_source or '',
+        'current_date_from': date_from or '',
+        'current_date_to': date_to or '',
+        'help_key': 'mock_analytics',
+        'nav_active': 'home',
+    })
+
+
+def games(request):
+    """Games dashboard — live games and top value picks."""
     if not request.user.is_authenticated:
         return redirect('accounts:login')
 
@@ -67,8 +137,8 @@ def home(request):
         'cbb_live_data': cbb_live_data,
         'cfb_games_data': cfb_games_data[:5],
         'cbb_games_data': cbb_games_data[:5],
-        'help_key': 'home',
-        'nav_active': 'home',
+        'help_key': 'games',
+        'nav_active': 'games',
     })
 
 
