@@ -139,11 +139,13 @@ _ZIP3_TO_TZ = {
     '362': 'America/Chicago', '363': 'America/Chicago', '364': 'America/Chicago',
     '365': 'America/Chicago', '366': 'America/Chicago', '367': 'America/Chicago',
     '368': 'America/Chicago', '369': 'America/Chicago',
-    # Tennessee
-    '370': 'America/New_York', '371': 'America/New_York', '372': 'America/Chicago',
-    '373': 'America/Chicago', '374': 'America/Chicago',
-    '375': 'America/Chicago', '376': 'America/Chicago', '377': 'America/Chicago',
-    '378': 'America/Chicago', '379': 'America/Chicago', '380': 'America/Chicago',
+    # Tennessee — Eastern TN (373-374 Chattanooga, 377-379 Knoxville) is Eastern;
+    # Central/Western TN (370-372 Nashville, 375-376, 380-385 Memphis) is Central
+    '370': 'America/Chicago', '371': 'America/Chicago', '372': 'America/Chicago',
+    '373': 'America/New_York', '374': 'America/New_York',
+    '375': 'America/Chicago', '376': 'America/Chicago',
+    '377': 'America/New_York', '378': 'America/New_York', '379': 'America/New_York',
+    '380': 'America/Chicago',
     '381': 'America/Chicago', '382': 'America/Chicago', '383': 'America/Chicago',
     '384': 'America/Chicago', '385': 'America/Chicago',
     # Mississippi

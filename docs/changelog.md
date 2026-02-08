@@ -2,14 +2,27 @@
 
 ---
 
+## 2026-02-08 - Move Zip Code to Preferences Page
+
+**Summary:** Zip code field moved from Profile page to Preferences page where it belongs alongside other user settings. Resolved timezone displays in green below the zip code field after saving.
+
+### Changes:
+- Moved zip code input from `profile.html` to `preferences.html`
+- Updated `PreferencesForm` to include `zip_code` with validation (5-digit US zip)
+- Updated `preferences_view` to handle zip code saving and timezone resolution
+- Removed zip code handling from `profile_view` and `PersonalInfoForm`
+- Resolved timezone shown in green text below zip code field on preferences page
+
+---
+
 ## 2026-02-08 - User Timezone Support via Zip Code
 
-**Summary:** Users can set their zip code on the profile page. The app resolves it to a US timezone and displays all game times in the user's local timezone with an abbreviation (CST, EST, etc.).
+**Summary:** Users can set their zip code to automatically resolve their timezone. All game times display in the user's local timezone with an abbreviation (CST, EST, etc.).
 
 ### Changes:
 - Added `zip_code` and `timezone` fields to UserProfile model
 - Created `apps/accounts/timezone_lookup.py` — US zip prefix (3-digit) to IANA timezone mapping
-- Profile page now has a Zip Code field; on save, timezone is resolved automatically
+- Zip code field on Preferences page; on save, timezone is resolved automatically
 - Created `brotherwillies/middleware.py` with `UserTimezoneMiddleware` — activates user's timezone per-request
 - Added middleware to settings after `AuthenticationMiddleware`
 - Created `apps/core/templatetags/tz_extras.py` with `{% tz_abbr %}` tag (outputs CST, EST, etc.)

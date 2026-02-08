@@ -81,9 +81,13 @@ brotherwillies/
     settings.py
     urls.py
     wsgi.py
+    middleware.py           # UserTimezoneMiddleware (zip-code-based TZ)
   apps/
     core/                  # Base layout, home page, help component
+      templatetags/
+        tz_extras.py       # {% tz_abbr %} template tag
     accounts/              # Auth, profile, preferences, My Model, My Stats
+      timezone_lookup.py   # US zip prefix → IANA timezone mapping
     cfb/                   # College football: models, services, views
     cbb/                   # College basketball: models, services, views
     golf/                  # Golf MVP scaffolding
@@ -132,7 +136,8 @@ brotherwillies/
 | `/accounts/register/` | Register |
 | `/accounts/login/` | Login |
 | `/accounts/logout/` | Logout |
-| `/profile/` | Profile & Preferences |
+| `/profile/` | Profile (personal info) |
+| `/profile/preferences/` | Preferences (favorites, filters, zip code/timezone) |
 | `/profile/my-model/` | My Model tuning |
 | `/profile/presets/` | Model presets |
 | `/profile/my-stats/` | Personal Statistics |
@@ -249,6 +254,8 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 12 | Seed demo data | COMPLETE |
 | 13 | Final polish + verification | COMPLETE |
 | 14 | CBB app (college basketball) | COMPLETE |
+| 15 | Season-aware dashboard + offseason banners | COMPLETE |
+| 16 | User timezone via zip code | COMPLETE |
 
 ---
 
