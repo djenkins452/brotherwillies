@@ -16,7 +16,11 @@
             {% if user.is_authenticated %}
                 <div class="profile-dropdown-wrap">
                     <button class="icon-btn profile-btn" onclick="toggleProfileDropdown()" aria-label="Profile menu">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+                        {% if user_profile.profile_picture %}
+                            <img src="{{ user_profile.profile_picture.url }}" alt="Profile" class="header-avatar">
+                        {% else %}
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+                        {% endif %}
                     </button>
                     <div class="profile-dropdown" id="profile-dropdown">
                         <a href="/profile/" class="profile-dropdown-item">Profile</a>
@@ -74,7 +78,11 @@
             <span>Golf</span>
         </a>
         <a href="/profile/" class="nav-item {% if nav_active == 'profile' %}active{% endif %}">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+            {% if user_profile.profile_picture %}
+                <img src="{{ user_profile.profile_picture.url }}" alt="Profile" class="nav-avatar">
+            {% else %}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
+            {% endif %}
             <span>Profile</span>
         </a>
     </nav>

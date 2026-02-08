@@ -85,7 +85,7 @@ a:hover {
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    border: none;
+    border: 2px solid var(--text-muted);
     background: var(--bg-card);
     color: var(--text-primary);
     display: flex;
@@ -96,9 +96,25 @@ a:hover {
     font-weight: 700;
     min-width: 44px;
     min-height: 44px;
+    overflow: hidden;
 }
 .icon-btn:hover {
     background: var(--bg-input);
+    border-color: var(--accent);
+}
+
+/* Header & nav profile picture avatars */
+.header-avatar {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+}
+.nav-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
 }
 .icon-btn svg {
     width: 22px;

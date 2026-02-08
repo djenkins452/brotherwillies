@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-02-08 - Profile picture on header/nav icons + more visible icon buttons
+
+**Summary:** Show the user's profile picture in the header profile button and bottom nav Profile tab (falls back to SVG person icon when no picture). Made the `?` help and profile icon buttons more visible with a `2px solid` border that highlights on hover.
+
+### Changes:
+- `templates/base.html` — header & bottom nav conditionally render `<img>` for profile picture
+- `apps/accounts/context_processors.py` — new `user_profile` context processor (safe `get_or_create`)
+- `brotherwillies/settings.py` — registered context processor
+- `static/css/style.css` — `.icon-btn` border, `.header-avatar`, `.nav-avatar` styles
+
+---
+
 ## 2026-02-08 - Fix 500 error on /profile/ for users missing UserProfile row
 
 **Summary:** Replaced `request.user.profile` (which crashes with `RelatedObjectDoesNotExist` if no UserProfile row exists) with `UserProfile.objects.get_or_create(user=request.user)` in all affected views.
