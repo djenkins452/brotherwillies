@@ -13,7 +13,14 @@ from apps.datahub.providers.name_utils import normalize_golfer_name
 logger = logging.getLogger(__name__)
 
 ODDS_API_BASE = 'https://api.the-odds-api.com'
-GOLF_SPORT_KEY = 'golf_pga_tour'
+
+# The Odds API uses per-tournament keys for golf (not a single PGA Tour key)
+GOLF_SPORT_KEYS = [
+    'golf_masters_tournament_winner',
+    'golf_pga_championship_winner',
+    'golf_the_open_championship_winner',
+    'golf_us_open_winner',
+]
 
 
 def american_to_prob(ml):
@@ -41,16 +48,25 @@ class GolfOddsProvider(AbstractProvider):
         )
 
     def fetch(self):
-        """Fetch PGA Tour outright odds from The Odds API."""
-        return self.client.get(
-            f'/v4/sports/{GOLF_SPORT_KEY}/odds/',
-            params={
-                'apiKey': self.api_key,
-                'regions': 'us',
-                'markets': 'outrights',
-                'oddsFormat': 'american',
-            },
-        )
+        """Fetch golf outright odds from all active golf markets."""
+        all_events = []
+        for sport_key in GOLF_SPORT_KEYS:
+            try:
+                events = self.client.get(
+                    f'/v4/sports/{sport_key}/odds/',
+                    params={
+                        'apiKey': self.api_key,
+                        'regions': 'us',
+                        'markets': 'outrights',
+                        'oddsFormat': 'american',
+                    },
+                )
+                if events:
+                    all_events.extend(events)
+            except Exception as e:
+                logger.info(f"No active odds for {sport_key}: {e}")
+                continue
+        return all_events
 
     def normalize(self, raw):
         """Transform Odds API golf response into standardized dicts."""
