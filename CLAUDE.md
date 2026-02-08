@@ -87,7 +87,7 @@ brotherwillies/
     wsgi.py
     middleware.py           # UserTimezoneMiddleware (zip-code-based TZ)
   apps/
-    core/                  # Base layout, home page, help component, AI insights
+    core/                  # Base layout, home page, help component, AI insights, SiteConfig
       services/
         ai_insights.py     # AI-powered game explanation engine (OpenAI)
       templatetags/
@@ -394,8 +394,9 @@ python manage.py refresh_data          # Runs all of the above for enabled sport
 **Architecture:**
 - Service layer: `apps/core/services/ai_insights.py`
 - AJAX endpoint: `GET /api/ai-insight/<sport>/<game_id>/` (login required)
-- Triggered by "AI Insight" button on game detail pages (CFB + CBB)
+- Auto-loads on game detail pages (CFB + CBB) — no button, shows as paragraph at top
 - Returns JSON with `content` (formatted text) and `meta` (model, timing, prompt hash)
+- Admin-configurable via `SiteConfig` model (temperature, max tokens)
 
 **How it works:**
 1. `_build_context_from_game(game, data, sport)` — extracts structured facts from game object + computed data
@@ -412,7 +413,12 @@ python manage.py refresh_data          # Runs all of the above for enabled sport
 | `southern_commentator` | Calm, folksy, confident |
 | `ex_player` | Direct, experiential |
 
-**Fact variables passed to AI** (the AI ONLY uses these — no speculation):
+**Data hierarchy** (3-tier system):
+1. **Primary data** — structured facts from the prompt (probabilities, edges, odds, ratings, injuries). Source of truth for all quantitative analysis.
+2. **General knowledge** — AI may supplement with well-known verifiable facts: conference history, championship counts, rivalries, coaching tenures, program prestige.
+3. **Data corrections** — if provided data is clearly wrong (e.g., P5 team listed as Independent), AI flags the discrepancy and uses correct information.
+
+**Fact variables passed to AI:**
 - Game context: teams, sport, time, neutral site, status, ratings, conferences
 - Market data: home/away win probabilities, spread, total, odds age
 - House model: probabilities, edge, model version
@@ -436,10 +442,19 @@ OPENAI_API_KEY=           # Required (no key = graceful error message)
 OPENAI_MODEL=gpt-4.1-mini  # Default (override with gpt-4.1 for higher quality)
 ```
 
+**Admin-configurable settings** (`/bw-manage/` → Core → Site Configuration):
+| Setting | Default | Range | Effect |
+|---------|---------|-------|--------|
+| `ai_temperature` | 0.0 | 0.0–2.0 | 0 = deterministic/factual, higher = more creative variation |
+| `ai_max_tokens` | 800 | 100–4,000 | Response length ceiling |
+
+Stored in `SiteConfig` singleton model (`apps/core/models.py`). Changes take effect on next request — no redeploy needed.
+
 **Logging:** Every request logs model used, prompt hash, response length, elapsed time. Errors log game ID, sport, and error message.
 
 **IMPORTANT — Content rules:**
-- AI uses ONLY facts provided in the prompt. No invented players, stats, or trends.
+- AI uses primary data for quantitative analysis, may supplement with general sports knowledge
+- Hard limit: no invented current-season stats, player names, or specific game scores unless certain
 - Language must be neutral per legal guardrails: "analyzed", "modeled", "suggests" — never "guaranteed", "lock", "best bet"
 - If data is missing or confidence is LOW, the AI states this explicitly
 - AI output is NOT stored as fact and NOT cached (MVP)
