@@ -138,12 +138,15 @@ brotherwillies/
 | Route | Description |
 |-------|-------------|
 | `/` | Home (dashboard preview) |
-| `/value/` | Value Board (top 3 for anon, full for auth) |
+| `/value/` | Unified Value Board with sport tabs (CBB/CFB/Golf) |
+| `/value/?sport=cbb` | Value Board — CBB tab |
+| `/value/?sport=cfb` | Value Board — CFB tab |
+| `/value/?sport=golf` | Value Board — Golf tab |
 | `/cfb/` | CFB hub (conferences + upcoming) |
 | `/cfb/conference/<slug>/` | Conference dashboard |
 | `/cfb/game/<uuid>/` | CFB game detail |
 | `/cbb/` | CBB hub (conferences + upcoming) |
-| `/cbb/value/` | CBB Value Board |
+| `/cbb/value/` | Redirects to `/value/?sport=cbb` |
 | `/cbb/conference/<slug>/` | CBB conference dashboard |
 | `/cbb/game/<uuid>/` | CBB game detail |
 | `/golf/` | Golf hub (placeholder) |

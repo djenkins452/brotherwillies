@@ -774,6 +774,49 @@ input[type="range"]::-webkit-slider-thumb {
     }
 }
 
+/* ========== Sport Tabs ========== */
+.sport-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+    border-bottom: 2px solid var(--border);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.sport-tab {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    white-space: nowrap;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.sport-tab:hover {
+    color: var(--text-primary);
+}
+.sport-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.sport-tab-count {
+    font-size: 0.7rem;
+    font-weight: 700;
+    background: rgba(79,140,255,0.15);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 10px;
+}
+.sport-tab.active .sport-tab-count {
+    background: rgba(79,140,255,0.3);
+}
+
 /* ========== AI Insight ========== */
 .ai-insight-card {
     border-left: 3px solid var(--accent);

@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-02-08 - Unified Value Board with sport tabs
+
+**Summary:** Consolidated the separate CFB and CBB Value Boards into a single unified `/value/` page with sport tabs. The tab bar auto-detects which sports have upcoming games or events and shows only those. CBB appears first during basketball season (Nov-Apr). Golf events appear when available.
+
+### Changes:
+- **`apps/core/views.py`** — new `value_board()` view with `_get_available_sports()`, `_get_cfb_value_data()`, `_get_cbb_value_data()`, `_get_golf_events()`, shared `_apply_filters()` helper, and `cbb_value_redirect()`
+- **`templates/core/value_board.html`** — new unified template with sport tabs, conditional game/event rendering per sport
+- **`apps/core/urls.py`** — added `/value/` route
+- **`brotherwillies/urls.py`** — removed old `/value/` (CFB) route, kept `/cbb/value/` as redirect to `/value/?sport=cbb`
+- **`templates/core/home.html`** — updated dashboard links to use `?sport=` params
+- **`static/css/style.css`** — new `.sport-tabs`, `.sport-tab`, `.sport-tab-count` styles
+
+### Behavior:
+- Default sport = first available (CBB in Feb, CFB in Sep, etc.)
+- `?sport=cbb|cfb|golf` query param selects tab; `?sort=` preserved per-tab
+- Old `/cbb/value/` redirects to `/value/?sport=cbb`
+- Golf tab shows upcoming events (links to Golf Hub)
+- Tab shows game count badge per sport
+- Anonymous users still see top 3 games (login gate)
+
+---
+
 ## 2026-02-08 - Branded auth pages (2-column split layout)
 
 **Summary:** Redesigned all authentication pages with a bold, modern 2-column split layout. Left column (66%) features the BW logo on a dark background with entrance animation; right column (34%) contains the form in a clean white card on light gray. Fully responsive — stacks vertically on mobile with logo on top. Added password reset flow using Django's built-in views.

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Value Board - Brother Willies{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Value Board</h1>
+
+{% if available_sports %}
+<div class="sport-tabs">
+    {% for s in available_sports %}
+    <a href="?sport={{ s.key }}"
+       class="sport-tab {% if s.key == active_sport %}active{% endif %}">
+        {{ s.label }}
+        {% if s.count %}<span class="sport-tab-count">{{ s.count }}</span>{% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if is_offseason and active_sport == 'cfb' %}
+<div class="offseason-banner">
+    <strong>Offseason</strong> &mdash; CFB season runs August through January. The games below are sample data for demonstration purposes only.
+</div>
+{% endif %}
+
+{% if show_bye_message %}
+<div class="card" style="border-color: var(--yellow);">
+    <span class="badge badge-fav">Your Team</span>
+    <span class="text-sm text-muted"> No games scheduled this week.</span>
+</div>
+{% endif %}
+
+{% if active_sport == 'golf' %}
+{# Golf events view #}
+{% for event in golf_events %}
+<a href="/golf/" class="game-card">
+    <div class="teams">
+        <span class="team-name">{{ event.name }}</span>
+    </div>
+    <div class="game-meta">
+        <span>{{ event.start_date|date:"D M d" }} &ndash; {{ event.end_date|date:"D M d" }}</span>
+    </div>
+</a>
+{% empty %}
+<div class="empty-state">
+    <p>No upcoming golf events.</p>
+</div>
+{% endfor %}
+
+{% else %}
+{# CFB / CBB games view #}
+<div class="filter-bar">
+    <a href="?sport={{ active_sport }}&sort=house_edge" class="filter-chip {% if sort_by == 'house_edge' %}active{% endif %}">House Edge</a>
+    {% if user.is_authenticated %}
+    <a href="?sport={{ active_sport }}&sort=user_edge" class="filter-chip {% if sort_by == 'user_edge' %}active{% endif %}">User Edge</a>
+    <a href="?sport={{ active_sport }}&sort=delta" class="filter-chip {% if sort_by == 'delta' %}active{% endif %}">Delta</a>
+    {% endif %}
+</div>
+
+{% for g in games_data %}
+<a href="/{{ active_sport }}/game/{{ g.game.id }}/" class="game-card">
+    {% if g.is_favorite %}
+    <span class="badge badge-fav">Your Team</span>
+    {% endif %}
+    <div class="teams">
+        <span class="team-name">{{ g.game.away_team.name }}</span>
+        <span class="vs">@</span>
+        <span class="team-name">{{ g.game.home_team.name }}</span>
+    </div>
+    <div class="game-meta">
+        {% if active_sport == 'cfb' %}
+        <span>{{ g.game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
+        {% else %}
+        <span>{{ g.game.tipoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
+        {% endif %}
+        <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
+    </div>
+    <div class="edge-row">
+        <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
+        <span>House: <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span></span>
+        {% if g.user_edge is not None %}
+        <span>You: <span class="{% if g.user_edge > 0 %}edge-positive{% elif g.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.user_edge|floatformat:1 }}%</span></span>
+        {% endif %}
+    </div>
+    {% if g.line_movement %}
+    <div class="text-sm mt-1 {% if g.line_movement == 'up' %}line-up{% else %}line-down{% endif %}">
+        Line moved
+    </div>
+    {% endif %}
+</a>
+{% empty %}
+<div class="empty-state">
+    <p>No games match your current filters.</p>
+</div>
+{% endfor %}
+
+{% if is_gated %}
+<div class="login-gate">
+    <p>Showing {{ games_data|length }} of {{ total_count }} games. Log in to unlock the full Value Board.</p>
+    <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}
