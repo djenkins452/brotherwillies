@@ -920,25 +920,25 @@ input[type="range"]::-webkit-slider-thumb {
     margin-bottom: 10px;
 }
 .ai-insight-body {
-    font-size: 0.9rem;
-    line-height: 1.6;
+    font-size: 0.88rem;
+    line-height: 1.45;
     color: var(--text-primary);
 }
 .ai-insight-body h4 {
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     font-weight: 700;
-    margin: 12px 0 4px;
+    margin: 8px 0 2px;
     color: var(--accent);
 }
 .ai-insight-body ul {
-    margin: 4px 0 8px 16px;
+    margin: 2px 0 6px 16px;
     padding: 0;
 }
 .ai-insight-body li {
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 .ai-insight-body p {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 .ai-insight-error {
     background: rgba(239,68,68,0.15);
