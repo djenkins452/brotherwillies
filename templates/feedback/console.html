@@ -52,14 +52,9 @@
             {% endfor %}
         </select>
     </div>
-    <div class="mt-1" style="display: flex; gap: 8px; align-items: center;">
+    <div class="mt-1" style="display: flex; gap: 8px;">
         <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
         <a href="{% url 'feedback:console' %}" class="btn btn-secondary btn-sm">Clear</a>
-        {% if show_archived %}
-            <a href="{% url 'feedback:console' %}" class="btn btn-secondary btn-sm" style="margin-left: auto;">Hide Archived</a>
-        {% else %}
-            <a href="{% url 'feedback:console' %}?archived=1" class="btn btn-secondary btn-sm" style="margin-left: auto;">Show Archived</a>
-        {% endif %}
     </div>
 </form>
 
@@ -78,15 +73,13 @@
                     {% endfor %}
                 </select>
             </form>
-            {% if not fb.is_archived %}
-            <form method="post" action="{% url 'feedback:archive' pk=fb.pk %}" style="margin: 0;" onsubmit="return confirm('Archive &quot;{{ fb.title|escapejs }}&quot;? It will be hidden from the list.')">
+            <form method="post" action="{% url 'feedback:delete' pk=fb.pk %}" style="margin: 0;" onsubmit="return confirm('Delete &quot;{{ fb.title|escapejs }}&quot;? This cannot be undone.')">
                 {% csrf_token %}
                 <input type="hidden" name="return_query" value="{{ request.GET.urlencode }}">
-                <button type="submit" class="fb-trash-btn" title="Archive">
+                <button type="submit" class="fb-trash-btn" title="Delete">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                 </button>
             </form>
-            {% endif %}
         </div>
     </div>
     <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-secondary);">

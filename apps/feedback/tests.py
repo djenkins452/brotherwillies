@@ -53,14 +53,15 @@ class FeedbackViewTest(TestCase):
         self.component = FeedbackComponent.objects.create(name='Design')
         self.client = Client()
 
-    def test_non_partner_gets_404_on_console(self):
+    def test_non_partner_gets_403_on_console(self):
         self.client.force_login(self.outsider)
         resp = self.client.get('/feedback/console/')
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 403)
 
-    def test_anonymous_gets_404_on_console(self):
+    def test_anonymous_redirects_to_login(self):
         resp = self.client.get('/feedback/console/')
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/accounts/login/', resp.url)
 
     def test_partner_can_view_console(self):
         self.client.force_login(self.partner)
@@ -87,7 +88,7 @@ class FeedbackViewTest(TestCase):
             'title': 'Sneaky',
             'description': 'Should fail',
         })
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 403)
         self.assertEqual(PartnerFeedback.objects.count(), 0)
 
     def test_partner_can_view_detail(self):
@@ -193,7 +194,7 @@ class FeedbackViewTest(TestCase):
             title='Blocked', description='D', status='NEW',
         )
         resp = self.client.post(f'/feedback/console/{fb.pk}/status/', {'status': 'ACCEPTED'})
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 403)
         fb.refresh_from_db()
         self.assertEqual(fb.status, 'NEW')
 
@@ -220,56 +221,34 @@ class FeedbackViewTest(TestCase):
         resp = self.client.get(f'/feedback/console/{fb.pk}/status/')
         self.assertEqual(resp.status_code, 405)
 
-    def test_archive_hides_from_list(self):
+    def test_delete_removes_from_db(self):
         self.client.force_login(self.partner)
         fb = PartnerFeedback.objects.create(
             user=self.partner, component=self.component,
-            title='Archive Me', description='D', status='NEW',
+            title='Delete Me', description='D', status='NEW',
         )
-        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/')
+        pk = fb.pk
+        resp = self.client.post(f'/feedback/console/{pk}/delete/')
         self.assertEqual(resp.status_code, 302)
-        fb.refresh_from_db()
-        self.assertTrue(fb.is_archived)
-        # Should not appear in default console list
-        resp = self.client.get('/feedback/console/')
-        self.assertEqual(len(resp.context['feedback_list']), 0)
+        self.assertFalse(PartnerFeedback.objects.filter(pk=pk).exists())
 
-    def test_archive_still_in_db(self):
-        self.client.force_login(self.partner)
-        fb = PartnerFeedback.objects.create(
-            user=self.partner, component=self.component,
-            title='Still Exists', description='D',
-        )
-        self.client.post(f'/feedback/console/{fb.pk}/archive/')
-        self.assertTrue(PartnerFeedback.objects.filter(pk=fb.pk).exists())
-
-    def test_archived_visible_with_flag(self):
-        self.client.force_login(self.partner)
-        fb = PartnerFeedback.objects.create(
-            user=self.partner, component=self.component,
-            title='Show Me', description='D', is_archived=True,
-        )
-        resp = self.client.get('/feedback/console/?archived=1')
-        self.assertEqual(len(resp.context['feedback_list']), 1)
-
-    def test_archive_non_partner_denied(self):
+    def test_delete_non_partner_denied(self):
         self.client.force_login(self.outsider)
         fb = PartnerFeedback.objects.create(
             user=self.partner, component=self.component,
             title='No Touch', description='D',
         )
-        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/')
-        self.assertEqual(resp.status_code, 404)
-        fb.refresh_from_db()
-        self.assertFalse(fb.is_archived)
+        resp = self.client.post(f'/feedback/console/{fb.pk}/delete/')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(PartnerFeedback.objects.filter(pk=fb.pk).exists())
 
-    def test_archive_preserves_query_params(self):
+    def test_delete_preserves_query_params(self):
         self.client.force_login(self.partner)
         fb = PartnerFeedback.objects.create(
             user=self.partner, component=self.component,
-            title='Query Archive', description='D',
+            title='Query Delete', description='D',
         )
-        resp = self.client.post(f'/feedback/console/{fb.pk}/archive/', {
+        resp = self.client.post(f'/feedback/console/{fb.pk}/delete/', {
             'return_query': 'status=NEW',
         })
         self.assertEqual(resp.status_code, 302)

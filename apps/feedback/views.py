@@ -28,10 +28,7 @@ def feedback_new(request):
 
 @partner_required
 def feedback_console(request):
-    show_archived = request.GET.get('archived', '') == '1'
     qs = PartnerFeedback.objects.select_related('user', 'component').all()
-    if not show_archived:
-        qs = qs.filter(is_archived=False)
 
     # Filters
     status_filter = request.GET.get('status', '')
@@ -68,7 +65,6 @@ def feedback_console(request):
         'current_component': component_filter,
         'current_user': user_filter,
         'status_choices': PartnerFeedback.Status.choices,
-        'show_archived': show_archived,
         'help_key': 'feedback',
         'nav_active': 'profile',
     })
@@ -113,11 +109,11 @@ def feedback_quick_status(request, pk):
 
 @require_POST
 @partner_required
-def feedback_archive(request, pk):
+def feedback_delete(request, pk):
     fb = get_object_or_404(PartnerFeedback, pk=pk)
-    fb.is_archived = True
-    fb.save(update_fields=['is_archived', 'updated_at'])
-    messages.success(request, f'"{fb.title}" archived.')
+    title = fb.title
+    fb.delete()
+    messages.success(request, f'"{title}" deleted.')
 
     query = request.POST.get('return_query', '')
     url = '/feedback/console/'
