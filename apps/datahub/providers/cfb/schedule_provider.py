@@ -11,6 +11,7 @@ from apps.cfb.models import Conference, Team, Game
 from apps.datahub.providers.base import AbstractProvider
 from apps.datahub.providers.client import APIClient
 from apps.datahub.providers.name_utils import normalize_team_name
+from apps.datahub.team_colors import get_team_color
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,17 @@ class CFBScheduleProvider(AbstractProvider):
                         slug='independent',
                         defaults={'name': 'Independent'},
                     )
-                Team.objects.get_or_create(
-                    slug=slugify(team_name),
-                    defaults={'name': team_name, 'conference': conf},
+                team_slug = slugify(team_name)
+                color = get_team_color(team_slug, 'cfb')
+                defaults = {'name': team_name, 'conference': conf}
+                if color:
+                    defaults['primary_color'] = color
+                team_obj, team_created = Team.objects.get_or_create(
+                    slug=team_slug, defaults=defaults,
                 )
+                if not team_created and not team_obj.primary_color and color:
+                    team_obj.primary_color = color
+                    team_obj.save(update_fields=['primary_color'])
 
             # Look up teams
             home = Team.objects.filter(slug=slugify(item['home_team'])).first()

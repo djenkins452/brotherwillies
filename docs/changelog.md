@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-02-08 - Value Board: sport icons, accordion sections, favorite team colors
+
+**Summary:** Overhauled the Value Board with three enhancements: (1) SVG sport icons next to CBB/CFB/Golf tabs, (2) collapsible accordion sections grouping games by timeframe (Today, Tomorrow, This Week, Coming Up) with a "Big Games" section for CFB showing top-rated matchups, and (3) favorite team color highlighting with a school-colored accent bar on game cards. Added `primary_color` field to both Team models with a comprehensive color dictionary covering ~133 FBS and ~360+ D1 basketball teams.
+
+### Model changes:
+- `cfb.Team` — added `primary_color` CharField (hex color, e.g. `#9E1B32`)
+- `cbb.Team` — added `primary_color` CharField (hex color, e.g. `#0051BA`)
+
+### New files:
+- `apps/datahub/team_colors.py` — comprehensive team color dictionaries (`CFB_TEAM_COLORS`, `CBB_TEAM_COLORS`) keyed by slug, plus `get_team_color()` helper
+
+### Modified files:
+- `apps/cfb/models.py` — added `primary_color` field
+- `apps/cbb/models.py` — added `primary_color` field
+- `apps/core/views.py` — added `_group_games_by_timeframe()` helper, passes `game_sections` and `favorite_team_color` to template context
+- `templates/core/value_board.html` — rewritten with SVG sport icons, accordion sections, and school-color border-top on favorite team cards
+- `static/css/style.css` — added `.sport-tab-icon`, `.vb-section` accordion styles, `.game-card-favorite`
+- `static/js/app.js` — added `toggleVBSection()` with localStorage persistence for expand/collapse state
+- `templates/includes/help_modal.html` — updated Value Board help with sections and color bar explanations
+- `apps/datahub/management/commands/seed_demo.py` — passes `primary_color` when creating teams
+- `apps/datahub/providers/cfb/schedule_provider.py` — sets `primary_color` on team creation + backfills existing teams
+- `apps/datahub/providers/cbb/schedule_provider.py` — same color population logic
+
+### Migrations:
+- `apps/cfb/migrations/0003_team_primary_color.py`
+- `apps/cbb/migrations/0003_team_primary_color.py`
+
+---
+
 ## 2026-02-08 - Merge favorites into unified section + reorder preferences
 
 **Summary:** Combined CFB, CBB, and Golf favorites into a single "Favorites" accordion section with sport sub-groups (🏈 College Football, 🏀 College Basketball, ⛳ Golf). Reordered preferences sections to: AI Persona → Favorites → Value Board Filters → Location. Badge on Favorites header dynamically shows all selected favorites. Golfer select/clear now rebuilds the combined badge correctly.

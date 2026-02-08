@@ -14,6 +14,7 @@ from apps.analytics.models import ModelResultSnapshot
 from apps.parlays.models import Parlay, ParlayLeg
 from apps.cfb.services.model_service import compute_house_win_prob
 from apps.cbb.services.model_service import compute_house_win_prob as cbb_house_prob
+from apps.datahub.team_colors import get_team_color
 
 
 class Command(BaseCommand):
@@ -79,7 +80,8 @@ class Command(BaseCommand):
         for conf_slug, team_list in teams_data.items():
             for name, slug, rating in team_list:
                 team = Team.objects.create(
-                    name=name, slug=slug, conference=conferences[conf_slug], rating=rating
+                    name=name, slug=slug, conference=conferences[conf_slug], rating=rating,
+                    primary_color=get_team_color(slug, 'cfb'),
                 )
                 all_teams.append(team)
         self.stdout.write(f'  Created {len(all_teams)} CFB teams')
@@ -183,7 +185,8 @@ class Command(BaseCommand):
         for conf_slug, team_list in cbb_teams_data.items():
             for name, slug, rating in team_list:
                 team = CBBTeam.objects.create(
-                    name=name, slug=slug, conference=cbb_conferences[conf_slug], rating=rating
+                    name=name, slug=slug, conference=cbb_conferences[conf_slug], rating=rating,
+                    primary_color=get_team_color(slug, 'cbb'),
                 )
                 all_cbb_teams.append(team)
         self.stdout.write(f'  Created {len(all_cbb_teams)} CBB teams')

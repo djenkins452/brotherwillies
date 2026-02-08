@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
@@ -173,6 +175,93 @@ def _get_golf_events():
     return list(GolfEvent.objects.filter(end_date__gte=now.date()).order_by('start_date')[:20])
 
 
+def _group_games_by_timeframe(games_data, active_sport):
+    """Group game data dicts into timeframe sections for accordion display."""
+    now = timezone.now()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+    # End of current week (Sunday)
+    days_until_sunday = (6 - today.weekday()) % 7
+    end_of_week = today + timedelta(days=days_until_sunday) if days_until_sunday > 0 else today
+
+    sections = []
+    big_game_ids = set()
+
+    # For CFB: "Big Games" section (top 5 by combined team rating)
+    if active_sport == 'cfb' and games_data:
+        big_games = sorted(
+            games_data,
+            key=lambda g: (g['game'].home_team.rating + g['game'].away_team.rating),
+            reverse=True,
+        )[:5]
+        big_game_ids = {id(g) for g in big_games}
+        if big_games:
+            sections.append({
+                'key': 'big_games',
+                'label': 'Big Games',
+                'games': big_games,
+                'count': len(big_games),
+                'default_open': True,
+            })
+
+    # Determine game time field
+    time_field = 'kickoff' if active_sport == 'cfb' else 'tipoff'
+
+    # Bucket remaining games
+    today_games = []
+    tomorrow_games = []
+    this_week_games = []
+    coming_up_games = []
+
+    for g in games_data:
+        if id(g) in big_game_ids:
+            continue
+        game_date = getattr(g['game'], time_field).date()
+        if game_date == today:
+            today_games.append(g)
+        elif game_date == tomorrow:
+            tomorrow_games.append(g)
+        elif game_date <= end_of_week:
+            this_week_games.append(g)
+        else:
+            coming_up_games.append(g)
+
+    if today_games:
+        sections.append({
+            'key': 'today',
+            'label': "Today's Games",
+            'games': today_games,
+            'count': len(today_games),
+            'default_open': True,
+        })
+    if tomorrow_games:
+        sections.append({
+            'key': 'tomorrow',
+            'label': "Tomorrow's Games",
+            'games': tomorrow_games,
+            'count': len(tomorrow_games),
+            'default_open': False,
+        })
+    if this_week_games:
+        sections.append({
+            'key': 'this_week',
+            'label': 'This Week',
+            'games': this_week_games,
+            'count': len(this_week_games),
+            'default_open': False,
+        })
+    if coming_up_games:
+        sections.append({
+            'key': 'coming_up',
+            'label': 'Coming Up',
+            'games': coming_up_games,
+            'count': len(coming_up_games),
+            'default_open': False,
+        })
+
+    return sections
+
+
 def value_board(request):
     """Unified Value Board with sport tabs."""
     available_sports = _get_available_sports()
@@ -231,16 +320,35 @@ def value_board(request):
     else:
         visible_data = games_data
 
+    # Group games into timeframe sections
+    game_sections = []
+    if sport != 'golf' and visible_data:
+        game_sections = _group_games_by_timeframe(visible_data, sport)
+
+    # Favorite team color
+    favorite_team_color = ''
+    if user:
+        try:
+            profile = user.profile
+            if sport == 'cfb' and profile.favorite_team:
+                favorite_team_color = profile.favorite_team.primary_color or ''
+            elif sport == 'cbb' and profile.favorite_cbb_team:
+                favorite_team_color = profile.favorite_cbb_team.primary_color or ''
+        except Exception:
+            pass
+
     return render(request, 'core/value_board.html', {
         'available_sports': available_sports,
         'active_sport': sport,
         'games_data': visible_data,
+        'game_sections': game_sections,
         'golf_events': golf_events,
         'total_count': total_count,
         'is_gated': is_gated,
         'sort_by': sort_by,
         'show_bye_message': show_bye_message,
         'is_offseason': is_offseason,
+        'favorite_team_color': favorite_team_color,
         'help_key': 'value_board',
         'nav_active': 'value',
     })

@@ -18,6 +18,7 @@ class Team(models.Model):
     slug = models.SlugField(unique=True)
     conference = models.ForeignKey(Conference, on_delete=models.CASCADE, related_name='teams')
     rating = models.FloatField(default=50.0)
+    primary_color = models.CharField(max_length=7, blank=True, default='')
 
     class Meta:
         ordering = ['name']

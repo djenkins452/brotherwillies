@@ -61,3 +61,51 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 });
+
+// ── Value Board Accordion ──────────────────────────────────────────────
+
+function getVBSectionState() {
+    try {
+        var stored = localStorage.getItem('vb_sections');
+        return stored ? JSON.parse(stored) : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveVBSectionState(state) {
+    try {
+        localStorage.setItem('vb_sections', JSON.stringify(state));
+    } catch (e) {}
+}
+
+function toggleVBSection(key) {
+    var section = document.querySelector('[data-section-key="' + key + '"]');
+    if (!section) return;
+
+    var isOpen = section.classList.contains('open');
+    section.classList.toggle('open');
+
+    // Save state
+    var state = getVBSectionState();
+    state[key] = !isOpen;
+    saveVBSectionState(state);
+}
+
+// Initialize accordion sections on page load
+document.addEventListener('DOMContentLoaded', function() {
+    var savedState = getVBSectionState();
+    document.querySelectorAll('.vb-section').forEach(function(section) {
+        var key = section.dataset.sectionKey;
+        var defaultOpen = section.dataset.defaultOpen === 'true';
+
+        // Use saved state if available, otherwise use default
+        var shouldOpen = (key in savedState) ? savedState[key] : defaultOpen;
+
+        if (shouldOpen) {
+            section.classList.add('open');
+        } else {
+            section.classList.remove('open');
+        }
+    });
+});

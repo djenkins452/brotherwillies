@@ -24,7 +24,18 @@
             {% elif help_key == 'value_board' %}
                 <h4>Value Board</h4>
                 <ul>
-                    <li><strong>What is the Value Board?</strong> It's a ranked list of upcoming games sorted by how much our model disagrees with the betting market. Games at the top have the largest gap between what the model thinks and what the market says — that's where the analysis gets most interesting.</li>
+                    <li><strong>What is the Value Board?</strong> It's a ranked list of upcoming games sorted by how much our model disagrees with the betting market. Games are organized into collapsible timeframe sections so you can focus on what matters most right now.</li>
+
+                    <li><strong>Game Sections</strong> — Games are grouped by when they're played:
+                        <br>- <strong>Big Games</strong> (CFB only) — Top 5 matchups ranked by combined team rating. These are the marquee games of the week.
+                        <br>- <strong>Today's Games</strong> — Games happening today (expanded by default).
+                        <br>- <strong>Tomorrow's Games</strong> — Tomorrow's slate.
+                        <br>- <strong>This Week</strong> — Remaining games this week.
+                        <br>- <strong>Coming Up</strong> — Games beyond this week.
+                        <br>Click any section header to expand or collapse it. Your preferences are saved automatically.
+                    </li>
+
+                    <li><strong>Favorite Team Highlight</strong> — Games involving your favorite team show a colored accent bar at the top of the card, using your team's school color. Set your favorite team in Preferences.</li>
 
                     <li><strong>House Edge</strong> — This is the house model's probability minus the market's implied probability. Example: If the house model says Alabama has a 72% chance to beat Auburn, and the market implies 65%, the house edge is +7.0%. A positive number means the house model thinks the team is undervalued by the market.</li>
 
