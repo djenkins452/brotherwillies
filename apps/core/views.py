@@ -91,58 +91,8 @@ def home(request):
     })
 
 
-def games(request):
-    """Games dashboard — live games and top value picks."""
-    if not request.user.is_authenticated:
-        return redirect('accounts:login')
 
-    user = request.user
-    now = timezone.now()
-
-    # Live games (currently in progress)
-    cfb_live_data = []
-    cbb_live_data = []
-
-    if _is_in_season('cfb'):
-        cfb_live = CFBGame.objects.filter(
-            status='live'
-        ).select_related('home_team', 'away_team').order_by('kickoff')
-        cfb_live_data = [cfb_compute(g, user) for g in cfb_live]
-
-    if _is_in_season('cbb'):
-        cbb_live = CBBGame.objects.filter(
-            status='live'
-        ).select_related('home_team', 'away_team').order_by('tipoff')
-        cbb_live_data = [cbb_compute(g, user) for g in cbb_live]
-
-    # Upcoming scheduled games (top value)
-    cfb_games_data = []
-    if _is_in_season('cfb'):
-        cfb_upcoming = CFBGame.objects.filter(
-            kickoff__gte=now, status='scheduled'
-        ).select_related('home_team', 'away_team').order_by('kickoff')[:5]
-        cfb_games_data = [cfb_compute(g, user) for g in cfb_upcoming]
-        cfb_games_data.sort(key=lambda g: abs(g.get('house_edge', 0)), reverse=True)
-
-    cbb_games_data = []
-    if _is_in_season('cbb'):
-        cbb_upcoming = CBBGame.objects.filter(
-            tipoff__gte=now, status='scheduled'
-        ).select_related('home_team', 'away_team').order_by('tipoff')[:5]
-        cbb_games_data = [cbb_compute(g, user) for g in cbb_upcoming]
-        cbb_games_data.sort(key=lambda g: abs(g.get('house_edge', 0)), reverse=True)
-
-    return render(request, 'core/home.html', {
-        'cfb_live_data': cfb_live_data,
-        'cbb_live_data': cbb_live_data,
-        'cfb_games_data': cfb_games_data[:5],
-        'cbb_games_data': cbb_games_data[:5],
-        'help_key': 'games',
-        'nav_active': 'games',
-    })
-
-
-# ── Unified Value Board ─────────────────────────────────────────────────
+# ── Lobby (formerly Value Board) ─────────────────────────────────────────────────
 
 def _get_available_sports():
     """Return list of sports that have upcoming games/events, ordered by relevance."""
@@ -245,17 +195,28 @@ def _get_golf_events():
     return list(GolfEvent.objects.filter(end_date__gte=now.date()).order_by('start_date')[:20])
 
 
-def _group_games_by_timeframe(games_data, active_sport):
-    """Group game data dicts into timeframe sections for accordion display."""
+def _group_games_by_timeframe(games_data, active_sport, live_data=None):
+    """Group game data dicts into timeframe sections for accordion display.
+    Only one section gets default_open=True: Live (if any), else Big Matchups, else Today, else first."""
     now = timezone.now()
     today = now.date()
     tomorrow = today + timedelta(days=1)
-    # End of current week (next Sunday inclusive)
-    # If today is Sunday (weekday 6), "this week" extends to next Sunday
     days_until_sunday = (6 - today.weekday()) % 7 or 7
     end_of_week = today + timedelta(days=days_until_sunday)
 
     sections = []
+
+    # Live Now section (always first if present)
+    if live_data:
+        sections.append({
+            'key': 'live',
+            'label': 'Live Now',
+            'games': live_data,
+            'count': len(live_data),
+            'default_open': False,  # set below
+            'is_live': True,
+        })
+
     big_game_ids = set()
 
     # "Big Games" section — top 5 by combined team rating (all team sports)
@@ -272,7 +233,7 @@ def _group_games_by_timeframe(games_data, active_sport):
                 'label': 'Big Matchups',
                 'games': big_games,
                 'count': len(big_games),
-                'default_open': True,
+                'default_open': False,
             })
 
     # Determine game time field
@@ -303,7 +264,7 @@ def _group_games_by_timeframe(games_data, active_sport):
             'label': "Today's Games",
             'games': today_games,
             'count': len(today_games),
-            'default_open': True,
+            'default_open': False,
         })
     if tomorrow_games:
         sections.append({
@@ -330,11 +291,25 @@ def _group_games_by_timeframe(games_data, active_sport):
             'default_open': False,
         })
 
+    # Smart default: only one section open — Live > Big Matchups > Today > first
+    priority = ['live', 'big_games', 'today']
+    opened = False
+    for pkey in priority:
+        for s in sections:
+            if s['key'] == pkey:
+                s['default_open'] = True
+                opened = True
+                break
+        if opened:
+            break
+    if not opened and sections:
+        sections[0]['default_open'] = True
+
     return sections
 
 
 def value_board(request):
-    """Unified Value Board with sport tabs."""
+    """Lobby — unified game board with sport tabs, live games, and value analysis."""
     available_sports = _get_available_sports()
     sport = request.GET.get('sport', '')
     sort_by = request.GET.get('sort', 'house_edge')
@@ -345,6 +320,7 @@ def value_board(request):
         sport = available_sports[0]['key'] if available_sports else 'cbb'
 
     games_data = []
+    live_data = []
     golf_events = []
     is_offseason = False
     show_bye_message = False
@@ -352,6 +328,11 @@ def value_board(request):
     if sport == 'cfb':
         games_data = _get_cfb_value_data(user, sort_by)
         is_offseason = not _is_in_season('cfb')
+        # Fetch live CFB games
+        cfb_live = CFBGame.objects.filter(
+            status='live'
+        ).select_related('home_team', 'away_team').order_by('kickoff')
+        live_data = [cfb_compute(g, user) for g in cfb_live]
         # Bye week detection
         if user:
             try:
@@ -365,6 +346,11 @@ def value_board(request):
 
     elif sport == 'cbb':
         games_data = _get_cbb_value_data(user, sort_by)
+        # Fetch live CBB games
+        cbb_live = CBBGame.objects.filter(
+            status='live'
+        ).select_related('home_team', 'away_team').order_by('tipoff')
+        live_data = [cbb_compute(g, user) for g in cbb_live]
         # Bye week detection
         if user:
             try:
@@ -391,10 +377,10 @@ def value_board(request):
     else:
         visible_data = games_data
 
-    # Group games into timeframe sections
+    # Group games into timeframe sections (include live games)
     game_sections = []
-    if sport != 'golf' and visible_data:
-        game_sections = _group_games_by_timeframe(visible_data, sport)
+    if sport != 'golf' and (visible_data or live_data):
+        game_sections = _group_games_by_timeframe(visible_data, sport, live_data=live_data)
 
     # Favorite team color
     favorite_team_color = ''
@@ -420,8 +406,8 @@ def value_board(request):
         'show_bye_message': show_bye_message,
         'is_offseason': is_offseason,
         'favorite_team_color': favorite_team_color,
-        'help_key': 'value_board',
-        'nav_active': 'value',
+        'help_key': 'lobby',
+        'nav_active': 'lobby',
     })
 
 

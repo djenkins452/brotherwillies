@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% load tz_extras %}
-{% block title %}Value Board - Brother Willies{% endblock %}
+{% block title %}Lobby - Brother Willies{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Value Board</h1>
+<h1 class="page-title">Lobby</h1>
 
 {% if available_sports %}
 <div class="sport-tabs">
@@ -73,12 +73,17 @@
     <a href="?sport={{ active_sport }}&sort=user_edge" class="filter-chip {% if sort_by == 'user_edge' %}active{% endif %}">Your Edge</a>
     <a href="?sport={{ active_sport }}&sort=delta" class="filter-chip {% if sort_by == 'delta' %}active{% endif %}">Delta</a>
     {% endif %}
+    <span style="flex:1"></span>
+    <button class="filter-chip" onclick="expandAllVB()" title="Expand all sections">Expand All</button>
+    <button class="filter-chip" onclick="collapseAllVB()" title="Collapse all sections">Collapse All</button>
 </div>
 
 {% for section in game_sections %}
 <div class="vb-section" data-section-key="{{ section.key }}" data-default-open="{{ section.default_open|yesno:'true,false' }}">
     <div class="vb-section-header" onclick="toggleVBSection('{{ section.key }}')">
-        {% if section.key == 'big_games' %}
+        {% if section.key == 'live' %}
+        <span class="live-dot"></span>
+        {% elif section.key == 'big_games' %}
         <svg class="vb-section-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         {% endif %}
         <span class="vb-section-title">{{ section.label }}</span>
@@ -88,18 +93,22 @@
     <div class="vb-section-body">
         {% for g in section.games %}
         <a href="/{{ active_sport }}/game/{{ g.game.id }}/"
-           class="game-card{% if g.is_favorite %} game-card-favorite{% endif %}"
+           class="game-card{% if section.is_live %} game-card-live{% endif %}{% if g.is_favorite %} game-card-favorite{% endif %}"
            {% if g.is_favorite and favorite_team_color %}style="--team-color: {{ favorite_team_color }}"{% endif %}>
+            {% if section.is_live %}<span class="badge badge-live">Live</span>{% endif %}
             {% if g.is_favorite %}
             <span class="badge badge-fav">Your Team</span>
             {% endif %}
             <div class="teams">
                 <span class="team-name">{{ g.game.away_team.name }}</span>
                 {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
+                {% if section.is_live and g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
                 <span class="vs">@</span>
                 <span class="team-name">{{ g.game.home_team.name }}</span>
                 {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
+                {% if section.is_live and g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
             </div>
+            {% if not section.is_live %}
             <div class="game-meta">
                 {% if active_sport == 'cfb' %}
                 <span>{{ g.game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
@@ -108,6 +117,7 @@
                 {% endif %}
                 <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
             </div>
+            {% endif %}
             {# ── Compact data grid: all values visible ── #}
             <div class="gc-grid">
                 <div class="gc-grid-header">
@@ -154,7 +164,7 @@
 
 {% if is_gated %}
 <div class="login-gate">
-    <p>Showing {{ games_data|length }} of {{ total_count }} games. Log in to unlock the full Value Board.</p>
+    <p>Showing {{ games_data|length }} of {{ total_count }} games. Log in to unlock the full Lobby.</p>
     <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
 </div>
 {% endif %}

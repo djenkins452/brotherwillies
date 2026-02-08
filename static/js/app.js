@@ -92,6 +92,24 @@ function toggleVBSection(key) {
     saveVBSectionState(state);
 }
 
+function expandAllVB() {
+    var state = {};
+    document.querySelectorAll('.vb-section').forEach(function(section) {
+        section.classList.add('open');
+        state[section.dataset.sectionKey] = true;
+    });
+    saveVBSectionState(state);
+}
+
+function collapseAllVB() {
+    var state = {};
+    document.querySelectorAll('.vb-section').forEach(function(section) {
+        section.classList.remove('open');
+        state[section.dataset.sectionKey] = false;
+    });
+    saveVBSectionState(state);
+}
+
 // Initialize accordion sections on page load
 document.addEventListener('DOMContentLoaded', function() {
     var savedState = getVBSectionState();

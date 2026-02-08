@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-02-08 - Rename Value Board to Lobby + Live Now Section
+
+**Summary:** Renamed "Value Board" to "Lobby" (industry-standard sportsbook terminology). Added Live Now accordion section at top of Lobby showing in-progress games with scores and live badges. Added Expand All / Collapse All buttons. Smart default: Live section opens if games are in progress, otherwise Big Matchups, then Today. Removed redundant Games page and nav item.
+
+### Modified files:
+- `apps/core/views.py` — Fetch live games per sport in `value_board()`, pass to `_group_games_by_timeframe()` as live section; removed `games()` view
+- `apps/core/urls.py` — Removed `/games/` route
+- `templates/core/value_board.html` — Renamed to "Lobby", added Live section with live card rendering (scores, badges), Expand/Collapse All buttons
+- `templates/base.html` — Renamed "Value" nav to "Lobby", removed "Games" nav item; nav is now Home | Lobby | CFB | CBB | Golf
+- `static/js/app.js` — Added `expandAllVB()` and `collapseAllVB()` functions
+
+---
+
 ## 2026-02-08 - Home Page → Mock Bet Analytics + Games Nav Item
 
 **Summary:** Restructured navigation so Home (`/`) shows the mock bet analytics dashboard (summary, charts, performance stats) and the previous dashboard (live games + top value picks) moves to a new "Games" nav item at `/games/`.
