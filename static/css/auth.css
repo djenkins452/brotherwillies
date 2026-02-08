@@ -54,7 +54,7 @@ html, body {
 /* ---- RIGHT COLUMN: Form panel ---- */
 .auth-form-col {
     flex: 0 0 34%;
-    background: url('/static/branding/bg_texture.jpg') center/cover no-repeat;
+    background: url('/static/branding/bg_image.png') center/cover no-repeat;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -62,11 +62,11 @@ html, body {
 }
 
 .auth-card {
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
     border-radius: 12px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
     padding: 2.5rem 2rem;
     width: 100%;
     max-width: 400px;
@@ -97,10 +97,10 @@ html, body {
 .auth-field input {
     width: 100%;
     padding: 0.75rem 1rem;
-    border: 1.5px solid #d1d5db;
+    border: 1.5px solid rgba(160, 130, 90, 0.4);
     border-radius: 8px;
     font-size: 16px; /* prevents iOS auto-zoom */
-    background: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.45);
     color: #1a1a2e;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -109,7 +109,7 @@ html, body {
     outline: none;
     border-color: #c9943a;
     box-shadow: 0 0 0 3px rgba(201, 148, 58, 0.25);
-    background: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.6);
 }
 
 /* ---- Primary button ---- */
@@ -166,21 +166,21 @@ html, body {
 }
 
 .auth-message-error {
-    background: #fef2f2;
+    background: rgba(185, 28, 28, 0.1);
     color: #b91c1c;
-    border: 1px solid #fecaca;
+    border: 1px solid rgba(185, 28, 28, 0.25);
 }
 
 .auth-message-success {
-    background: #f0fdf4;
+    background: rgba(22, 101, 52, 0.1);
     color: #166534;
-    border: 1px solid #bbf7d0;
+    border: 1px solid rgba(22, 101, 52, 0.25);
 }
 
 .auth-message-info {
-    background: #eff6ff;
+    background: rgba(30, 64, 175, 0.1);
     color: #1e40af;
-    border: 1px solid #bfdbfe;
+    border: 1px solid rgba(30, 64, 175, 0.25);
 }
 
 /* Django form field errors (<ul class="errorlist">) */

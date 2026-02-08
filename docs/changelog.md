@@ -2,15 +2,15 @@
 
 ---
 
-## 2026-02-08 - Parchment Texture Background on Auth Pages
+## 2026-02-08 - Aged Parchment Background on Auth Pages
 
-**Summary:** Added vintage parchment texture (`bg_texture.jpg`) as background on auth form panels. Card and input backgrounds use semi-transparent white with backdrop blur so the texture shows through.
+**Summary:** Applied aged parchment texture (`bg_image.png`) as background on all auth page form panels. All white/gray surfaces replaced with translucent overlays so the natural paper texture — stains, scratches, and wear — shows through. Message backgrounds switched to transparent tints, input borders warmed to match.
 
 ### New files:
-- `static/branding/bg_texture.jpg` — Vintage parchment/aged paper texture
+- `static/branding/bg_image.png` — Aged ivory parchment texture (full-res, no-repeat)
 
 ### Modified files:
-- `static/css/auth.css` — Form column uses texture background, card and inputs use translucent white with backdrop blur
+- `static/css/auth.css` — Form column background is now `bg_image.png`; card, inputs, and messages all use translucent backgrounds so parchment shows through; input borders warmed to match texture
 
 ---
 
