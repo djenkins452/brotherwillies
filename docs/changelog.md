@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-02-08 - Parchment Texture Background on Auth Pages
+
+**Summary:** Added vintage parchment texture (`bg_texture.jpg`) as background on auth form panels. Card and input backgrounds use semi-transparent white with backdrop blur so the texture shows through.
+
+### New files:
+- `static/branding/bg_texture.jpg` — Vintage parchment/aged paper texture
+
+### Modified files:
+- `static/css/auth.css` — Form column uses texture background, card and inputs use translucent white with backdrop blur
+
+---
+
 ## 2026-02-08 - Full Color Rebrand (Penny Gold)
 
 **Summary:** Replaced blue accent color scheme with rich penny gold (`#c9943a`) sampled from the BW logo lettering. Header shows logo image + "Brother Willie" text. All buttons, links, tabs, badges, charts, and auth pages use the new burnished gold palette.
