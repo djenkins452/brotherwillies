@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-02-08 - Live Data Ingestion (Step 18)
+
+**Summary:** Multi-sport live data ingestion for CBB, PGA Golf, and CFB. Provider architecture fetches from external APIs and normalizes into existing models. Entirely optional — controlled by environment toggles. Seed data still works when live data is disabled.
+
+### Data Sources:
+- **The Odds API** (free tier, 500 req/mo) — odds for all 3 sports
+- **CBBD API** (free) — CBB schedules, scores, stats
+- **CFBD API** (free, 1K req/mo) — CFB schedules, scores, stats
+- **ESPN Public API** (free, no key) — supplementary schedules/injuries, golf fields
+
+### New management commands:
+- `ingest_schedule --sport=cbb|cfb|golf` — fetch and upsert games
+- `ingest_odds --sport=cbb|cfb|golf` — fetch and append odds snapshots
+- `ingest_injuries --sport=cbb|cfb` — fetch and upsert injury impacts
+- All commands respect `LIVE_DATA_ENABLED` + per-sport toggles (use `--force` to override)
+
+### Architecture:
+- `apps/datahub/providers/` — multi-sport provider layer
+  - `base.py` — AbstractProvider (fetch → normalize → persist)
+  - `client.py` — APIClient with rate limiting, retries, exponential backoff
+  - `registry.py` — `get_provider(sport, data_type)` lookup
+  - `name_utils.py` — team/player name normalization with alias table
+  - `cbb/` — CBBScheduleProvider (CBBD), CBBOddsProvider (Odds API), CBBInjuriesProvider (ESPN)
+  - `cfb/` — CFBScheduleProvider (CFBD), CFBOddsProvider (Odds API), CFBInjuriesProvider (ESPN)
+  - `golf/` — GolfScheduleProvider (ESPN), GolfOddsProvider (Odds API)
+
+### Golf model additions:
+- `GolfOddsSnapshot` model (event, golfer, outright_odds, implied_prob)
+- `external_id` field on GolfEvent and Golfer
+- `slug` field on GolfEvent
+
+### Environment toggles (settings.py):
+- `LIVE_DATA_ENABLED` — master switch
+- `LIVE_CBB_ENABLED`, `LIVE_CFB_ENABLED`, `LIVE_GOLF_ENABLED` — per-sport
+- `ODDS_API_KEY`, `CFBD_API_KEY`, `CBBD_API_KEY`
+
+### New files (19):
+- `apps/datahub/providers/__init__.py`, `base.py`, `client.py`, `registry.py`, `name_utils.py`
+- `apps/datahub/providers/cbb/__init__.py`, `schedule_provider.py`, `odds_provider.py`, `injuries_provider.py`
+- `apps/datahub/providers/cfb/__init__.py`, `schedule_provider.py`, `odds_provider.py`, `injuries_provider.py`
+- `apps/datahub/providers/golf/__init__.py`, `schedule_provider.py`, `odds_provider.py`
+- `apps/datahub/management/commands/ingest_schedule.py`, `ingest_odds.py`, `ingest_injuries.py`
+
+### Modified files:
+- `apps/golf/models.py` — added GolfOddsSnapshot, external_id, slug fields
+- `apps/golf/admin.py` — registered GolfOddsSnapshot
+- `brotherwillies/settings.py` — added live data toggles and API key settings
+- `.env.example` — added live data env vars
+
+### Migration:
+- `golf.0002` — GolfOddsSnapshot model, external_id + slug fields
+
+### Verified:
+- `manage.py check` (0 issues), migrations applied, seed_demo works, all commands registered
+
+---
+
 ## 2026-02-08 - Security Hardening & Registration Disabled
 
 **Summary:** Disabled public registration, hardened login against brute-force bots, obscured admin URL, and added HSTS headers.

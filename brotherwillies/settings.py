@@ -122,6 +122,15 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
+# --- Live Data Ingestion ---
+LIVE_DATA_ENABLED = os.environ.get('LIVE_DATA_ENABLED', 'false').lower() == 'true'
+LIVE_CBB_ENABLED = os.environ.get('LIVE_CBB_ENABLED', 'false').lower() == 'true'
+LIVE_CFB_ENABLED = os.environ.get('LIVE_CFB_ENABLED', 'false').lower() == 'true'
+LIVE_GOLF_ENABLED = os.environ.get('LIVE_GOLF_ENABLED', 'false').lower() == 'true'
+ODDS_API_KEY = os.environ.get('ODDS_API_KEY', '')
+CFBD_API_KEY = os.environ.get('CFBD_API_KEY', '')
+CBBD_API_KEY = os.environ.get('CBBD_API_KEY', '')
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGIN_URL = '/accounts/login/'

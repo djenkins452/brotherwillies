@@ -72,7 +72,8 @@ python manage.py check
 - Dark theme, card-based, mobile-first UI
 - `zipcodes` library for per-zip-code timezone resolution
 - `django-axes` for login brute-force protection
-- No external APIs yet (deterministic seed data)
+- Live data via The Odds API, CFBD, CBBD, ESPN (optional, env-driven)
+- `requests` for API calls, `cfbd`/`cbbd` Python SDKs
 
 ## Project Structure
 
@@ -95,7 +96,15 @@ brotherwillies/
     golf/                  # Golf MVP scaffolding
     parlays/               # Parlay builder/scoring (analytics only)
     analytics/             # Snapshots, CLV tracking, interaction logging
-    datahub/               # Seed loader, future data ingestion
+    datahub/               # Seed loader + live data ingestion
+      providers/             # Multi-sport provider architecture
+        base.py              # Abstract provider (fetch/normalize/persist)
+        registry.py          # Provider lookup by sport/type
+        client.py            # Shared HTTP client (rate limiting, retries)
+        name_utils.py        # Team/player name normalization + aliases
+        cbb/                 # CBB schedule, odds, injuries providers
+        cfb/                 # CFB schedule, odds, injuries providers
+        golf/                # Golf schedule, odds providers
   static/
     css/style.css          # Global dark theme + responsive styles
     js/app.js              # Minimal vanilla JS (help modal, nav, etc.)
@@ -117,7 +126,7 @@ brotherwillies/
 | `golf` | MVP scaffold (models + placeholder pages) |
 | `parlays` | Parlay builder/scoring, correlation detection (analytics only) |
 | `analytics` | ModelResultSnapshot, UserGameInteraction, CLV tracking |
-| `datahub` | seed_demo command, future data ingestion |
+| `datahub` | Seed loader, live data ingestion, multi-sport provider layer |
 
 ---
 
@@ -259,6 +268,39 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 15 | Season-aware dashboard + offseason banners | COMPLETE |
 | 16 | User timezone via zip code | COMPLETE |
 | 17 | Security hardening & registration disabled | COMPLETE |
+| 18 | Live data ingestion (CBB → Golf → CFB) | IN PROGRESS |
+
+---
+
+## Live Data Ingestion
+
+**Architecture:** Multi-sport provider layer in `datahub/providers/`
+
+**Data Sources:**
+| Source | Purpose | Sports | Cost |
+|--------|---------|--------|------|
+| The Odds API | Odds (ML, spread, total) | CFB, CBB, PGA | Free (500 req/mo) |
+| CBBD API | Schedules, scores, stats, lines | CBB | Free |
+| CFBD API | Schedules, scores, stats, lines | CFB | Free (1K/mo) |
+| ESPN Public API | Supplementary schedules, scores | All | Free, no key |
+
+**Environment Toggles:**
+```
+LIVE_DATA_ENABLED=false          # Master switch (false = seed data only)
+LIVE_CBB_ENABLED=false           # Per-sport toggles
+LIVE_CFB_ENABLED=false
+LIVE_GOLF_ENABLED=false
+ODDS_API_KEY=                    # The Odds API key
+CFBD_API_KEY=                    # CollegeFootballData.com key
+CBBD_API_KEY=                    # CollegeBasketballData.com key
+```
+
+**Management Commands:**
+```bash
+python manage.py ingest_schedule --sport=cbb|cfb|golf
+python manage.py ingest_odds --sport=cbb|cfb|golf
+python manage.py ingest_injuries --sport=cbb|cfb
+```
 
 ---
 
