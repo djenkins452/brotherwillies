@@ -148,7 +148,7 @@ brotherwillies/
 | `golf` | Golf events, golfers, odds, golfer search API |
 | `parlays` | Parlay builder/scoring, correlation detection (analytics only) |
 | `analytics` | ModelResultSnapshot, UserGameInteraction, CLV tracking |
-| `mockbets` | Mock bet simulation — place/track/review simulated bets, settlement engine, decision analytics |
+| `mockbets` | Mock bet simulation — place/track/review simulated bets, settlement engine, analytics dashboard with Chart.js, AI performance commentary, decision analytics |
 | `feedback` | Partner-only feedback system (submit, review, status pipeline) |
 | `datahub` | Seed loader, live data ingestion, multi-sport provider layer |
 
@@ -184,7 +184,10 @@ brotherwillies/
 | `/parlays/new/` | Build parlay |
 | `/parlays/<uuid>/` | Parlay detail |
 | `/mockbets/` | My Mock Bets dashboard |
+| `/mockbets/analytics/` | Mock Bet Analytics (charts, comparison, variance) |
 | `/mockbets/place/` | Place mock bet (AJAX) |
+| `/mockbets/flat-bet-sim/` | Flat-bet what-if simulation (AJAX) |
+| `/mockbets/ai-commentary/` | AI performance commentary (AJAX) |
 | `/mockbets/<uuid>/` | Mock bet detail |
 | `/feedback/console/` | Feedback dashboard (partner-only) |
 | `/api/ai-insight/<sport>/<uuid>/` | AI Insight AJAX endpoint |

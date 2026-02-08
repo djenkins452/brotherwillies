@@ -11,7 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
-        <li style="padding:4px 0;"><a href="#feb-8-latest">Feb 8, 2026 &mdash; Latest</a> <span class="text-sm text-muted">&bull; Mock Bets simulation system</span></li>
+        <li style="padding:4px 0;"><a href="#feb-8-latest">Feb 8, 2026 &mdash; Latest</a> <span class="text-sm text-muted">&bull; Mock Bets: full simulation + analytics + AI commentary</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-afternoon">Feb 8, 2026 &mdash; Afternoon</a> <span class="text-sm text-muted">&bull; User Guide, AI fixes, Value Board overhaul</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-morning">Feb 8, 2026 &mdash; Morning</a> <span class="text-sm text-muted">&bull; Preferences redesign, AI engine, feedback system</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-early">Feb 8, 2026 &mdash; Early</a> <span class="text-sm text-muted">&bull; Unified Value Board, branded auth, live data</span></li>
@@ -25,9 +25,9 @@
 {# ═══════════════════════════════════════════════════════════════════ #}
 <div class="card mb-2" id="feb-8-latest">
     <p class="card-title">Feb 8, 2026 &mdash; Latest</p>
-    <p class="text-sm text-muted" style="margin-bottom:12px;">Mock Bet simulation and What's New page</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Mock Bet simulation, analytics dashboard, AI performance review</p>
 
-    {# Mock Bets #}
+    {# Mock Bets - Core #}
     <div style="margin-bottom:16px;">
         <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Mock Bet Simulation</p>
         <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
@@ -42,6 +42,62 @@
         </ul>
         <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;font-style:italic;">
             No real money is involved. All figures are labeled "Simulated." This is a decision-quality analysis tool.
+        </p>
+    </div>
+
+    {# Analytics Dashboard #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Analytics Dashboard</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            A comprehensive <a href="/mockbets/analytics/">analytics dashboard</a> for your mock betting history,
+            accessible from the "Analytics Dashboard" button on the My Mock Bets page.
+        </p>
+        <ul style="padding-left:16px;margin-top:4px;">
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>8 KPI cards</strong> &mdash; Total bets, W-L-P record, win rate, simulated net P/L, ROI, avg odds, avg implied probability</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>5 interactive charts</strong> &mdash; Cumulative P/L, Rolling Win % (10-bet window), ROI by Sport, Performance by Confidence, and Odds Distribution (scatter plot)</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Full filters</strong> &mdash; Sport, bet type, confidence level, model source, and date range</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>House vs User comparison</strong> &mdash; Head-to-head table comparing bets made with each model: win rate, ROI, avg odds, volatility</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Confidence calibration</strong> &mdash; Expected vs actual win rate by confidence level (Low/Medium/High)</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Edge analysis</strong> &mdash; Win rate and ROI by expected edge bucket (negative, 0-3%, 3-7%, 7%+)</li>
+        </ul>
+    </div>
+
+    {# Variance & Flat-Bet #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Variance Testing & What-If Simulation</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Stress-test your simulated results with variance metrics and a flat-bet simulation.
+        </p>
+        <ul style="padding-left:16px;margin-top:4px;">
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Streaks</strong> &mdash; Longest win and loss streaks</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Drawdown</strong> &mdash; Maximum simulated drawdown from peak</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Volatility</strong> &mdash; Standard deviation of bet-by-bet returns</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Best/worst stretches</strong> &mdash; Best and worst N-bet stretches by P/L</li>
+            <li class="text-sm" style="color:var(--text-secondary);line-height:1.8;"><strong>Flat-bet simulation</strong> &mdash; Enter a flat stake and see what your results would look like with uniform sizing. Removes stake-size effects from the analysis.</li>
+        </ul>
+    </div>
+
+    {# AI Performance Commentary #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">AI Performance Commentary</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Tap "Generate Commentary" on the analytics dashboard to get an AI-generated review of your simulated
+            betting performance. The AI uses the same persona system as game insights (Analyst, New York Bookie,
+            Southern Commentator, or Ex-Player) &mdash; set your preference in
+            <a href="/profile/preferences/">Preferences</a>.
+        </p>
+        <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+            The AI reviews your KPIs, confidence calibration, edge analysis, and variance data to give you
+            strengths, areas to watch, and a bottom-line assessment. Requires at least 5 settled bets.
+        </p>
+    </div>
+
+    {# Demo Data #}
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Demo Mock Bets</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The demo user now comes pre-loaded with ~30 mock bets (15 CFB, 10 CBB, 5 pending) so the
+            analytics dashboard has data immediately. Settlement logs and decision reviews are included.
         </p>
     </div>
 
