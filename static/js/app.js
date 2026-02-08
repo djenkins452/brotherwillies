@@ -110,17 +110,13 @@ function collapseAllVB() {
     saveVBSectionState(state);
 }
 
-// Initialize accordion sections on page load
+// Initialize accordion sections on page load — always use server defaults
 document.addEventListener('DOMContentLoaded', function() {
-    var savedState = getVBSectionState();
+    // Clear saved state so server-side smart defaults always apply
+    saveVBSectionState({});
     document.querySelectorAll('.vb-section').forEach(function(section) {
-        var key = section.dataset.sectionKey;
         var defaultOpen = section.dataset.defaultOpen === 'true';
-
-        // Use saved state if available, otherwise use default
-        var shouldOpen = (key in savedState) ? savedState[key] : defaultOpen;
-
-        if (shouldOpen) {
+        if (defaultOpen) {
             section.classList.add('open');
         } else {
             section.classList.remove('open');

@@ -21,18 +21,19 @@
                     <li><strong>Where does this data come from?</strong> Game schedules and scores are pulled from ESPN's public API (CBB) and CollegeFootballData.com (CFB). Betting odds (moneyline, point spread, over/under) come from The Odds API, which aggregates real-time lines from major US sportsbooks. Injury data is sourced from ESPN's injury reports. Our model runs its own calculations on top of this data to produce the probabilities and edge numbers you see. When live data is not available (offseason or demo mode), sample data is shown instead — look for an "Offseason" banner at the top of the page.</li>
                 </ul>
 
-            {% elif help_key == 'value_board' %}
-                <h4>Value Board</h4>
+            {% elif help_key == 'lobby' or help_key == 'value_board' %}
+                <h4>Lobby</h4>
                 <ul>
-                    <li><strong>What is the Value Board?</strong> It's a ranked list of upcoming games sorted by how much our model disagrees with the betting market. Games are organized into collapsible timeframe sections so you can focus on what matters most right now.</li>
+                    <li><strong>What is the Lobby?</strong> It's a ranked list of upcoming games sorted by how much our model disagrees with the betting market. Games are organized into collapsible timeframe sections so you can focus on what matters most right now.</li>
 
-                    <li><strong>Game Sections</strong> — Games are grouped by when they're played:
+                    <li><strong>Game Sections</strong> — Games are grouped into sections:
+                        <br>- <strong>Live Now</strong> — Games currently in progress with real-time scores and a pulsing LIVE badge. Always visible (shows "No live games right now" when nothing is in progress).
                         <br>- <strong>Big Matchups</strong> — Top 5 matchups ranked by combined team rating. These are the marquee games of the week.
-                        <br>- <strong>Today's Games</strong> — Games happening today (expanded by default).
+                        <br>- <strong>Today's Games</strong> — Games happening today.
                         <br>- <strong>Tomorrow's Games</strong> — Tomorrow's slate.
                         <br>- <strong>This Week</strong> — Remaining games this week.
                         <br>- <strong>Coming Up</strong> — Games beyond this week.
-                        <br>Click any section header to expand or collapse it. Your preferences are saved automatically.
+                        <br>Click any section header to expand or collapse it. Use "Expand All" / "Collapse All" to open or close every section at once. One section is expanded by default: Live (if games are in progress), otherwise Big Matchups, then Today.
                     </li>
 
                     <li><strong>Favorite Team Highlight</strong> — Games involving your favorite team show a colored accent bar at the top of the card, using your team's school color. Set your favorite team in Preferences.</li>

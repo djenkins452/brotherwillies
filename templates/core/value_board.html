@@ -153,6 +153,12 @@
             </div>
             {% endif %}
         </a>
+        {% empty %}
+        {% if section.is_live %}
+        <div class="empty-state">
+            <p class="text-sm text-muted">No live games right now.</p>
+        </div>
+        {% endif %}
         {% endfor %}
     </div>
 </div>

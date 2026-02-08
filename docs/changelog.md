@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-02-08 - Lobby: Always Show Live Section + Fix Default Expand
+
+**Summary:** Live Now section now always appears in the Lobby (even with 0 live games), showing "No live games right now" when empty. Fixed accordion default-open logic — server-side smart defaults (Live > Big Matchups > Today) now always apply on page load instead of being overridden by stale localStorage state.
+
+### Modified files:
+- `apps/core/views.py` — Always create Live section in `_group_games_by_timeframe()`, always call grouping for team sports
+- `templates/core/value_board.html` — Added empty state message for Live section with 0 games
+- `static/js/app.js` — Clear localStorage on load so server-side `default_open` always applies
+
+---
+
 ## 2026-02-08 - Rename Value Board to Lobby + Live Now Section
 
 **Summary:** Renamed "Value Board" to "Lobby" (industry-standard sportsbook terminology). Added Live Now accordion section at top of Lobby showing in-progress games with scores and live badges. Added Expand All / Collapse All buttons. Smart default: Live section opens if games are in progress, otherwise Big Matchups, then Today. Removed redundant Games page and nav item.

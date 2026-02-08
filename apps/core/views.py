@@ -206,16 +206,15 @@ def _group_games_by_timeframe(games_data, active_sport, live_data=None):
 
     sections = []
 
-    # Live Now section (always first if present)
-    if live_data:
-        sections.append({
-            'key': 'live',
-            'label': 'Live Now',
-            'games': live_data,
-            'count': len(live_data),
-            'default_open': False,  # set below
-            'is_live': True,
-        })
+    # Live Now section (always shown, even with 0 games)
+    sections.append({
+        'key': 'live',
+        'label': 'Live Now',
+        'games': live_data or [],
+        'count': len(live_data or []),
+        'default_open': False,  # set below
+        'is_live': True,
+    })
 
     big_game_ids = set()
 
@@ -377,9 +376,9 @@ def value_board(request):
     else:
         visible_data = games_data
 
-    # Group games into timeframe sections (include live games)
+    # Group games into timeframe sections (always for team sports, includes Live section)
     game_sections = []
-    if sport != 'golf' and (visible_data or live_data):
+    if sport != 'golf':
         game_sections = _group_games_by_timeframe(visible_data, sport, live_data=live_data)
 
     # Favorite team color
