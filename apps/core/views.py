@@ -180,15 +180,16 @@ def _group_games_by_timeframe(games_data, active_sport):
     now = timezone.now()
     today = now.date()
     tomorrow = today + timedelta(days=1)
-    # End of current week (Sunday)
-    days_until_sunday = (6 - today.weekday()) % 7
-    end_of_week = today + timedelta(days=days_until_sunday) if days_until_sunday > 0 else today
+    # End of current week (next Sunday inclusive)
+    # If today is Sunday (weekday 6), "this week" extends to next Sunday
+    days_until_sunday = (6 - today.weekday()) % 7 or 7
+    end_of_week = today + timedelta(days=days_until_sunday)
 
     sections = []
     big_game_ids = set()
 
-    # For CFB: "Big Games" section (top 5 by combined team rating)
-    if active_sport == 'cfb' and games_data:
+    # "Big Games" section — top 5 by combined team rating (all team sports)
+    if active_sport in ('cfb', 'cbb') and games_data:
         big_games = sorted(
             games_data,
             key=lambda g: (g['game'].home_team.rating + g['game'].away_team.rating),
@@ -198,7 +199,7 @@ def _group_games_by_timeframe(games_data, active_sport):
         if big_games:
             sections.append({
                 'key': 'big_games',
-                'label': 'Big Games',
+                'label': 'Big Matchups',
                 'games': big_games,
                 'count': len(big_games),
                 'default_open': True,
