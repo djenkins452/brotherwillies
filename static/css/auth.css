@@ -1,0 +1,255 @@
+/* ============================================
+   Auth Pages: 2-column split layout
+   Left: dark branded logo | Right: light form
+   ============================================ */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.auth-wrapper {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* ---- LEFT COLUMN: Dark brand panel ---- */
+.auth-brand {
+    flex: 0 0 66%;
+    background: #0a0e1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    overflow: hidden;
+}
+
+.auth-logo {
+    max-width: 66%;
+    animation: logoEnter 1.2s ease-out forwards;
+    opacity: 0;
+}
+
+.auth-logo img {
+    width: 100%;
+    height: auto;
+    filter: drop-shadow(0 0 0 rgba(0, 150, 255, 0));
+    animation: logoGlow 1.2s ease-out forwards;
+}
+
+@keyframes logoEnter {
+    0%   { opacity: 0; transform: translateY(20px) scale(0.95); }
+    60%  { opacity: 1; transform: translateY(-4px) scale(1.01); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes logoGlow {
+    0%   { filter: drop-shadow(0 0 0 rgba(0, 150, 255, 0)); }
+    60%  { filter: drop-shadow(0 0 18px rgba(0, 150, 255, 0.45)); }
+    100% { filter: drop-shadow(0 0 6px rgba(0, 150, 255, 0.25)); }
+}
+
+/* ---- RIGHT COLUMN: Form panel ---- */
+.auth-form-col {
+    flex: 0 0 34%;
+    background: #f2f2f2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+}
+
+.auth-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    padding: 2.5rem 2rem;
+    width: 100%;
+    max-width: 400px;
+}
+
+.auth-card h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 1.5rem;
+}
+
+/* ---- Form fields ---- */
+.auth-field {
+    margin-bottom: 1.25rem;
+}
+
+.auth-field label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.auth-field input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 1.5px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 16px; /* prevents iOS auto-zoom */
+    background: #fafafa;
+    color: #1a1a2e;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.auth-field input:focus {
+    outline: none;
+    border-color: #4f6ef7;
+    box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.15);
+    background: #fff;
+}
+
+/* ---- Primary button ---- */
+.auth-btn {
+    display: block;
+    width: 100%;
+    padding: 0.85rem;
+    background: #4f6ef7;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    margin-top: 0.5rem;
+}
+
+.auth-btn:hover {
+    background: #3b5de7;
+}
+
+.auth-btn:active {
+    transform: scale(0.98);
+}
+
+/* ---- Links below form ---- */
+.auth-links {
+    margin-top: 1.25rem;
+    text-align: center;
+}
+
+.auth-links a {
+    color: #4f6ef7;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.auth-links a:hover {
+    text-decoration: underline;
+}
+
+/* ---- Messages / errors ---- */
+.auth-messages {
+    margin-bottom: 1rem;
+}
+
+.auth-message {
+    padding: 0.6rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.auth-message-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+.auth-message-success {
+    background: #f0fdf4;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.auth-message-info {
+    background: #eff6ff;
+    color: #1e40af;
+    border: 1px solid #bfdbfe;
+}
+
+/* Django form field errors (<ul class="errorlist">) */
+.auth-field .errorlist {
+    list-style: none;
+    padding: 0;
+    margin: 0.3rem 0 0 0;
+}
+
+.auth-field .errorlist li {
+    color: #b91c1c;
+    font-size: 0.8rem;
+}
+
+/* Help text under password fields */
+.auth-field .helptext {
+    display: block;
+    font-size: 0.75rem;
+    color: #888;
+    margin-top: 0.3rem;
+    line-height: 1.4;
+}
+
+.auth-field .helptext ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+/* ---- MOBILE: stack vertically ---- */
+@media (max-width: 768px) {
+    .auth-wrapper {
+        flex-direction: column;
+    }
+
+    .auth-brand {
+        flex: none;
+        padding: 2rem 1.5rem;
+        min-height: 200px;
+    }
+
+    .auth-logo {
+        max-width: 50%;
+    }
+
+    .auth-form-col {
+        flex: 1;
+        padding: 1.5rem 1rem;
+    }
+
+    .auth-card {
+        padding: 2rem 1.5rem;
+        max-width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .auth-brand {
+        padding: 1.5rem 1rem;
+        min-height: 160px;
+    }
+
+    .auth-logo {
+        max-width: 55%;
+    }
+
+    .auth-card {
+        padding: 1.5rem 1.25rem;
+    }
+
+    .auth-card h1 {
+        font-size: 1.3rem;
+    }
+}

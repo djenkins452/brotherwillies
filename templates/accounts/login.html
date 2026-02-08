@@ -1,22 +1,49 @@
-{% extends "base.html" %}
-{% block title %}Login - Brother Willies{% endblock %}
-
-{% block content %}
-<h1 class="page-title">Log In</h1>
-
-<div class="card">
-    <form method="post">
-        {% csrf_token %}
-        <div class="form-group">
-            <label for="username">Username</label>
-            <input type="text" id="username" name="username" class="form-control" required autofocus>
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In - Brother Willies</title>
+    <link rel="stylesheet" href="{% static 'css/auth.css' %}">
+</head>
+<body>
+    <div class="auth-wrapper">
+        <div class="auth-brand">
+            <div class="auth-logo">
+                <img src="{% static 'branding/bw_logo.png' %}" alt="BW's Logo">
+            </div>
         </div>
-        <div class="form-group">
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" class="form-control" required>
-        </div>
-        <button type="submit" class="btn btn-primary btn-block">Log In</button>
-    </form>
+        <div class="auth-form-col">
+            <div class="auth-card">
+                <h1>Sign In</h1>
 
-</div>
-{% endblock %}
+                {% if messages %}
+                <div class="auth-messages">
+                    {% for message in messages %}
+                    <div class="auth-message auth-message-{{ message.tags }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="auth-field">
+                        <label for="username">Username or Email</label>
+                        <input type="text" id="username" name="username" required autofocus>
+                    </div>
+                    <div class="auth-field">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+                    <button type="submit" class="auth-btn">Sign In</button>
+                </form>
+
+                <div class="auth-links">
+                    <a href="{% url 'accounts:password_reset' %}">Forgot your password?</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

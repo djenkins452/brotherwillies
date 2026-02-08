@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-02-08 - Branded auth pages (2-column split layout)
+
+**Summary:** Redesigned all authentication pages with a bold, modern 2-column split layout. Left column (66%) features the BW logo on a dark background with entrance animation; right column (34%) contains the form in a clean white card on light gray. Fully responsive — stacks vertically on mobile with logo on top. Added password reset flow using Django's built-in views.
+
+### Updated pages:
+- **Sign In** (`/accounts/login/`) — standalone layout with logo, username/email + password, "Forgot your password?" link
+- **Password Reset** (`/accounts/password-reset/`) — email input, sends reset link
+- **Password Reset Confirm** (`/accounts/password-reset/<uidb64>/<token>/`) — new password + confirm
+- **Password Reset Done** (`/accounts/password-reset/done/`) — confirmation message
+- **Password Reset Complete** (`/accounts/password-reset/complete/`) — success with sign-in link
+
+### New/modified files:
+- `static/css/auth.css` — full 2-column layout CSS with responsive breakpoints and logo animations
+- `static/branding/bw_logo.png` — logo asset (renamed from double extension)
+- `templates/accounts/login.html` — standalone auth layout (no longer extends base.html)
+- `templates/registration/password_reset_form.html` — new template
+- `templates/registration/password_reset_confirm.html` — new template
+- `templates/registration/password_reset_done.html` — new template
+- `templates/registration/password_reset_complete.html` — new template
+- `apps/accounts/urls.py` — added password reset URL patterns with namespaced success URLs
+
+### Design:
+- No registration links or sign-up messaging (per security policy)
+- 16px min font on inputs (prevents iOS auto-zoom)
+- Logo entrance animation with subtle glow effect
+- Mobile: stacks vertically, logo scales down
+- All pages are self-contained (no header/footer/nav chrome)
+
+---
+
 ## 2026-02-08 - Partner feedback system
 
 **Summary:** Added a private, partner-only feedback system for internal product operations. Three authorized partners (djenkins, jsnyder, msnyder) can submit structured feedback targeting specific site components, review it through a status pipeline (New → Accepted → Ready → Dismissed), and manage everything via a custom admin console. The system is future-safe for AI-driven action — feedback marked as READY exposes a structured `is_ready_for_ai` property. No public visibility, no Django Admin usage, no auto-modifications.
