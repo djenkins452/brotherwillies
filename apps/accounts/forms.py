@@ -40,6 +40,7 @@ class PreferencesForm(forms.ModelForm):
             'always_include_favorite_team',
             'preference_spread_min', 'preference_spread_max',
             'preference_odds_min', 'preference_odds_max', 'preference_min_edge',
+            'ai_persona',
         ]
 
     def __init__(self, *args, **kwargs):
@@ -55,6 +56,7 @@ class PreferencesForm(forms.ModelForm):
             'placeholder': 'e.g. 35487',
         })
         self.fields['zip_code'].help_text = 'US zip code — sets your timezone for game times'
+        self.fields['ai_persona'].help_text = 'Controls the tone of AI Insight on game detail pages'
 
     def clean_zip_code(self):
         val = self.cleaned_data.get('zip_code', '').strip()

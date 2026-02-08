@@ -74,6 +74,7 @@ python manage.py check
 - `django-axes` for login brute-force protection
 - Live data via The Odds API, CFBD, CBBD, ESPN (optional, env-driven)
 - `requests` for API calls, `cfbd`/`cbbd` Python SDKs
+- `openai` for AI Insight generation (OpenAI Chat Completions API)
 
 ## Project Structure
 
@@ -86,7 +87,9 @@ brotherwillies/
     wsgi.py
     middleware.py           # UserTimezoneMiddleware (zip-code-based TZ)
   apps/
-    core/                  # Base layout, home page, help component
+    core/                  # Base layout, home page, help component, AI insights
+      services/
+        ai_insights.py     # AI-powered game explanation engine (OpenAI)
       templatetags/
         tz_extras.py       # {% tz_abbr %} template tag
     accounts/              # Auth, profile, preferences, My Model, My Stats
@@ -156,6 +159,7 @@ brotherwillies/
 | `/parlays/` | Parlay hub |
 | `/parlays/new/` | Build parlay |
 | `/parlays/<uuid>/` | Parlay detail |
+| `/api/ai-insight/<sport>/<uuid>/` | AI Insight AJAX endpoint (login required) |
 
 ---
 
@@ -273,6 +277,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 17 | Security hardening & registration disabled | COMPLETE |
 | 18 | Live data ingestion (CBB → Golf → CFB) | COMPLETE |
 | 19 | Analytics pipeline (snapshots, scores, outcomes, CLV, performance) | COMPLETE |
+| 20 | AI Insight engine (OpenAI-powered game explanations + personas) | COMPLETE |
 
 ---
 
@@ -297,6 +302,8 @@ LIVE_GOLF_ENABLED=false
 ODDS_API_KEY=                    # The Odds API key
 CFBD_API_KEY=                    # CollegeFootballData.com key
 CBBD_API_KEY=                    # CollegeBasketballData.com key
+OPENAI_API_KEY=                  # OpenAI API key (for AI Insight feature)
+OPENAI_MODEL=gpt-4.1-mini       # OpenAI model (default: gpt-4.1-mini)
 ```
 
 **Management Commands:**
@@ -374,6 +381,65 @@ python manage.py refresh_data          # Runs all of the above for enabled sport
 - `high` — odds < 2 hours old AND injuries exist
 - `med` — odds < 12 hours old
 - `low` — odds > 12 hours old or no odds
+
+---
+
+## AI Insight Engine
+
+**Purpose:** Generate factual, expert-level AI summaries explaining why the house model and market agree or disagree on a game. The AI explains decisions — it does NOT make them.
+
+**Architecture:**
+- Service layer: `apps/core/services/ai_insights.py`
+- AJAX endpoint: `GET /api/ai-insight/<sport>/<game_id>/` (login required)
+- Triggered by "AI Insight" button on game detail pages (CFB + CBB)
+- Returns JSON with `content` (formatted text) and `meta` (model, timing, prompt hash)
+
+**How it works:**
+1. `_build_context_from_game(game, data, sport)` — extracts structured facts from game object + computed data
+2. `_build_system_prompt(persona)` — persona-specific tone + strict content rules
+3. `_build_user_prompt(context)` — formats all facts as a structured text block
+4. `generate_insight(game, data, sport, persona)` — calls OpenAI, returns result dict with error handling
+
+**AI personas** (stored in `UserProfile.ai_persona`, configured in Preferences):
+
+| Key | Tone |
+|-----|------|
+| `analyst` (default) | Neutral, professional, factual |
+| `new_york_bookie` | Blunt, sharp, informal (profanity allowed) |
+| `southern_commentator` | Calm, folksy, confident |
+| `ex_player` | Direct, experiential |
+
+**Fact variables passed to AI** (the AI ONLY uses these — no speculation):
+- Game context: teams, sport, time, neutral site, status, ratings, conferences
+- Market data: home/away win probabilities, spread, total, odds age
+- House model: probabilities, edge, model version
+- User model (optional): probability, edge
+- Injuries: team, impact level, notes
+- Line movement: direction
+- Data confidence: level, missing data flags
+
+**Response structure** (enforced by system prompt):
+1. One-line summary
+2. Market vs House snapshot
+3. Key drivers (bullet list, ordered by impact)
+4. Injury impact (if any)
+5. Line movement context (if any)
+6. What would change this view
+7. Confidence & limitations
+
+**Environment variables:**
+```
+OPENAI_API_KEY=           # Required (no key = graceful error message)
+OPENAI_MODEL=gpt-4.1-mini  # Default (override with gpt-4.1 for higher quality)
+```
+
+**Logging:** Every request logs model used, prompt hash, response length, elapsed time. Errors log game ID, sport, and error message.
+
+**IMPORTANT — Content rules:**
+- AI uses ONLY facts provided in the prompt. No invented players, stats, or trends.
+- Language must be neutral per legal guardrails: "analyzed", "modeled", "suggests" — never "guaranteed", "lock", "best bet"
+- If data is missing or confidence is LOW, the AI states this explicitly
+- AI output is NOT stored as fact and NOT cached (MVP)
 
 ---
 

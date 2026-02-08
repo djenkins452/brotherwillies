@@ -132,6 +132,10 @@ ODDS_API_KEY = os.environ.get('ODDS_API_KEY', '')
 CFBD_API_KEY = os.environ.get('CFBD_API_KEY', '')
 CBBD_API_KEY = os.environ.get('CBBD_API_KEY', '')
 
+# --- AI Insights (OpenAI) ---
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGIN_URL = '/accounts/login/'

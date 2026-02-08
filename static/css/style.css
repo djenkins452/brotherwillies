@@ -773,3 +773,60 @@ input[type="range"]::-webkit-slider-thumb {
         align-items: center;
     }
 }
+
+/* ========== AI Insight ========== */
+.ai-insight-card {
+    border-left: 3px solid var(--accent);
+}
+.ai-insight-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.ai-insight-body {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+.ai-insight-body h4 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 12px 0 4px;
+    color: var(--accent);
+}
+.ai-insight-body ul {
+    margin: 4px 0 8px 16px;
+    padding: 0;
+}
+.ai-insight-body li {
+    margin-bottom: 4px;
+}
+.ai-insight-body p {
+    margin-bottom: 8px;
+}
+.ai-insight-error {
+    background: rgba(239,68,68,0.15);
+    color: var(--red);
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+}
+.badge-ai {
+    background: rgba(79,140,255,0.2);
+    color: var(--accent);
+}
+.spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

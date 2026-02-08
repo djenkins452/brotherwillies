@@ -5,10 +5,17 @@ from django.dispatch import receiver
 
 
 class UserProfile(models.Model):
+    AI_PERSONA_CHOICES = [
+        ('analyst', 'Analyst (neutral, professional)'),
+        ('new_york_bookie', 'New York Bookie (blunt, street-smart)'),
+        ('southern_commentator', 'Southern Commentator (folksy, confident)'),
+        ('ex_player', 'Ex-Player (direct, experiential)'),
+    ]
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     profile_picture_data = models.TextField(blank=True, default='',
         help_text='Base64-encoded data URI for profile picture (stored in DB, no filesystem needed)'
     )
+    ai_persona = models.CharField(max_length=25, choices=AI_PERSONA_CHOICES, default='analyst')
     favorite_conference = models.ForeignKey(
         'cfb.Conference', on_delete=models.SET_NULL, null=True, blank=True
     )

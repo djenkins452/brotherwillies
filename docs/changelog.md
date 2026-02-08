@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-02-08 - AI Insight engine (OpenAI-powered game explanations)
+
+**Summary:** Added an AI-powered explanation engine to game detail pages. Logged-in users can tap "AI Insight" to get a factual, structured summary of why the house model and market agree or disagree on a game. The AI uses ONLY data already shown on the page (team ratings, injuries, odds, model probabilities) — no speculation, no invented facts. Users can choose from 4 AI personas (Analyst, New York Bookie, Southern Commentator, Ex-Player) in Preferences.
+
+### Architecture:
+- **Service layer:** `apps/core/services/ai_insights.py` — prompt construction, OpenAI Chat Completions call, structured context builder
+- **AJAX endpoint:** `GET /api/ai-insight/<sport>/<game_id>/` — returns JSON with `content` and `meta`
+- **Login required** — anonymous users see the existing login gate
+- **Strict fact-only prompts** — system prompt enforces no speculation, no betting advice, no invented data
+- **Fail-safe** — graceful error messages when API key is missing, data is incomplete, or API call fails
+
+### Persona system:
+| Persona | Tone |
+|---------|------|
+| `analyst` (default) | Neutral, professional, factual |
+| `new_york_bookie` | Blunt, sharp, informal (profanity allowed) |
+| `southern_commentator` | Calm, folksy, confident |
+| `ex_player` | Direct, experiential (profanity controlled) |
+
+Persona affects tone only — content and facts remain identical.
+
+### New/modified files:
+- `apps/core/services/__init__.py` — new (package init)
+- `apps/core/services/ai_insights.py` — new (AI service layer: prompt builder, context builder, OpenAI caller, logging)
+- `apps/core/urls.py` — added `/api/ai-insight/` route
+- `apps/core/views.py` — added `ai_insight_view` AJAX endpoint
+- `apps/accounts/models.py` — added `ai_persona` field to UserProfile (4 choices, default: analyst)
+- `apps/accounts/forms.py` — added `ai_persona` to PreferencesForm with help text
+- `apps/accounts/migrations/0006_userprofile_ai_persona.py` — new migration
+- `templates/cfb/game_detail.html` — added AI Insight button, loading spinner, result container, inline JS
+- `templates/cbb/game_detail.html` — same as CFB
+- `templates/includes/help_modal.html` — added AI Insight explanation to `game_detail` help section
+- `static/css/style.css` — `.ai-insight-card`, `.ai-insight-header`, `.ai-insight-body`, `.ai-insight-error`, `.badge-ai`, `.spinner`, `@keyframes spin`
+- `requirements.txt` — added `openai>=1.0`
+- `brotherwillies/settings.py` — added `OPENAI_API_KEY`, `OPENAI_MODEL` settings
+
+### Environment variables:
+```
+OPENAI_API_KEY=           # Required for AI Insight to work
+OPENAI_MODEL=gpt-4.1-mini  # Default model (override with gpt-4.1 for higher quality)
+```
+
+### Logging:
+- Logs model used, prompt hash, response length, and elapsed time for every AI insight request
+- Logs errors with game ID, sport, and error message
+
+### Verified:
+- `manage.py check` (0 issues), migration applied, all imports clean
+- URL resolution works, prompt construction tested with real game data
+- Graceful error when OPENAI_API_KEY is not set
+
+---
+
 ## 2026-02-08 - Help content update + CLAUDE.md analytics docs
 
 **Summary:** Updated context-aware help to explain exactly where every number comes from — model formulas, API sources, confidence thresholds, snapshot lifecycle. Added Analytics Pipeline and Context-Aware Help System sections to CLAUDE.md so future changes always keep help content in sync.

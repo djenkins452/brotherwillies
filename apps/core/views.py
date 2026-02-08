@@ -1,4 +1,6 @@
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
+from django.http import JsonResponse
+from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from apps.cfb.models import Game as CFBGame
 from apps.cfb.services.model_service import compute_game_data as cfb_compute
@@ -62,4 +64,51 @@ def home(request):
         'cbb_games_data': cbb_games_data[:5],
         'help_key': 'home',
         'nav_active': 'home',
+    })
+
+
+@login_required
+def ai_insight_view(request, sport, game_id):
+    """AJAX endpoint that returns AI insight for a game as JSON."""
+    if sport not in ('cfb', 'cbb'):
+        return JsonResponse({'error': 'Invalid sport.'}, status=400)
+
+    if sport == 'cfb':
+        game = get_object_or_404(
+            CFBGame.objects.select_related(
+                'home_team', 'away_team',
+                'home_team__conference', 'away_team__conference'
+            ),
+            id=game_id
+        )
+        data = cfb_compute(game, request.user)
+    else:
+        game = get_object_or_404(
+            CBBGame.objects.select_related(
+                'home_team', 'away_team',
+                'home_team__conference', 'away_team__conference'
+            ),
+            id=game_id
+        )
+        data = cbb_compute(game, request.user)
+
+    # Get user persona
+    persona = 'analyst'
+    try:
+        persona = request.user.profile.ai_persona or 'analyst'
+    except Exception:
+        pass
+
+    from apps.core.services.ai_insights import generate_insight
+    result = generate_insight(game, data, sport, persona)
+
+    if result['error']:
+        return JsonResponse({
+            'error': result['error'],
+            'meta': result['meta'],
+        }, status=200)
+
+    return JsonResponse({
+        'content': result['content'],
+        'meta': result['meta'],
     })
