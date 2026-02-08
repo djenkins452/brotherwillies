@@ -5,4 +5,5 @@ app_name = 'golf'
 
 urlpatterns = [
     path('', views.golf_hub, name='hub'),
+    path('api/golfer-search/', views.golfer_search, name='golfer_search'),
 ]

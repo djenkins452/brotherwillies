@@ -28,6 +28,9 @@ class UserProfile(models.Model):
     favorite_cbb_team = models.ForeignKey(
         'cbb.Team', on_delete=models.SET_NULL, null=True, blank=True
     )
+    favorite_golfer = models.ForeignKey(
+        'golf.Golfer', on_delete=models.SET_NULL, null=True, blank=True
+    )
     always_include_favorite_team = models.BooleanField(default=True)
     preference_spread_min = models.FloatField(null=True, blank=True)
     preference_spread_max = models.FloatField(null=True, blank=True)

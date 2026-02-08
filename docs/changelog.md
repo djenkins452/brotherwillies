@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-02-08 - Favorite golfer with autocomplete search
+
+**Summary:** Added favorite golfer selection to preferences. Users can search ~200 PGA Tour players by typing any part of their name (first, last, or full) with instant AJAX autocomplete. The Golfer model now stores first/last name split for better search. Data stored as FK on UserProfile, relatable to future golf odds/results/analytics.
+
+### Model changes:
+- `Golfer` — added `first_name`, `last_name` (indexed, auto-split from `name` on save)
+- `UserProfile` — added `favorite_golfer` FK to `golf.Golfer`
+
+### New files:
+- `apps/datahub/management/commands/seed_golfers.py` — seeds ~200 top PGA Tour players (idempotent, backfills first/last on existing rows)
+
+### Modified files:
+- `apps/golf/models.py` — Golfer fields + auto-split save()
+- `apps/golf/views.py` — added `golfer_search` AJAX endpoint (login required, icontains on name/first/last, returns top 15 JSON)
+- `apps/golf/urls.py` — added `/golf/api/golfer-search/`
+- `apps/accounts/models.py` — added `favorite_golfer` FK
+- `apps/accounts/forms.py` — added `favorite_golfer` as HiddenInput (autocomplete JS sets value)
+- `templates/accounts/preferences.html` — new Golf Favorites accordion section with search input, dropdown results, keyboard nav, selected-state chip with clear button
+- `apps/datahub/management/commands/ensure_seed.py` — calls `seed_golfers` on deploy
+
+### Search features:
+- Debounced AJAX (250ms) — no excess API calls
+- Keyboard navigation (arrow keys + Enter + Escape)
+- Click-to-select from dropdown
+- Selected golfer shows as chip with X to clear
+- Badge updates in real-time on section header
+
+---
+
 ## 2026-02-08 - Preferences page redesign (accordion + persona tiles)
 
 **Summary:** Rebuilt the preferences page with a collapsible accordion layout inspired by WLJ. Each settings group (Location, CFB Favorites, CBB Favorites, Value Board Filters, AI Persona) is a card with icon, title, subtitle, and current-value badge. Sections collapse/expand on tap. AI persona selection uses visual tile cards instead of a dropdown. Expand All / Collapse All controls at top. Toggle switch for the "always include favorite" checkbox. Sections auto-open when they contain validation errors.

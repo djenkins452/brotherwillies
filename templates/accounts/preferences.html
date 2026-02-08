@@ -249,6 +249,98 @@
     .persona-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
+/* ── Golfer autocomplete ── */
+.golfer-search-wrap {
+    position: relative;
+}
+.golfer-search-input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.golfer-search-input:focus {
+    border-color: var(--accent);
+}
+.golfer-search-input::placeholder {
+    color: var(--text-muted);
+}
+.golfer-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 50;
+    display: none;
+}
+.golfer-results.visible {
+    display: block;
+}
+.golfer-result-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+.golfer-result-item:last-child {
+    border-bottom: none;
+}
+.golfer-result-item:hover,
+.golfer-result-item.highlighted {
+    background: var(--bg-input);
+    color: var(--accent);
+}
+.golfer-result-empty {
+    padding: 10px 14px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.golfer-selected {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(79, 140, 255, 0.1);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    margin-top: 8px;
+}
+.golfer-selected-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.golfer-clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.1rem;
+    min-width: 32px;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.golfer-clear-btn:hover {
+    color: var(--red);
+}
+
 /* ── Save button ── */
 .pref-save-bar {
     margin-top: 16px;
@@ -339,6 +431,35 @@
             <div class="pref-field">
                 <label for="{{ form.favorite_cbb_team.id_for_label }}">Team</label>
                 {{ form.favorite_cbb_team }}
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Golf Favorites ── -->
+    {{ form.favorite_golfer }}
+    <div class="pref-section" data-section="golf">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#9971;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">Golf Favorites</div>
+                <div class="pref-section-subtitle">Favorite PGA Tour player</div>
+            </div>
+            <span class="pref-section-badge" id="golferBadge">{% if profile.favorite_golfer %}{{ profile.favorite_golfer.name }}{% else %}None{% endif %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <div class="pref-field">
+                <label for="golferSearchInput">Search Golfer</label>
+                <div class="golfer-search-wrap">
+                    <input type="text" id="golferSearchInput" class="golfer-search-input"
+                           placeholder="Start typing a name..." autocomplete="off">
+                    <div class="golfer-results" id="golferResults"></div>
+                </div>
+                <div class="pref-field-help">Search by first name, last name, or full name</div>
+            </div>
+            <div id="golferSelected" class="golfer-selected" style="{% if not profile.favorite_golfer %}display:none{% endif %}">
+                <span class="golfer-selected-name" id="golferSelectedName">{% if profile.favorite_golfer %}{{ profile.favorite_golfer.name }}{% endif %}</span>
+                <button type="button" class="golfer-clear-btn" onclick="clearGolfer()" title="Remove">&times;</button>
             </div>
         </div>
     </div>
@@ -474,5 +595,109 @@ document.querySelectorAll('.pref-section-body .form-error').forEach(function(err
     var section = err.closest('.pref-section');
     if (section) section.classList.add('open');
 });
+
+/* ── Golfer autocomplete search ── */
+(function() {
+    var input = document.getElementById('golferSearchInput');
+    var results = document.getElementById('golferResults');
+    var hidden = document.getElementById('{{ form.favorite_golfer.id_for_label }}');
+    var selectedBox = document.getElementById('golferSelected');
+    var selectedName = document.getElementById('golferSelectedName');
+    var badge = document.getElementById('golferBadge');
+    var debounceTimer = null;
+    var highlightIdx = -1;
+    var currentItems = [];
+
+    if (!input || !results || !hidden) return;
+
+    input.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        var q = input.value.trim();
+        if (q.length < 2) {
+            results.innerHTML = '';
+            results.classList.remove('visible');
+            highlightIdx = -1;
+            return;
+        }
+        debounceTimer = setTimeout(function() {
+            fetch('{% url "golf:golfer_search" %}?q=' + encodeURIComponent(q))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    highlightIdx = -1;
+                    currentItems = data;
+                    if (data.length === 0) {
+                        results.innerHTML = '<div class="golfer-result-empty">No golfers found</div>';
+                    } else {
+                        results.innerHTML = data.map(function(g, i) {
+                            return '<div class="golfer-result-item" data-id="' + g.id + '" data-name="' + g.name.replace(/"/g, '&quot;') + '" data-idx="' + i + '">' + g.name + '</div>';
+                        }).join('');
+                    }
+                    results.classList.add('visible');
+                    // Attach click handlers
+                    results.querySelectorAll('.golfer-result-item').forEach(function(item) {
+                        item.addEventListener('click', function() {
+                            selectGolfer(item.dataset.id, item.dataset.name);
+                        });
+                    });
+                });
+        }, 250);
+    });
+
+    // Keyboard navigation
+    input.addEventListener('keydown', function(e) {
+        var items = results.querySelectorAll('.golfer-result-item');
+        if (!items.length) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            highlightIdx = Math.min(highlightIdx + 1, items.length - 1);
+            updateHighlight(items);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            highlightIdx = Math.max(highlightIdx - 1, 0);
+            updateHighlight(items);
+        } else if (e.key === 'Enter' && highlightIdx >= 0) {
+            e.preventDefault();
+            var item = items[highlightIdx];
+            selectGolfer(item.dataset.id, item.dataset.name);
+        } else if (e.key === 'Escape') {
+            results.classList.remove('visible');
+            highlightIdx = -1;
+        }
+    });
+
+    function updateHighlight(items) {
+        items.forEach(function(it, i) {
+            it.classList.toggle('highlighted', i === highlightIdx);
+        });
+        if (highlightIdx >= 0 && items[highlightIdx]) {
+            items[highlightIdx].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function selectGolfer(id, name) {
+        hidden.value = id;
+        input.value = '';
+        results.innerHTML = '';
+        results.classList.remove('visible');
+        selectedName.textContent = name;
+        selectedBox.style.display = 'flex';
+        if (badge) badge.textContent = name;
+    }
+
+    // Make clearGolfer global
+    window.clearGolfer = function() {
+        hidden.value = '';
+        selectedBox.style.display = 'none';
+        selectedName.textContent = '';
+        if (badge) badge.textContent = 'None';
+    };
+
+    // Close results on outside click
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.golfer-search-wrap')) {
+            results.classList.remove('visible');
+        }
+    });
+})();
 </script>
 {% endblock %}

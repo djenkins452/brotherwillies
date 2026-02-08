@@ -37,6 +37,7 @@ class PreferencesForm(forms.ModelForm):
             'zip_code',
             'favorite_conference', 'favorite_team',
             'favorite_cbb_conference', 'favorite_cbb_team',
+            'favorite_golfer',
             'always_include_favorite_team',
             'preference_spread_min', 'preference_spread_max',
             'preference_odds_min', 'preference_odds_max', 'preference_min_edge',
@@ -57,6 +58,9 @@ class PreferencesForm(forms.ModelForm):
         })
         self.fields['zip_code'].help_text = 'US zip code — sets your timezone for game times'
         self.fields['ai_persona'].help_text = 'Controls the tone of AI Insight on game detail pages'
+        # Golfer uses a hidden input — the autocomplete JS sets the value
+        self.fields['favorite_golfer'].widget = forms.HiddenInput()
+        self.fields['favorite_golfer'].required = False
 
     def clean_zip_code(self):
         val = self.cleaned_data.get('zip_code', '').strip()

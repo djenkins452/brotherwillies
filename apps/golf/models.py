@@ -17,13 +17,26 @@ class GolfEvent(models.Model):
 
 class Golfer(models.Model):
     name = models.CharField(max_length=100)
+    first_name = models.CharField(max_length=50, blank=True, default='', db_index=True)
+    last_name = models.CharField(max_length=50, blank=True, default='', db_index=True)
     external_id = models.CharField(max_length=100, blank=True, db_index=True)
 
     class Meta:
-        ordering = ['name']
+        ordering = ['last_name', 'first_name']
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Auto-split name into first/last if not set
+        if self.name and not self.last_name:
+            parts = self.name.strip().split()
+            if len(parts) >= 2:
+                self.first_name = parts[0]
+                self.last_name = ' '.join(parts[1:])
+            elif parts:
+                self.last_name = parts[0]
+        super().save(*args, **kwargs)
 
 
 class GolfOddsSnapshot(models.Model):
