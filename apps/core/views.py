@@ -1,4 +1,4 @@
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
@@ -21,7 +21,10 @@ def _is_in_season(sport):
 
 
 def home(request):
-    user = request.user if request.user.is_authenticated else None
+    if not request.user.is_authenticated:
+        return redirect('accounts:login')
+
+    user = request.user
     now = timezone.now()
 
     # Live games (currently in progress)
