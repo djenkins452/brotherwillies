@@ -49,8 +49,8 @@ class CBBScheduleProvider(AbstractProvider):
         now = timezone.now()
         all_games = []
 
-        # Fetch multiple days from ESPN (today + next 7 days)
-        for offset in range(8):
+        # Fetch yesterday (catches late-night games) + today + next 7 days
+        for offset in range(-1, 8):
             date = now + timedelta(days=offset)
             date_str = date.strftime('%Y%m%d')
             try:
