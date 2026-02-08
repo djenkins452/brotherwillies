@@ -62,18 +62,7 @@ def profile_view(request):
             request.user.save()
             if form.cleaned_data.get('profile_picture'):
                 profile.profile_picture = form.cleaned_data['profile_picture']
-            zip_code = form.cleaned_data.get('zip_code', '')
-            profile.zip_code = zip_code
-            if zip_code:
-                resolved_tz = zip_to_timezone(zip_code)
-                if resolved_tz:
-                    profile.timezone = resolved_tz
-                else:
-                    profile.timezone = ''
-                    messages.warning(request, 'Could not determine timezone for that zip code.')
-            else:
-                profile.timezone = ''
-            profile.save()
+                profile.save()
             messages.success(request, 'Profile updated.')
             return redirect('profile')
     else:
@@ -81,7 +70,6 @@ def profile_view(request):
             'first_name': request.user.first_name,
             'last_name': request.user.last_name,
             'email': request.user.email,
-            'zip_code': profile.zip_code,
         })
 
     return render(request, 'accounts/profile.html', {
@@ -98,7 +86,18 @@ def preferences_view(request):
     if request.method == 'POST':
         form = PreferencesForm(request.POST, instance=profile)
         if form.is_valid():
-            form.save()
+            pref = form.save(commit=False)
+            zip_code = form.cleaned_data.get('zip_code', '')
+            if zip_code:
+                resolved_tz = zip_to_timezone(zip_code)
+                if resolved_tz:
+                    pref.timezone = resolved_tz
+                else:
+                    pref.timezone = ''
+                    messages.warning(request, 'Could not determine timezone for that zip code.')
+            else:
+                pref.timezone = ''
+            pref.save()
             messages.success(request, 'Preferences saved.')
             return redirect('preferences')
     else:

@@ -17,6 +17,12 @@
             </div>
             {% else %}
             {{ field }}
+            {% if field.help_text and field.field.widget.input_type != 'checkbox' %}
+            <div class="text-sm text-muted mt-1">{{ field.help_text }}</div>
+            {% endif %}
+            {% endif %}
+            {% if field.name == 'zip_code' and profile.timezone %}
+            <div class="text-sm mt-1" style="color: var(--green);">Timezone: {{ profile.timezone }}</div>
             {% endif %}
             {% if field.errors %}
             {% for error in field.errors %}
