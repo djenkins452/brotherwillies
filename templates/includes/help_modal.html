@@ -16,7 +16,7 @@
                     <li><strong>What does "House %" mean?</strong> This is the percentage our house model calculates as the team's true win probability, based on team ratings, injuries, and home field advantage. The model takes the rating difference between teams, adds a home field adjustment, factors in injury impacts, and converts the result into a probability using a logistic function. It's independent of what the betting market says.</li>
                     <li><strong>Confidence badges (HIGH / MED / LOW)</strong> tell you how much data we have behind the calculation. HIGH means odds updated within 2 hours and injury data is available. MED means odds within 12 hours. LOW means data may be stale or incomplete.</li>
                     <li><strong>YOUR TEAM</strong> badge appears on games involving the favorite team you set in Preferences.</li>
-                    <li>Log in to see the full Value Board with all games, filters, and your personalized model.</li>
+                    <li>Log in to see the full Lobby with all games, filters, and your personalized model.</li>
 
                     <li><strong>Where does this data come from?</strong> Game schedules and scores are pulled from ESPN's public API (CBB) and CollegeFootballData.com (CFB). Betting odds (moneyline, point spread, over/under) come from The Odds API, which aggregates real-time lines from major US sportsbooks. Injury data is sourced from ESPN's injury reports. Our model runs its own calculations on top of this data to produce the probabilities and edge numbers you see. When live data is not available (offseason or demo mode), sample data is shown instead — look for an "Offseason" banner at the top of the page.</li>
                 </ul>
@@ -54,7 +54,7 @@
 
                     <li><strong>Confidence (HIGH / MED / LOW)</strong> — This tells you how reliable the data behind the calculation is. HIGH means odds are recent and injury data is complete. MED means some data might be a few hours old. LOW means data may be stale or missing — take those numbers with a grain of salt.</li>
 
-                    <li><strong>Where does this data come from?</strong> The Value Board combines data from multiple sources:
+                    <li><strong>Where does this data come from?</strong> The Lobby combines data from multiple sources:
                         <br>- <strong>Game schedules and scores</strong> come from ESPN's public API (for both CFB and CBB). Games are refreshed regularly to capture schedule changes and final scores.
                         <br>- <strong>Betting odds</strong> (moneyline, point spread, over/under totals) come from <strong>The Odds API</strong>, which aggregates real-time lines from major US sportsbooks like DraftKings, FanDuel, BetMGM, and others. Odds are captured as snapshots so you can see how lines move over time.
                         <br>- <strong>Injury data</strong> is sourced from ESPN's injury reports, including player status (out, doubtful, questionable, probable) and estimated impact level.
@@ -314,15 +314,15 @@
             {% elif help_key == 'preferences' %}
                 <h4>Preferences</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> This is where you personalize how Brother Willies works for you. Your preferences control which games show up on the Value Board and how the site highlights information relevant to you.</li>
+                    <li><strong>What is this page?</strong> This is where you personalize how Brother Willies works for you. Your preferences control which games show up on the Lobby and how the site highlights information relevant to you.</li>
 
                     <li><strong>Favorite Conference</strong> — Pick the conference you follow most (SEC, Big Ten, etc.). This is used to highlight relevant games and prioritize your conference in listings.</li>
 
                     <li><strong>Favorite Team</strong> — Pick your team. For example, if you select Alabama, games involving Alabama will be tagged with a "YOUR TEAM" badge throughout the site, making them easy to spot.</li>
 
-                    <li><strong>Always Include Favorite Team</strong> — When checked, your favorite team's games will ALWAYS appear on the Value Board, even if they don't meet your filter criteria. Example: If you set a minimum edge of 5% but Alabama's next game only has a 2% edge, it would normally be filtered out. With this box checked, Alabama's game still shows up. Uncheck it if you only want to see games that pass all your filters, regardless of team.</li>
+                    <li><strong>Always Include Favorite Team</strong> — When checked, your favorite team's games will ALWAYS appear on the Lobby, even if they don't meet your filter criteria. Example: If you set a minimum edge of 5% but Alabama's next game only has a 2% edge, it would normally be filtered out. With this box checked, Alabama's game still shows up. Uncheck it if you only want to see games that pass all your filters, regardless of team.</li>
 
-                    <li><strong>Preference Spread Min / Max</strong> — These filter the Value Board by point spread. The point spread is how many points one team is favored by. Example with Alabama as your team:
+                    <li><strong>Preference Spread Min / Max</strong> — These filter the Lobby by point spread. The point spread is how many points one team is favored by. Example with Alabama as your team:
                         <br>- Alabama -14.5 vs. Vanderbilt means Alabama is favored by 14.5 points
                         <br>- If you set Spread Min = 3 and Spread Max = 10, you'd only see games where the spread is between 3 and 10 points
                         <br>- This filters out blowout games (huge spreads) and near-toss-ups (tiny spreads)
@@ -336,7 +336,7 @@
                         <br>- Leave blank to see all games regardless of odds
                     </li>
 
-                    <li><strong>Preference Minimum Edge</strong> — This sets the minimum edge required for a game to appear on the Value Board. Edge = model probability minus market probability.
+                    <li><strong>Preference Minimum Edge</strong> — This sets the minimum edge required for a game to appear on the Lobby. Edge = model probability minus market probability.
                         <br>- Example: If you set this to 3.0, only games where the model sees at least a 3% edge will show up
                         <br>- Set to 0 to see all games
                         <br>- Set to 5.0 or higher to only see games with significant model-vs-market disagreement
@@ -352,7 +352,7 @@
                         <br>- Odds Min: -400 (skip extreme favorites)
                         <br>- Odds Max: 300 (skip extreme underdogs)
                         <br>- Minimum Edge: 2.0 (show games with at least 2% model edge)
-                        <br>This would give you a focused Value Board of competitive games where the model sees meaningful disagreement with the market, while always including Alabama's games.
+                        <br>This would give you a focused Lobby of competitive games where the model sees meaningful disagreement with the market, while always including Alabama's games.
                     </li>
                 </ul>
 
@@ -375,7 +375,7 @@
                 <h4>Partner Feedback</h4>
                 <ul>
                     <li><strong>What is this?</strong> This is an internal feedback system for authorized partners only. Submit structured feedback about any part of the site — it gets tracked through a review pipeline.</li>
-                    <li><strong>Components</strong> — Each feedback item targets a specific part of the site (e.g., AI Explanations, Value Board, Model Accuracy). Pick the most relevant component when submitting.</li>
+                    <li><strong>Components</strong> — Each feedback item targets a specific part of the site (e.g., AI Explanations, Lobby, Model Accuracy). Pick the most relevant component when submitting.</li>
                     <li><strong>Status workflow:</strong>
                         <br>- <strong>New</strong> — Just submitted, awaiting review
                         <br>- <strong>Accepted</strong> — Reviewed and accepted for action
@@ -396,7 +396,7 @@
                     <li><strong>Your custom model:</strong> You can create your own model by adjusting the weights of each factor. Maybe you think injuries matter more than the default model assumes, or home field advantage is overrated. Your custom weights generate your own probabilities that you can compare against both the market and the house model.</li>
 
                     <li><strong>Key pages:</strong>
-                        <br>- <strong>Value Board</strong> — Ranked list of games by model-vs-market disagreement
+                        <br>- <strong>Lobby</strong> — Ranked list of games by model-vs-market disagreement
                         <br>- <strong>CFB / CBB Hub</strong> — Browse by conference and team
                         <br>- <strong>Game Detail</strong> — Deep analysis for individual games
                         <br>- <strong>My Model</strong> — Customize your probability model

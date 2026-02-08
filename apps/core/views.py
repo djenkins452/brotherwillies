@@ -419,9 +419,9 @@ def value_board(request):
 
 
 def cbb_value_redirect(request):
-    """Redirect old /cbb/value/ to unified /value/?sport=cbb."""
+    """Redirect old /cbb/value/ to unified /lobby/?sport=cbb."""
     sort_by = request.GET.get('sort', '')
-    url = '/value/?sport=cbb'
+    url = '/lobby/?sport=cbb'
     if sort_by:
         url += f'&sort={sort_by}'
     return redirect(url)

@@ -2,6 +2,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
+from django.views.generic import RedirectView
 from apps.core.views import cbb_value_redirect
 
 urlpatterns = [
@@ -11,6 +12,7 @@ urlpatterns = [
     path('cfb/', include('apps.cfb.urls')),
     path('cbb/', include('apps.cbb.urls')),
     path('cbb/value/', cbb_value_redirect, name='cbb_value_redirect'),
+    path('value/', RedirectView.as_view(url='/lobby/', permanent=True), name='value_redirect'),
     path('golf/', include('apps.golf.urls')),
     path('parlays/', include('apps.parlays.urls')),
     path('profile/', include('apps.accounts.profile_urls')),

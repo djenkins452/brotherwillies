@@ -158,11 +158,11 @@ brotherwillies/
 
 | Route | Description |
 |-------|-------------|
-| `/` | Home (dashboard) |
-| `/value/` | Unified Value Board with sport tabs |
-| `/value/?sport=cbb` | Value Board — CBB tab |
-| `/value/?sport=cfb` | Value Board — CFB tab |
-| `/value/?sport=golf` | Value Board — Golf tab |
+| `/` | Home (mock bet analytics dashboard) |
+| `/lobby/` | Lobby with sport tabs, live games, value analysis |
+| `/lobby/?sport=cbb` | Lobby — CBB tab |
+| `/lobby/?sport=cfb` | Lobby — CFB tab |
+| `/lobby/?sport=golf` | Lobby — Golf tab |
 | `/cfb/` | CFB hub |
 | `/cfb/conference/<slug>/` | Conference dashboard |
 | `/cfb/game/<uuid>/` | CFB game detail |
