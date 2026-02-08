@@ -290,19 +290,27 @@ def _group_games_by_timeframe(games_data, active_sport, live_data=None):
             'default_open': False,
         })
 
-    # Smart default: only one section open — Live > Big Matchups > Today > first
+    # Smart default: only one section open
+    # Live (only if games in progress) > Big Matchups > Today > first
     priority = ['live', 'big_games', 'today']
     opened = False
     for pkey in priority:
         for s in sections:
-            if s['key'] == pkey:
+            if s['key'] == pkey and s['count'] > 0:
                 s['default_open'] = True
                 opened = True
                 break
         if opened:
             break
     if not opened and sections:
-        sections[0]['default_open'] = True
+        # Skip Live (index 0) if it has no games, open next section
+        for s in sections:
+            if s['count'] > 0:
+                s['default_open'] = True
+                opened = True
+                break
+        if not opened:
+            sections[0]['default_open'] = True
 
     return sections
 
