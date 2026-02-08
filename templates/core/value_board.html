@@ -67,9 +67,10 @@
 {% else %}
 {# CFB / CBB games view #}
 <div class="filter-bar">
+    <span class="filter-label">Sort:</span>
     <a href="?sport={{ active_sport }}&sort=house_edge" class="filter-chip {% if sort_by == 'house_edge' %}active{% endif %}">House Edge</a>
     {% if user.is_authenticated %}
-    <a href="?sport={{ active_sport }}&sort=user_edge" class="filter-chip {% if sort_by == 'user_edge' %}active{% endif %}">User Edge</a>
+    <a href="?sport={{ active_sport }}&sort=user_edge" class="filter-chip {% if sort_by == 'user_edge' %}active{% endif %}">Your Edge</a>
     <a href="?sport={{ active_sport }}&sort=delta" class="filter-chip {% if sort_by == 'delta' %}active{% endif %}">Delta</a>
     {% endif %}
 </div>
@@ -105,11 +106,33 @@
                 {% endif %}
                 <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
             </div>
-            <div class="edge-row">
-                <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
-                <span>House: <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span></span>
-                {% if g.user_edge is not None %}
-                <span>You: <span class="{% if g.user_edge > 0 %}edge-positive{% elif g.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.user_edge|floatformat:1 }}%</span></span>
+            {# ── Compact data grid: all values visible ── #}
+            <div class="gc-grid">
+                <div class="gc-grid-header">
+                    <span></span>
+                    <span>Mkt</span>
+                    <span>House</span>
+                    {% if g.user_prob is not None %}<span>You</span>{% endif %}
+                </div>
+                <div class="gc-grid-row">
+                    <span class="gc-row-label">Prob</span>
+                    <span>{{ g.market_prob|floatformat:0 }}%</span>
+                    <span>{{ g.house_prob|floatformat:0 }}%</span>
+                    {% if g.user_prob is not None %}<span>{{ g.user_prob|floatformat:0 }}%</span>{% endif %}
+                </div>
+                <div class="gc-grid-row">
+                    <span class="gc-row-label">vs Mkt</span>
+                    <span class="text-muted">&mdash;</span>
+                    <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span>
+                    {% if g.user_edge is not None %}<span class="{% if g.user_edge > 0 %}edge-positive{% elif g.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.user_edge|floatformat:1 }}%</span>{% endif %}
+                </div>
+                {% if g.delta is not None %}
+                <div class="gc-grid-row">
+                    <span class="gc-row-label">vs House</span>
+                    <span class="text-muted">&mdash;</span>
+                    <span class="text-muted">&mdash;</span>
+                    <span class="{% if g.delta > 0 %}edge-positive{% elif g.delta < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.delta|floatformat:1 }}%</span>
+                </div>
                 {% endif %}
             </div>
             {% if g.line_movement %}

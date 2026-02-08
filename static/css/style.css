@@ -637,6 +637,56 @@ select.form-control {
     font-size: 0.8rem;
 }
 
+/* ========== Game Card Data Grid ========== */
+.gc-grid {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    font-size: 0.75rem;
+}
+.gc-grid-header,
+.gc-grid-row {
+    display: grid;
+    grid-template-columns: 56px repeat(auto-fit, minmax(0, 1fr));
+    gap: 4px;
+    align-items: center;
+}
+.gc-grid-header {
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+}
+.gc-grid-header span,
+.gc-grid-row span {
+    text-align: right;
+}
+.gc-grid-header span:first-child,
+.gc-grid-row span:first-child {
+    text-align: left;
+}
+.gc-row-label {
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.gc-grid-row {
+    padding: 2px 0;
+    font-weight: 500;
+}
+
+/* Sort label */
+.filter-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    align-self: center;
+    white-space: nowrap;
+}
+
 /* ========== Slider ========== */
 input[type="range"] {
     width: 100%;
