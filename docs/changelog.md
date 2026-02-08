@@ -2,14 +2,14 @@
 
 ---
 
-## 2026-02-08 - Full Color Rebrand (Warm Gold)
+## 2026-02-08 - Full Color Rebrand (Penny Gold)
 
-**Summary:** Replaced blue accent color scheme with warm cream/gold (`#e8d5b7`) throughout the entire app, matching the new BW logo. Header now shows logo image + "Brother Willie" text. All buttons, links, tabs, badges, charts, and auth pages updated to the new palette.
+**Summary:** Replaced blue accent color scheme with rich penny gold (`#c9943a`) sampled from the BW logo lettering. Header shows logo image + "Brother Willie" text. All buttons, links, tabs, badges, charts, and auth pages use the new burnished gold palette.
 
 ### Modified files:
 - `templates/base.html` — Header now shows logo image + "Brother Willie" text
-- `static/css/style.css` — `--accent` changed from `#4f8cff` to `#e8d5b7`, `--accent-hover` to `#d4be9a`, all rgba blue references updated, button/chip text changed to dark for contrast
-- `static/css/auth.css` — Sign In button, links, input focus, and logo glow animation all switched from blue to warm gold
+- `static/css/style.css` — `--accent` changed from `#4f8cff` to `#c9943a`, `--accent-hover` to `#b8832e`, all rgba references updated
+- `static/css/auth.css` — Sign In button, links, input focus, and logo glow animation all switched to penny gold
 - `static/branding/bw_logo.png` — Updated logo image
 - `templates/mockbets/analytics.html` — Chart.js accent color updated
 
