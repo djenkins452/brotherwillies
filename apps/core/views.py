@@ -22,7 +22,23 @@ def home(request):
     user = request.user if request.user.is_authenticated else None
     now = timezone.now()
 
-    # Only show sports that are in season on the dashboard
+    # Live games (currently in progress)
+    cfb_live_data = []
+    cbb_live_data = []
+
+    if _is_in_season('cfb'):
+        cfb_live = CFBGame.objects.filter(
+            status='live'
+        ).select_related('home_team', 'away_team').order_by('kickoff')
+        cfb_live_data = [cfb_compute(g, user) for g in cfb_live]
+
+    if _is_in_season('cbb'):
+        cbb_live = CBBGame.objects.filter(
+            status='live'
+        ).select_related('home_team', 'away_team').order_by('tipoff')
+        cbb_live_data = [cbb_compute(g, user) for g in cbb_live]
+
+    # Upcoming scheduled games (top value)
     cfb_games_data = []
     if _is_in_season('cfb'):
         cfb_upcoming = CFBGame.objects.filter(
@@ -40,6 +56,8 @@ def home(request):
         cbb_games_data.sort(key=lambda g: abs(g.get('house_edge', 0)), reverse=True)
 
     return render(request, 'core/home.html', {
+        'cfb_live_data': cfb_live_data,
+        'cbb_live_data': cbb_live_data,
         'cfb_games_data': cfb_games_data[:5],
         'cbb_games_data': cbb_games_data[:5],
         'help_key': 'home',

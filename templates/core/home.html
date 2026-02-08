@@ -5,6 +5,47 @@
 {% block content %}
 <h1 class="page-title">Dashboard</h1>
 
+{% if cbb_live_data or cfb_live_data %}
+<p class="section-title section-title-live"><span class="live-dot"></span> Live Now</p>
+<div class="card-grid">
+    {% for g in cbb_live_data %}
+    <a href="/cbb/game/{{ g.game.id }}/" class="game-card game-card-live">
+        <span class="badge badge-live">Live</span>
+        {% if g.is_favorite %}
+        <span class="badge badge-fav">Your Team</span>
+        {% endif %}
+        <div class="teams">
+            <span class="team-name">{{ g.game.away_team.name }}</span>
+            <span class="vs">@</span>
+            <span class="team-name">{{ g.game.home_team.name }}</span>
+        </div>
+        <div class="edge-row">
+            <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
+            <span>House: <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span></span>
+        </div>
+    </a>
+    {% endfor %}
+    {% for g in cfb_live_data %}
+    <a href="/cfb/game/{{ g.game.id }}/" class="game-card game-card-live">
+        <span class="badge badge-live">Live</span>
+        {% if g.is_favorite %}
+        <span class="badge badge-fav">Your Team</span>
+        {% endif %}
+        <div class="teams">
+            <span class="team-name">{{ g.game.away_team.name }}</span>
+            <span class="vs">@</span>
+            <span class="team-name">{{ g.game.home_team.name }}</span>
+        </div>
+        <div class="edge-row">
+            <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
+            <span>House: <span class="{% if g.house_edge > 0 %}edge-positive{% elif g.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ g.house_edge|floatformat:1 }}%</span></span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+<hr class="section-divider">
+{% endif %}
+
 {% if cbb_games_data %}
 <p class="section-title">Top CBB Value Games</p>
 <div class="card-grid">
@@ -63,7 +104,7 @@
 </div>
 {% endif %}
 
-{% if not cfb_games_data and not cbb_games_data %}
+{% if not cfb_games_data and not cbb_games_data and not cfb_live_data and not cbb_live_data %}
 <div class="empty-state">
     <p>No upcoming games right now. Seed demo data to get started.</p>
 </div>

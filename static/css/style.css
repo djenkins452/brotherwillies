@@ -238,6 +238,38 @@ a:hover {
     color: var(--yellow);
     font-size: 0.7rem;
 }
+.badge-live {
+    background: rgba(239,68,68,0.2);
+    color: #ef4444;
+    font-size: 0.7rem;
+    animation: live-pulse 2s ease-in-out infinite;
+}
+@keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+.game-card-live {
+    border-left: 3px solid #ef4444;
+}
+.section-title-live {
+    color: #ef4444;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #ef4444;
+    border-radius: 50%;
+    animation: live-pulse 2s ease-in-out infinite;
+}
+.section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 20px 0;
+}
 
 /* ========== Stat Tiles ========== */
 .stat-grid {
