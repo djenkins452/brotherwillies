@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-02-08 - Security Hardening & Registration Disabled
+
+**Summary:** Disabled public registration, hardened login against brute-force bots, obscured admin URL, and added HSTS headers.
+
+### Changes:
+- **Registration disabled:** Removed `/accounts/register/` URL route and all Register links/buttons from home page, login page, CFB Value Board, and CBB Value Board. View/form/template left in place for easy re-enable.
+- **Login rate limiting:** Added `django-axes` — locks out after 5 failed attempts per username+IP, 1-hour cooloff, resets on success.
+- **Admin URL obscured:** Changed `/admin/` to `/bw-manage/` to avoid bot scanners. Updated profile dropdown link.
+- **Admin password from env var:** `ensure_superuser` now reads `ADMIN_PASSWORD` env var (falls back to default for local dev). Set a strong password on Railway.
+- **HSTS headers:** Added `SECURE_HSTS_SECONDS` (1 year), `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD` in production.
+
+### Files changed:
+- `apps/accounts/urls.py` — removed register route
+- `templates/core/home.html` — removed Register button
+- `templates/cfb/value_board.html` — removed Register button
+- `templates/cbb/value_board.html` — removed Register button
+- `templates/accounts/login.html` — removed "Don't have an account?" link
+- `templates/base.html` — admin link updated to `/bw-manage/`
+- `brotherwillies/urls.py` — admin path changed to `bw-manage/`
+- `brotherwillies/settings.py` — added axes app/middleware/backend, HSTS settings
+- `apps/datahub/management/commands/ensure_superuser.py` — reads ADMIN_PASSWORD env var
+- `requirements.txt` — added `django-axes>=8.0`
+
+### Migration:
+- `axes.0001` through `axes.0010` (auto-applied)
+
+### Action required on Railway:
+- Set `ADMIN_PASSWORD` env var to a strong password
+- Since admin user already exists, manually change password via Django shell or recreate
+
+### Verified:
+- `manage.py check` (0 issues), migrations applied
+
+---
+
 ## 2026-02-08 - User Timezone Support via Zip Code
 
 **Summary:** Users can set their zip code on the Preferences page to automatically resolve their timezone. All game times display in the user's local timezone with an abbreviation (CST, EST, etc.). Uses the `zipcodes` Python library for per-zip-code accuracy in split-timezone states (Indiana, Tennessee, Florida panhandle).

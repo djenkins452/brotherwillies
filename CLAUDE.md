@@ -60,7 +60,7 @@ python manage.py check
 ```
 
 **Demo user:** `demo` / `brotherwillies`
-**Admin superuser:** `admin` / `brotherwillies` (http://localhost:8000/admin/)
+**Admin superuser:** `admin` / `ADMIN_PASSWORD` env var (http://localhost:8000/bw-manage/)
 
 ---
 
@@ -71,6 +71,7 @@ python manage.py check
 - Django templates + CSS + vanilla JS (no React)
 - Dark theme, card-based, mobile-first UI
 - `zipcodes` library for per-zip-code timezone resolution
+- `django-axes` for login brute-force protection
 - No external APIs yet (deterministic seed data)
 
 ## Project Structure
@@ -134,7 +135,7 @@ brotherwillies/
 | `/cbb/conference/<slug>/` | CBB conference dashboard |
 | `/cbb/game/<uuid>/` | CBB game detail |
 | `/golf/` | Golf hub (placeholder) |
-| `/accounts/register/` | Register |
+| `/accounts/register/` | Register (DISABLED — route removed) |
 | `/accounts/login/` | Login |
 | `/accounts/logout/` | Logout |
 | `/profile/` | Profile (personal info) |
@@ -257,6 +258,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 14 | CBB app (college basketball) | COMPLETE |
 | 15 | Season-aware dashboard + offseason banners | COMPLETE |
 | 16 | User timezone via zip code | COMPLETE |
+| 17 | Security hardening & registration disabled | COMPLETE |
 
 ---
 
