@@ -19,7 +19,8 @@
         <li style="padding:4px 0;"><a href="#performance">8. Model Performance</a></li>
         <li style="padding:4px 0;"><a href="#parlays">9. Parlays</a></li>
         <li style="padding:4px 0;"><a href="#mock-bets">10. Mock Bets</a></li>
-        <li style="padding:4px 0;"><a href="#glossary">11. Glossary</a></li>
+        <li style="padding:4px 0;"><a href="#mock-analytics">11. Mock Bet Analytics</a></li>
+        <li style="padding:4px 0;"><a href="#glossary">12. Glossary</a></li>
         <li style="padding:4px 0;"><a href="/profile/whats-new/">What's New &rarr;</a> <span class="text-sm text-muted">Full release history</span></li>
     </ul>
 </div>
@@ -317,9 +318,51 @@
     </p>
 </div>
 
-{# ── 11. Glossary ────────────────────────────────────────────────────── #}
+{# ── 11. Mock Bet Analytics ────────────────────────────────────────── #}
+<div class="card mb-2" id="mock-analytics">
+    <p class="card-title">11. Mock Bet Analytics</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        The <a href="/mockbets/analytics/">Analytics Dashboard</a> provides comprehensive performance analysis
+        of your mock betting history. Access it from the "Analytics Dashboard" button on the My Mock Bets page.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Filters:</strong> Narrow your analysis by sport, bet type, confidence level, model source, and date
+        range. All KPIs and charts update to reflect your selection.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Charts:</strong> Five interactive Chart.js visualizations &mdash; Cumulative P/L (time-series),
+        Rolling Win % (10-bet sliding window), ROI by Sport (bar chart), Performance by Confidence
+        (grouped bar: win rate + ROI by level), and Odds Distribution (scatter plot of wins vs losses).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>House vs User Comparison:</strong> A head-to-head table comparing bets made with the House model
+        vs your User model &mdash; win rate, ROI, average odds, implied probability, and volatility.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Confidence Calibration:</strong> Tests whether your self-rated confidence (Low/Medium/High) aligns
+        with actual outcomes. Shows expected win rate (from implied probability) vs actual win rate.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Edge Analysis:</strong> Groups bets by expected edge buckets (negative, 0-3%, 3-7%, 7%+) and shows
+        win rate and ROI for each bucket. Tests whether higher-edge picks actually perform better.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Variance & Stress Testing:</strong> Longest win/loss streaks, max drawdown, volatility (standard
+        deviation), and best/worst N-bet stretches. Helps you understand the range of outcomes.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Flat-Bet Simulation:</strong> Enter a hypothetical flat stake amount to see what your results would
+        look like if every bet used the same stake. Removes stake-sizing effects from the analysis.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Important:</strong> All figures are simulated. Past simulated performance does not predict future
+        outcomes. For learning and decision evaluation only.
+    </p>
+</div>
+
+{# ── 12. Glossary ────────────────────────────────────────────────────── #}
 <div class="card mb-2" id="glossary">
-    <p class="card-title">11. Glossary</p>
+    <p class="card-title">12. Glossary</p>
     <div class="table-wrap">
         <table class="data-table">
             <thead>

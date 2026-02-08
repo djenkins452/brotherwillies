@@ -313,3 +313,87 @@ class MockBetReviewTests(TestCase):
             data=json.dumps({'review_flag': 'repeat'}),
         )
         self.assertEqual(resp.status_code, 400)
+
+
+class MockBetAnalyticsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('testuser', password='testpass')
+        self.client.force_login(self.user)
+
+    def test_analytics_requires_login(self):
+        self.client.logout()
+        resp = self.client.get('/mockbets/analytics/')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_analytics_empty(self):
+        resp = self.client.get('/mockbets/analytics/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Mock Bet Analytics')
+
+    def test_analytics_with_bets(self):
+        MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-150,
+            implied_probability=Decimal('0.6000'),
+            stake_amount=Decimal('100.00'), result='win',
+            simulated_payout=Decimal('66.67'),
+            settled_at=timezone.now(),
+        )
+        MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Auburn', odds_american=130,
+            implied_probability=Decimal('0.4348'),
+            stake_amount=Decimal('50.00'), result='loss',
+            simulated_payout=Decimal('0.00'),
+            settled_at=timezone.now(),
+        )
+        resp = self.client.get('/mockbets/analytics/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Cumulative P/L')
+
+    def test_analytics_filters(self):
+        resp = self.client.get('/mockbets/analytics/?sport=cfb&confidence=high&model_source=house')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_flat_bet_sim_requires_login(self):
+        self.client.logout()
+        resp = self.client.post('/mockbets/flat-bet-sim/', content_type='application/json', data='{}')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_flat_bet_sim_no_bets(self):
+        import json
+        resp = self.client.post(
+            '/mockbets/flat-bet-sim/',
+            content_type='application/json',
+            data=json.dumps({'flat_stake': '100'}),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_flat_bet_sim_with_bets(self):
+        MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-150,
+            implied_probability=Decimal('0.6000'),
+            stake_amount=Decimal('100.00'), result='win',
+            simulated_payout=Decimal('66.67'),
+            settled_at=timezone.now(),
+        )
+        MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Auburn', odds_american=130,
+            implied_probability=Decimal('0.4348'),
+            stake_amount=Decimal('50.00'), result='loss',
+            simulated_payout=Decimal('0.00'),
+            settled_at=timezone.now(),
+        )
+        import json
+        resp = self.client.post(
+            '/mockbets/flat-bet-sim/',
+            content_type='application/json',
+            data=json.dumps({'flat_stake': '50'}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['total_bets'], 2)
+        self.assertIn('roi', data)
+        self.assertIn('cumulative_pl', data)

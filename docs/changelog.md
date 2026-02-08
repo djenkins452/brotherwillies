@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-02-08 - Mock Bet Analytics Dashboard (Phase 2-4)
+
+**Summary:** Full analytics dashboard for mock bet simulation with interactive Chart.js charts, House vs User comparison, confidence calibration, edge analysis, variance/stress testing, and flat-bet what-if simulation.
+
+### New files:
+- `apps/mockbets/services/analytics.py` — Analytics computation engine with 7 functions: compute_kpis, compute_chart_data, compute_comparison, compute_confidence_calibration, compute_edge_analysis, compute_flat_bet_simulation, compute_variance_stats
+- `templates/mockbets/analytics.html` — Full analytics dashboard template with Chart.js charts
+
+### New views & routes:
+- `/mockbets/analytics/` — Analytics dashboard with filters (sport, bet type, confidence, model source, date range)
+- `/mockbets/flat-bet-sim/` — AJAX endpoint for flat-bet what-if simulation
+
+### Features:
+- **KPI Cards** — Total bets, W-L-P record, win rate, simulated net P/L, ROI, avg odds, avg implied probability
+- **Filters** — Sport, bet type, confidence level, model source, date range (from/to)
+- **5 Chart.js Charts** — Cumulative P/L (line), Rolling Win % with 50% reference (line), ROI by Sport (bar), Performance by Confidence (grouped bar), Odds Distribution (scatter)
+- **House vs User Comparison** — Head-to-head table: count, win rate, ROI, net P/L, avg odds, implied probability, volatility
+- **Confidence Calibration** — Expected vs actual win rate by confidence level
+- **Edge Analysis** — Win rate and ROI by edge bucket (negative, 0-3%, 3-7%, 7%+)
+- **Variance & Stress Testing** — Longest win/loss streaks, max drawdown, volatility, best/worst N-bet stretches
+- **Flat-Bet Simulation** — What-if with custom stake, recalculated P/L/ROI/drawdown + cumulative chart
+
+### Modified files:
+- `apps/mockbets/views.py` — Added analytics_dashboard and flat_bet_sim views
+- `apps/mockbets/urls.py` — Added analytics/ and flat-bet-sim/ routes
+- `templates/mockbets/my_bets.html` — Added "Analytics Dashboard" button link
+- `templates/includes/help_modal.html` — Added mock_analytics help key
+- `templates/accounts/user_guide.html` — Added Section 11 (Mock Bet Analytics), renumbered Glossary to 12
+
+---
+
 ## 2026-02-08 - Session closeout command + CLAUDE.md updates
 
 **Summary:** Added `/closeout` slash command for Claude Code that reviews all documentation, help systems, and tracking before ending a coding session. Updated CLAUDE.md Standing Instructions to include What's New page and parallel session safety notes.

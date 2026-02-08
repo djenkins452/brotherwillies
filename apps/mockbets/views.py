@@ -8,6 +8,11 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .models import MockBet
+from .services.analytics import (
+    compute_kpis, compute_chart_data, compute_comparison,
+    compute_confidence_calibration, compute_edge_analysis,
+    compute_flat_bet_simulation, compute_variance_stats,
+)
 
 
 @login_required
@@ -242,3 +247,82 @@ def review_bet(request, bet_id):
     bet.save(update_fields=['review_flag', 'review_notes'])
 
     return JsonResponse({'success': True})
+
+
+@login_required
+def analytics_dashboard(request):
+    """Phase 2-4 analytics dashboard with charts, comparison, and advanced analytics."""
+    bets = MockBet.objects.filter(user=request.user).select_related(
+        'cfb_game__home_team', 'cfb_game__away_team',
+        'cbb_game__home_team', 'cbb_game__away_team',
+        'golf_event', 'golf_golfer',
+    )
+
+    # Apply filters
+    sport = request.GET.get('sport')
+    if sport in ('cfb', 'cbb', 'golf'):
+        bets = bets.filter(sport=sport)
+
+    bet_type = request.GET.get('bet_type')
+    if bet_type:
+        bets = bets.filter(bet_type=bet_type)
+
+    confidence = request.GET.get('confidence')
+    if confidence in ('low', 'medium', 'high'):
+        bets = bets.filter(confidence_level=confidence)
+
+    model_source = request.GET.get('model_source')
+    if model_source in ('house', 'user'):
+        bets = bets.filter(model_source=model_source)
+
+    # Date range filter
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+    if date_from:
+        bets = bets.filter(placed_at__date__gte=date_from)
+    if date_to:
+        bets = bets.filter(placed_at__date__lte=date_to)
+
+    all_bets = list(bets)
+    kpis = compute_kpis(all_bets)
+    chart_data = compute_chart_data(all_bets)
+    comparison = compute_comparison(all_bets)
+    calibration = compute_confidence_calibration(all_bets)
+    edge = compute_edge_analysis(all_bets)
+    variance = compute_variance_stats(all_bets)
+
+    return render(request, 'mockbets/analytics.html', {
+        'kpis': kpis,
+        'chart_data_json': json.dumps(chart_data),
+        'comparison': comparison,
+        'calibration': calibration,
+        'edge': edge,
+        'variance': variance,
+        'current_sport': sport or '',
+        'current_bet_type': bet_type or '',
+        'current_confidence': confidence or '',
+        'current_model_source': model_source or '',
+        'current_date_from': date_from or '',
+        'current_date_to': date_to or '',
+        'help_key': 'mock_analytics',
+        'nav_active': 'mockbets',
+    })
+
+
+@login_required
+@require_POST
+def flat_bet_sim(request):
+    """AJAX endpoint for flat-bet simulation what-if."""
+    try:
+        data = json.loads(request.body)
+        flat_stake = Decimal(str(data.get('flat_stake', '100')))
+        if flat_stake <= 0 or flat_stake > Decimal('10000'):
+            return JsonResponse({'error': 'Stake must be between $0.01 and $10,000'}, status=400)
+    except (json.JSONDecodeError, InvalidOperation, TypeError):
+        return JsonResponse({'error': 'Invalid input'}, status=400)
+
+    bets = list(MockBet.objects.filter(user=request.user))
+    result = compute_flat_bet_simulation(bets, flat_stake)
+    if result is None:
+        return JsonResponse({'error': 'No settled bets to simulate'}, status=400)
+    return JsonResponse(result)

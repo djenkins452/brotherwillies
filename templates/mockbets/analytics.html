@@ -1,0 +1,562 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Mock Bet Analytics - Brother Willies{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin:0;">Mock Bet Analytics</h1>
+    <a href="{% url 'mockbets:my_bets' %}" class="btn btn-sm" style="font-size:0.8rem;">Back to Bets</a>
+</div>
+
+<div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);">
+    <div class="text-sm" style="color:var(--accent);">Simulated performance analytics. Past performance does not predict future outcomes.</div>
+</div>
+
+{# ===== FILTERS ===== #}
+<div class="card mb-1">
+    <form method="get" id="analytics-filters">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
+            <div style="flex:1;min-width:80px;">
+                <label class="text-sm text-muted">Sport</label>
+                <select name="sport" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                    <option value="">All</option>
+                    <option value="cfb" {% if current_sport == 'cfb' %}selected{% endif %}>CFB</option>
+                    <option value="cbb" {% if current_sport == 'cbb' %}selected{% endif %}>CBB</option>
+                    <option value="golf" {% if current_sport == 'golf' %}selected{% endif %}>Golf</option>
+                </select>
+            </div>
+            <div style="flex:1;min-width:100px;">
+                <label class="text-sm text-muted">Bet Type</label>
+                <select name="bet_type" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                    <option value="">All</option>
+                    <option value="moneyline" {% if current_bet_type == 'moneyline' %}selected{% endif %}>Moneyline</option>
+                    <option value="spread" {% if current_bet_type == 'spread' %}selected{% endif %}>Spread</option>
+                    <option value="total" {% if current_bet_type == 'total' %}selected{% endif %}>Total</option>
+                    <option value="outright" {% if current_bet_type == 'outright' %}selected{% endif %}>Outright</option>
+                    <option value="top_5" {% if current_bet_type == 'top_5' %}selected{% endif %}>Top 5</option>
+                    <option value="top_10" {% if current_bet_type == 'top_10' %}selected{% endif %}>Top 10</option>
+                    <option value="top_20" {% if current_bet_type == 'top_20' %}selected{% endif %}>Top 20</option>
+                    <option value="make_cut" {% if current_bet_type == 'make_cut' %}selected{% endif %}>Make Cut</option>
+                    <option value="matchup" {% if current_bet_type == 'matchup' %}selected{% endif %}>Matchup</option>
+                </select>
+            </div>
+            <div style="flex:1;min-width:90px;">
+                <label class="text-sm text-muted">Confidence</label>
+                <select name="confidence" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                    <option value="">All</option>
+                    <option value="low" {% if current_confidence == 'low' %}selected{% endif %}>Low</option>
+                    <option value="medium" {% if current_confidence == 'medium' %}selected{% endif %}>Medium</option>
+                    <option value="high" {% if current_confidence == 'high' %}selected{% endif %}>High</option>
+                </select>
+            </div>
+            <div style="flex:1;min-width:80px;">
+                <label class="text-sm text-muted">Source</label>
+                <select name="model_source" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                    <option value="">All</option>
+                    <option value="house" {% if current_model_source == 'house' %}selected{% endif %}>House</option>
+                    <option value="user" {% if current_model_source == 'user' %}selected{% endif %}>User</option>
+                </select>
+            </div>
+            <div style="flex:1;min-width:120px;">
+                <label class="text-sm text-muted">From</label>
+                <input type="date" name="date_from" value="{{ current_date_from }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+            </div>
+            <div style="flex:1;min-width:120px;">
+                <label class="text-sm text-muted">To</label>
+                <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+            </div>
+            <button type="submit" class="btn btn-sm" style="font-size:0.8rem;padding:8px 16px;">Apply</button>
+        </div>
+    </form>
+</div>
+
+{# ===== KPI CARDS ===== #}
+<div class="stat-grid mb-2">
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.total_bets }}</div>
+        <div class="stat-label">Total Bets</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.settled_count }}</div>
+        <div class="stat-label">Settled</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.wins }}-{{ kpis.losses }}-{{ kpis.pushes }}</div>
+        <div class="stat-label">W-L-P</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.win_pct|floatformat:1 }}%</div>
+        <div class="stat-label">Win Rate</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if kpis.net_pl > 0 %}text-green{% elif kpis.net_pl < 0 %}text-red{% endif %}">${{ kpis.net_pl|floatformat:2 }}</div>
+        <div class="stat-label">Sim. Net P/L</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value {% if kpis.roi > 0 %}text-green{% elif kpis.roi < 0 %}text-red{% endif %}">{{ kpis.roi|floatformat:1 }}%</div>
+        <div class="stat-label">Sim. ROI</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.avg_odds|stringformat:"+d" }}</div>
+        <div class="stat-label">Avg Odds</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ kpis.avg_implied }}%</div>
+        <div class="stat-label">Avg Implied</div>
+    </div>
+</div>
+
+{% if kpis.settled_count > 0 %}
+{# ===== CUMULATIVE P/L CHART ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Cumulative P/L</h3>
+    <div style="position:relative;height:250px;">
+        <canvas id="cumulativePLChart"></canvas>
+    </div>
+</div>
+
+{# ===== ROLLING WIN % CHART ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Rolling Win % (10-Bet Window)</h3>
+    <div style="position:relative;height:250px;">
+        <canvas id="rollingWinChart"></canvas>
+    </div>
+</div>
+
+{# ===== ROI BY SPORT ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">ROI by Sport</h3>
+    <div style="position:relative;height:250px;">
+        <canvas id="roiBySportChart"></canvas>
+    </div>
+</div>
+
+{# ===== CONFIDENCE PERFORMANCE ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Performance by Confidence</h3>
+    <div style="position:relative;height:250px;">
+        <canvas id="confidenceChart"></canvas>
+    </div>
+</div>
+
+{# ===== ODDS DISTRIBUTION ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Odds Distribution</h3>
+    <div style="position:relative;height:250px;">
+        <canvas id="oddsDistChart"></canvas>
+    </div>
+</div>
+
+{# ===== HOUSE VS USER COMPARISON ===== #}
+{% if comparison.house and comparison.user %}
+<div class="card mb-1">
+    <h3 class="card-title">House vs User Model</h3>
+    <div class="table-wrap">
+        <table class="data-table" style="width:100%;">
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>House</th>
+                    <th>User</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Bets</td><td>{{ comparison.house.count }}</td><td>{{ comparison.user.count }}</td></tr>
+                <tr><td>Win Rate</td><td>{{ comparison.house.win_pct }}%</td><td>{{ comparison.user.win_pct }}%</td></tr>
+                <tr>
+                    <td>Sim. ROI</td>
+                    <td class="{% if comparison.house.roi > 0 %}text-green{% elif comparison.house.roi < 0 %}text-red{% endif %}">{{ comparison.house.roi }}%</td>
+                    <td class="{% if comparison.user.roi > 0 %}text-green{% elif comparison.user.roi < 0 %}text-red{% endif %}">{{ comparison.user.roi }}%</td>
+                </tr>
+                <tr>
+                    <td>Sim. Net P/L</td>
+                    <td class="{% if comparison.house.net_pl > 0 %}text-green{% elif comparison.house.net_pl < 0 %}text-red{% endif %}">${{ comparison.house.net_pl|floatformat:2 }}</td>
+                    <td class="{% if comparison.user.net_pl > 0 %}text-green{% elif comparison.user.net_pl < 0 %}text-red{% endif %}">${{ comparison.user.net_pl|floatformat:2 }}</td>
+                </tr>
+                <tr><td>Avg Odds</td><td>{{ comparison.house.avg_odds|stringformat:"+d" }}</td><td>{{ comparison.user.avg_odds|stringformat:"+d" }}</td></tr>
+                <tr><td>Avg Implied</td><td>{{ comparison.house.avg_implied }}%</td><td>{{ comparison.user.avg_implied }}%</td></tr>
+                <tr><td>Volatility</td><td>{{ comparison.house.volatility }}</td><td>{{ comparison.user.volatility }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# ===== CONFIDENCE CALIBRATION ===== #}
+{% if calibration %}
+<div class="card mb-1">
+    <h3 class="card-title">Confidence Calibration</h3>
+    <p class="text-sm text-muted mb-1">Expected win rate (by implied probability) vs. actual win rate</p>
+    <div class="table-wrap">
+        <table class="data-table" style="width:100%;">
+            <thead>
+                <tr><th>Level</th><th>Bets</th><th>Expected</th><th>Actual</th><th>Diff</th></tr>
+            </thead>
+            <tbody>
+                {% for level, data in calibration.items %}
+                <tr>
+                    <td style="text-transform:capitalize;">{{ level }}</td>
+                    <td>{{ data.count }}</td>
+                    <td>{{ data.expected_win_pct }}%</td>
+                    <td>{{ data.actual_win_pct }}%</td>
+                    <td class="{% if data.diff > 0 %}text-green{% elif data.diff < 0 %}text-red{% endif %}">
+                        {% if data.diff > 0 %}+{% endif %}{{ data.diff }}%
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# ===== EDGE ANALYSIS ===== #}
+{% if edge %}
+<div class="card mb-1">
+    <h3 class="card-title">Edge Analysis</h3>
+    <p class="text-sm text-muted mb-1">Performance by expected edge bucket</p>
+    <div class="table-wrap">
+        <table class="data-table" style="width:100%;">
+            <thead>
+                <tr><th>Edge Range</th><th>Bets</th><th>Win Rate</th><th>Sim. ROI</th></tr>
+            </thead>
+            <tbody>
+                {% for key, data in edge.items %}
+                <tr>
+                    <td>{{ data.range }}</td>
+                    <td>{{ data.count }}</td>
+                    <td>{{ data.win_pct }}%</td>
+                    <td class="{% if data.roi > 0 %}text-green{% elif data.roi < 0 %}text-red{% endif %}">{{ data.roi }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# ===== VARIANCE & STRESS TESTING ===== #}
+{% if variance %}
+<div class="card mb-1">
+    <h3 class="card-title">Variance & Stress Testing</h3>
+    <div class="stat-grid">
+        <div class="stat-tile">
+            <div class="stat-value text-red">{{ variance.longest_losing_streak }}</div>
+            <div class="stat-label">Longest Loss Streak</div>
+        </div>
+        <div class="stat-tile">
+            <div class="stat-value text-green">{{ variance.longest_winning_streak }}</div>
+            <div class="stat-label">Longest Win Streak</div>
+        </div>
+        <div class="stat-tile">
+            <div class="stat-value text-red">${{ variance.max_drawdown }}</div>
+            <div class="stat-label">Max Drawdown</div>
+        </div>
+        <div class="stat-tile">
+            <div class="stat-value">{{ variance.volatility }}</div>
+            <div class="stat-label">Volatility (Std Dev)</div>
+        </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="card" style="flex:1;min-width:200px;">
+            <div class="text-sm text-muted">Best {{ variance.best_stretch.window }}-Bet Stretch</div>
+            <div class="text-green" style="font-size:1.1rem;font-weight:600;">${{ variance.best_stretch.value }}</div>
+            <div class="text-sm text-muted">Starting at bet #{{ variance.best_stretch.start }}</div>
+        </div>
+        <div class="card" style="flex:1;min-width:200px;">
+            <div class="text-sm text-muted">Worst {{ variance.worst_stretch.window }}-Bet Stretch</div>
+            <div class="text-red" style="font-size:1.1rem;font-weight:600;">${{ variance.worst_stretch.value }}</div>
+            <div class="text-sm text-muted">Starting at bet #{{ variance.worst_stretch.start }}</div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# ===== FLAT-BET SIMULATION ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Flat-Bet Simulation</h3>
+    <p class="text-sm text-muted mb-1">What if every bet used the same simulated stake?</p>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:120px;">
+            <label class="text-sm text-muted">Flat Stake ($)</label>
+            <input type="number" id="flatStakeInput" value="100" min="1" max="10000" step="10" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+        </div>
+        <button onclick="runFlatBetSim()" class="btn btn-sm" style="font-size:0.8rem;padding:8px 16px;">Simulate</button>
+    </div>
+    <div id="flatBetResults" style="margin-top:12px;display:none;">
+        <div class="stat-grid">
+            <div class="stat-tile">
+                <div class="stat-value" id="fbTotalBets">-</div>
+                <div class="stat-label">Bets</div>
+            </div>
+            <div class="stat-tile">
+                <div class="stat-value" id="fbNetPL">-</div>
+                <div class="stat-label">Sim. Net P/L</div>
+            </div>
+            <div class="stat-tile">
+                <div class="stat-value" id="fbROI">-</div>
+                <div class="stat-label">Sim. ROI</div>
+            </div>
+            <div class="stat-tile">
+                <div class="stat-value" id="fbDrawdown">-</div>
+                <div class="stat-label">Max Drawdown</div>
+            </div>
+        </div>
+        <div style="position:relative;height:250px;margin-top:12px;">
+            <canvas id="flatBetChart"></canvas>
+        </div>
+    </div>
+</div>
+
+{% endif %}{# end settled_count > 0 #}
+
+{% if kpis.settled_count == 0 %}
+<div class="empty-state">
+    <p>No settled bets to analyze yet.</p>
+    <p class="text-sm text-muted">Place and settle some simulated bets to see analytics here.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    const chartData = {{ chart_data_json|safe }};
+    if (!chartData) return;
+
+    const COLORS = {
+        accent: '#4f8cff',
+        green: '#22c55e',
+        red: '#ef4444',
+        yellow: '#eab308',
+        orange: '#f97316',
+        muted: '#6b7280',
+        grid: 'rgba(45,49,72,0.5)',
+        text: '#9ca3b4',
+    };
+
+    const defaultOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { labels: { color: COLORS.text, font: { size: 11 } } },
+        },
+        scales: {
+            x: { ticks: { color: COLORS.text, font: { size: 10 } }, grid: { color: COLORS.grid } },
+            y: { ticks: { color: COLORS.text, font: { size: 10 } }, grid: { color: COLORS.grid } },
+        },
+    };
+
+    // ===== Cumulative P/L =====
+    if (chartData.cumulative_pl && chartData.cumulative_pl.length) {
+        new Chart(document.getElementById('cumulativePLChart'), {
+            type: 'line',
+            data: {
+                labels: chartData.cumulative_pl.map(d => d.date),
+                datasets: [{
+                    label: 'Cumulative P/L ($)',
+                    data: chartData.cumulative_pl.map(d => d.pl),
+                    borderColor: COLORS.accent,
+                    backgroundColor: 'rgba(79,140,255,0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                }],
+            },
+            options: {
+                ...defaultOptions,
+                plugins: { ...defaultOptions.plugins, legend: { display: false } },
+                scales: {
+                    ...defaultOptions.scales,
+                    y: { ...defaultOptions.scales.y, ticks: { ...defaultOptions.scales.y.ticks, callback: v => '$' + v } },
+                },
+            },
+        });
+    }
+
+    // ===== Rolling Win % =====
+    if (chartData.rolling_win_pct && chartData.rolling_win_pct.length) {
+        new Chart(document.getElementById('rollingWinChart'), {
+            type: 'line',
+            data: {
+                labels: chartData.rolling_win_pct.map(d => 'Bet ' + d.bet_num),
+                datasets: [{
+                    label: 'Win %',
+                    data: chartData.rolling_win_pct.map(d => d.win_pct),
+                    borderColor: COLORS.green,
+                    backgroundColor: 'rgba(34,197,94,0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 1,
+                }, {
+                    label: '50% Line',
+                    data: chartData.rolling_win_pct.map(() => 50),
+                    borderColor: COLORS.muted,
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false,
+                }],
+            },
+            options: {
+                ...defaultOptions,
+                scales: {
+                    ...defaultOptions.scales,
+                    y: { ...defaultOptions.scales.y, min: 0, max: 100, ticks: { ...defaultOptions.scales.y.ticks, callback: v => v + '%' } },
+                },
+            },
+        });
+    }
+
+    // ===== ROI by Sport =====
+    if (chartData.roi_by_sport && Object.keys(chartData.roi_by_sport).length) {
+        const sports = Object.keys(chartData.roi_by_sport);
+        const sportColors = { cfb: COLORS.accent, cbb: COLORS.green, golf: COLORS.yellow };
+        new Chart(document.getElementById('roiBySportChart'), {
+            type: 'bar',
+            data: {
+                labels: sports.map(s => s.toUpperCase()),
+                datasets: [{
+                    label: 'ROI %',
+                    data: sports.map(s => chartData.roi_by_sport[s].roi),
+                    backgroundColor: sports.map(s => sportColors[s] || COLORS.accent),
+                    borderRadius: 6,
+                }],
+            },
+            options: {
+                ...defaultOptions,
+                plugins: { ...defaultOptions.plugins, legend: { display: false } },
+                scales: {
+                    ...defaultOptions.scales,
+                    y: { ...defaultOptions.scales.y, ticks: { ...defaultOptions.scales.y.ticks, callback: v => v + '%' } },
+                },
+            },
+        });
+    }
+
+    // ===== Performance by Confidence =====
+    if (chartData.performance_by_confidence && Object.keys(chartData.performance_by_confidence).length) {
+        const levels = ['low', 'medium', 'high'].filter(l => chartData.performance_by_confidence[l]);
+        const confColors = { low: COLORS.yellow, medium: COLORS.orange, high: COLORS.green };
+        new Chart(document.getElementById('confidenceChart'), {
+            type: 'bar',
+            data: {
+                labels: levels.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
+                datasets: [{
+                    label: 'Win Rate %',
+                    data: levels.map(l => chartData.performance_by_confidence[l].win_pct),
+                    backgroundColor: levels.map(l => confColors[l]),
+                    borderRadius: 6,
+                }, {
+                    label: 'ROI %',
+                    data: levels.map(l => chartData.performance_by_confidence[l].roi),
+                    backgroundColor: levels.map(l => confColors[l] + '80'),
+                    borderRadius: 6,
+                }],
+            },
+            options: defaultOptions,
+        });
+    }
+
+    // ===== Odds Distribution =====
+    if (chartData.odds_distribution && chartData.odds_distribution.length) {
+        const wins = chartData.odds_distribution.filter(d => d.result === 'win');
+        const losses = chartData.odds_distribution.filter(d => d.result === 'loss');
+        new Chart(document.getElementById('oddsDistChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Wins',
+                    data: wins.map(d => ({ x: d.odds, y: d.implied_prob })),
+                    backgroundColor: COLORS.green,
+                    pointRadius: 5,
+                }, {
+                    label: 'Losses',
+                    data: losses.map(d => ({ x: d.odds, y: d.implied_prob })),
+                    backgroundColor: COLORS.red,
+                    pointRadius: 5,
+                }],
+            },
+            options: {
+                ...defaultOptions,
+                scales: {
+                    x: { ...defaultOptions.scales.x, title: { display: true, text: 'American Odds', color: COLORS.text } },
+                    y: { ...defaultOptions.scales.y, title: { display: true, text: 'Implied Prob %', color: COLORS.text } },
+                },
+            },
+        });
+    }
+
+    // ===== Flat-Bet Simulation =====
+    let flatBetChartInstance = null;
+
+    window.runFlatBetSim = function() {
+        const stake = document.getElementById('flatStakeInput').value;
+        fetch('{% url "mockbets:flat_bet_sim" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: JSON.stringify({ flat_stake: stake }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+            document.getElementById('flatBetResults').style.display = 'block';
+            document.getElementById('fbTotalBets').textContent = data.total_bets;
+
+            const netEl = document.getElementById('fbNetPL');
+            netEl.textContent = '$' + data.net_pl.toFixed(2);
+            netEl.className = 'stat-value ' + (data.net_pl > 0 ? 'text-green' : data.net_pl < 0 ? 'text-red' : '');
+
+            const roiEl = document.getElementById('fbROI');
+            roiEl.textContent = data.roi + '%';
+            roiEl.className = 'stat-value ' + (data.roi > 0 ? 'text-green' : data.roi < 0 ? 'text-red' : '');
+
+            document.getElementById('fbDrawdown').textContent = '$' + data.max_drawdown.toFixed(2);
+
+            // Chart
+            if (flatBetChartInstance) flatBetChartInstance.destroy();
+            flatBetChartInstance = new Chart(document.getElementById('flatBetChart'), {
+                type: 'line',
+                data: {
+                    labels: data.cumulative_pl.map(d => d.date),
+                    datasets: [{
+                        label: 'Flat-Bet P/L ($)',
+                        data: data.cumulative_pl.map(d => d.pl),
+                        borderColor: COLORS.orange,
+                        backgroundColor: 'rgba(249,115,22,0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                    }],
+                },
+                options: {
+                    ...defaultOptions,
+                    plugins: { ...defaultOptions.plugins, legend: { display: false } },
+                    scales: {
+                        ...defaultOptions.scales,
+                        y: { ...defaultOptions.scales.y, ticks: { ...defaultOptions.scales.y.ticks, callback: v => '$' + v } },
+                    },
+                },
+            });
+        })
+        .catch(err => console.error('Flat-bet sim error:', err));
+    };
+
+    function getCsrfToken() {
+        const cookies = document.cookie.split(';');
+        for (let c of cookies) {
+            c = c.trim();
+            if (c.startsWith('csrftoken=')) return c.substring(10);
+        }
+        return '';
+    }
+})();
+</script>
+{% endblock %}

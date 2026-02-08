@@ -2,7 +2,10 @@
 {% block title %}My Mock Bets - Brother Willies{% endblock %}
 
 {% block content %}
-<h1 class="page-title">My Mock Bets</h1>
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin:0;">My Mock Bets</h1>
+    <a href="{% url 'mockbets:analytics' %}" class="btn btn-sm" style="font-size:0.8rem;">Analytics Dashboard</a>
+</div>
 
 <div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);">
     <div class="text-sm" style="color:var(--accent);">Simulated analytics only. No real money involved.</div>

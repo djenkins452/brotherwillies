@@ -247,6 +247,25 @@
                     <li><strong>Important:</strong> This is a simulated analytics tool. No real money, no payouts, no betting advice. For learning and decision evaluation only.</li>
                 </ul>
 
+            {% elif help_key == 'mock_analytics' %}
+                <h4>Mock Bet Analytics</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> A comprehensive analytics dashboard for your simulated betting history. Charts, comparison tables, variance metrics, and what-if simulations — all built from your mock bet data.</li>
+                    <li><strong>Filters</strong> — Narrow analysis by sport, bet type, confidence level, model source, and date range. All charts and metrics update based on your filter selection.</li>
+                    <li><strong>KPI Cards</strong> — Summarize total bets, win-loss-push record, win rate, simulated net P/L, simulated ROI, average odds, and average implied probability.</li>
+                    <li><strong>Cumulative P/L Chart</strong> — Time-series showing your running simulated profit/loss. An upward trend means your selections have been profitable in simulation.</li>
+                    <li><strong>Rolling Win %</strong> — Your win rate over a sliding 10-bet window. Helps spot hot and cold streaks in your analysis.</li>
+                    <li><strong>ROI by Sport</strong> — Which sports are your strongest areas? Compares simulated ROI across CFB, CBB, and Golf.</li>
+                    <li><strong>Performance by Confidence</strong> — Win rate and ROI broken out by your confidence rating (Low/Medium/High). Tests whether your confidence calibration is accurate.</li>
+                    <li><strong>Odds Distribution</strong> — Scatter plot of your bets by American odds vs implied probability, colored by win/loss outcome.</li>
+                    <li><strong>House vs User Comparison</strong> — Head-to-head table comparing bets placed using the House model vs your User model. Includes win rate, ROI, average odds, and volatility.</li>
+                    <li><strong>Confidence Calibration</strong> — Compares expected win rate (from implied probability) to actual win rate for each confidence level. Positive diff means you're outperforming expectations.</li>
+                    <li><strong>Edge Analysis</strong> — Performance broken out by expected edge buckets (negative, 0-3%, 3-7%, 7%+). Tests whether higher-edge picks actually perform better.</li>
+                    <li><strong>Variance & Stress Testing</strong> — Longest win/loss streaks, max drawdown, volatility, and best/worst N-bet stretches. Helps understand the range of outcomes in your simulation.</li>
+                    <li><strong>Flat-Bet Simulation</strong> — What if every bet used the same stake? Enter a flat amount and see recalculated P/L, ROI, and max drawdown. Useful for removing stake-sizing effects from your analysis.</li>
+                    <li><strong>Important:</strong> All figures are simulated. Past simulated performance does not predict future outcomes. For learning and decision evaluation only.</li>
+                </ul>
+
             {% elif help_key == 'mock_bet_detail' %}
                 <h4>Mock Bet Detail</h4>
                 <ul>
