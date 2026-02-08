@@ -95,8 +95,10 @@
             {% endif %}
             <div class="teams">
                 <span class="team-name">{{ g.game.away_team.name }}</span>
+                {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
                 <span class="vs">@</span>
                 <span class="team-name">{{ g.game.home_team.name }}</span>
+                {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
             </div>
             <div class="game-meta">
                 {% if active_sport == 'cfb' %}

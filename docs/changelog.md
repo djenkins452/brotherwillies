@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-02-08 - Spread Indicators on Game Cards
+
+**Summary:** Added spread (+/-) display next to each team name across all game cards and detail pages. Follows the industry-standard convention: negative spread = favorite, positive = underdog (e.g., Texas Tech -11.5 / West Virginia +11.5). Makes it immediately clear who is favored without reading the AI Insight.
+
+### New:
+- `spread_display` template filter in `apps/core/templatetags/tz_extras.py` — formats spread for home/away side with proper sign
+
+### Modified files:
+- `templates/core/home.html` — Added spread tags to all live and upcoming game cards (CBB + CFB)
+- `templates/core/value_board.html` — Added spread tags to value board game cards
+- `templates/cbb/game_detail.html` — Added spread next to team names in header
+- `templates/cfb/game_detail.html` — Added spread next to team names in header
+- `static/css/style.css` — Added `.spread-tag` styling (yellow, compact)
+
+---
+
 ## 2026-02-08 - Golf Event Seeding for Production
 
 **Summary:** Added idempotent `seed_golf_events` management command that creates upcoming major tournament events with 30-golfer fields and realistic outright odds. Wired into `ensure_seed` so production (Railway) gets golf data on every deploy, regardless of live data toggle.

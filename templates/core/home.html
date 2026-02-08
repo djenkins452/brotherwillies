@@ -16,9 +16,11 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
             {% if g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
             {% if g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
         </div>
         <div class="edge-row">
@@ -35,9 +37,11 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
             {% if g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
             {% if g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
         </div>
         <div class="edge-row">
@@ -60,8 +64,10 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
         </div>
         <div class="game-meta">
             <span>{{ g.game.tipoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
@@ -89,8 +95,10 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
         </div>
         <div class="game-meta">
             <span>{{ g.game.kickoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>

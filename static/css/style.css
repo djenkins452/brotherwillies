@@ -641,6 +641,13 @@ select.form-control {
     border-radius: 4px;
     font-size: 0.95em;
 }
+.spread-tag {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--yellow);
+    margin-left: 4px;
+    white-space: nowrap;
+}
 .game-card .game-meta {
     display: flex;
     justify-content: space-between;
