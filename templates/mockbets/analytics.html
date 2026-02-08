@@ -8,7 +8,7 @@
     <a href="{% url 'mockbets:my_bets' %}" class="btn btn-sm" style="font-size:0.8rem;">Back to Bets</a>
 </div>
 
-<div class="card mb-1" style="background:rgba(79,140,255,0.08);border-color:rgba(79,140,255,0.2);">
+<div class="card mb-1" style="background:rgba(201,148,58,0.08);border-color:rgba(201,148,58,0.2);">
     <div class="text-sm" style="color:var(--accent);">Simulated performance analytics. Past performance does not predict future outcomes.</div>
 </div>
 
@@ -17,7 +17,7 @@
     <form method="get" id="analytics-filters">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
             <div style="flex:1;min-width:80px;">
-                <label class="text-sm text-muted">Sport</label>
+                <label class="text-sm" style="color:var(--accent);">Sport</label>
                 <select name="sport" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="">All</option>
                     <option value="cfb" {% if current_sport == 'cfb' %}selected{% endif %}>CFB</option>
@@ -26,7 +26,7 @@
                 </select>
             </div>
             <div style="flex:1;min-width:100px;">
-                <label class="text-sm text-muted">Bet Type</label>
+                <label class="text-sm" style="color:var(--accent);">Bet Type</label>
                 <select name="bet_type" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="">All</option>
                     <option value="moneyline" {% if current_bet_type == 'moneyline' %}selected{% endif %}>Moneyline</option>
@@ -41,7 +41,7 @@
                 </select>
             </div>
             <div style="flex:1;min-width:90px;">
-                <label class="text-sm text-muted">Confidence</label>
+                <label class="text-sm" style="color:var(--accent);">Confidence</label>
                 <select name="confidence" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="">All</option>
                     <option value="low" {% if current_confidence == 'low' %}selected{% endif %}>Low</option>
@@ -50,7 +50,7 @@
                 </select>
             </div>
             <div style="flex:1;min-width:80px;">
-                <label class="text-sm text-muted">Source</label>
+                <label class="text-sm" style="color:var(--accent);">Source</label>
                 <select name="model_source" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="">All</option>
                     <option value="house" {% if current_model_source == 'house' %}selected{% endif %}>House</option>
@@ -58,11 +58,11 @@
                 </select>
             </div>
             <div style="flex:1;min-width:120px;">
-                <label class="text-sm text-muted">From</label>
+                <label class="text-sm" style="color:var(--accent);">From</label>
                 <input type="date" name="date_from" value="{{ current_date_from }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
             </div>
             <div style="flex:1;min-width:120px;">
-                <label class="text-sm text-muted">To</label>
+                <label class="text-sm" style="color:var(--accent);">To</label>
                 <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
             </div>
             <button type="submit" class="btn btn-sm" style="font-size:0.8rem;padding:8px 16px;">Apply</button>
@@ -278,7 +278,7 @@
     <p class="text-sm text-muted mb-1">What if every bet used the same simulated stake?</p>
     <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
         <div style="flex:1;min-width:120px;">
-            <label class="text-sm text-muted">Flat Stake ($)</label>
+            <label class="text-sm" style="color:var(--accent);">Flat Stake ($)</label>
             <input type="number" id="flatStakeInput" value="100" min="1" max="10000" step="10" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
         </div>
         <button onclick="runFlatBetSim()" class="btn btn-sm" style="font-size:0.8rem;padding:8px 16px;">Simulate</button>
@@ -380,7 +380,7 @@
                     label: 'Cumulative P/L ($)',
                     data: chartData.cumulative_pl.map(d => d.pl),
                     borderColor: COLORS.accent,
-                    backgroundColor: 'rgba(79,140,255,0.1)',
+                    backgroundColor: 'rgba(201,148,58,0.1)',
                     fill: true,
                     tension: 0.3,
                     pointRadius: 2,

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ event.name }} - Brother Willies{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title" style="font-size:1.1rem;">{{ event.name }}</div>
+    <div class="text-sm text-muted mt-1">
+        {{ event.start_date|date:"l, M d" }} &ndash; {{ event.end_date|date:"l, M d, Y" }}
+        {% if not event_open %}
+        <span class="badge badge-gray" style="margin-left:8px;">Completed</span>
+        {% endif %}
+    </div>
+</div>
+
+{% if golfer_odds %}
+<p class="section-title mt-2">Field &amp; Odds</p>
+
+{# ── Desktop table (hidden on small screens) ── #}
+<div class="card golf-odds-table-wrap">
+    <table class="data-table golf-odds-table">
+        <thead>
+            <tr>
+                <th>Golfer</th>
+                <th style="text-align:right;">Odds</th>
+                <th style="text-align:right;">Impl %</th>
+                {% if user.is_authenticated and event_open %}
+                <th style="text-align:center;width:120px;"></th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in golfer_odds %}
+            <tr>
+                <td>{{ entry.golfer.name }}</td>
+                <td style="text-align:right;">
+                    {% if entry.outright_odds is not None %}
+                    {% if entry.outright_odds > 0 %}+{% endif %}{{ entry.outright_odds }}
+                    {% else %}
+                    <span class="text-muted">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td style="text-align:right;">
+                    {% if entry.implied_prob is not None %}
+                    {{ entry.implied_prob|floatformat:1 }}%
+                    {% else %}
+                    <span class="text-muted">&mdash;</span>
+                    {% endif %}
+                </td>
+                {% if user.is_authenticated and event_open %}
+                <td style="text-align:center;">
+                    <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'golf',event_id:{{ event.id }},golfer_id:{{ entry.golfer.id }},selection:'{{ entry.golfer.name|escapejs }}'{% if entry.outright_odds is not None %},odds:{{ entry.outright_odds }}{% endif %},bet_type:'outright'})">Mock Bet</button>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{# ── Mobile cards (hidden on larger screens) ── #}
+<div class="golf-odds-cards">
+    {% for entry in golfer_odds %}
+    <div class="card golf-golfer-card">
+        <div class="golf-golfer-row">
+            <div class="golf-golfer-info">
+                <span class="golf-golfer-name">{{ entry.golfer.name }}</span>
+                <span class="text-sm text-muted">
+                    {% if entry.outright_odds is not None %}
+                    {% if entry.outright_odds > 0 %}+{% endif %}{{ entry.outright_odds }}
+                    &middot; {{ entry.implied_prob|floatformat:1 }}%
+                    {% else %}
+                    No odds available
+                    {% endif %}
+                </span>
+            </div>
+            {% if user.is_authenticated and event_open %}
+            <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'golf',event_id:{{ event.id }},golfer_id:{{ entry.golfer.id }},selection:'{{ entry.golfer.name|escapejs }}'{% if entry.outright_odds is not None %},odds:{{ entry.outright_odds }}{% endif %},bet_type:'outright'})">Mock Bet</button>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="empty-state mt-2">
+    <p>No golfer field or odds data available for this event yet.</p>
+</div>
+{% endif %}
+
+{% if not user.is_authenticated %}
+<div class="login-gate mt-2">
+    <p>Log in to place mock bets on this tournament.</p>
+    <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
+</div>
+{% endif %}
+
+{% if user.is_authenticated %}
+{% include "mockbets/includes/place_bet_modal.html" %}
+{% endif %}
+{% endblock %}

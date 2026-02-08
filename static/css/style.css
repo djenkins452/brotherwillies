@@ -1103,3 +1103,35 @@ input[type="range"]::-webkit-slider-thumb {
     color: var(--red);
     background: rgba(239,68,68,0.12);
 }
+
+/* ========== Golf Event Detail ========== */
+.golf-odds-table-wrap { overflow-x: auto; }
+.golf-odds-table th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.golf-odds-table td { vertical-align: middle; }
+.golf-odds-cards { display: none; }
+
+.golf-golfer-card { padding: 10px 14px; }
+.golf-golfer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.golf-golfer-info { display: flex; flex-direction: column; min-width: 0; }
+.golf-golfer-name { font-weight: 600; font-size: 0.95rem; color: var(--text-primary); }
+
+/* Golfer search autocomplete */
+.golfer-search-wrap { position: relative; }
+.golfer-search-results {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); max-height: 200px; overflow-y: auto;
+    z-index: 400; display: none;
+}
+.golfer-search-results.active { display: block; }
+.golfer-search-item {
+    padding: 8px 12px; cursor: pointer; font-size: 0.9rem;
+    color: var(--text-primary); border-bottom: 1px solid var(--border);
+}
+.golfer-search-item:last-child { border-bottom: none; }
+.golfer-search-item:hover { background: rgba(201,148,58,0.12); }
+
+@media (max-width: 600px) {
+    .golf-odds-table-wrap { display: none; }
+    .golf-odds-cards { display: block; }
+}

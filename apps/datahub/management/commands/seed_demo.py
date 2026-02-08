@@ -13,6 +13,7 @@ from apps.cbb.models import (
 from apps.accounts.models import UserProfile, UserModelConfig, ModelPreset, UserSubscription
 from apps.analytics.models import ModelResultSnapshot
 from apps.parlays.models import Parlay, ParlayLeg
+from apps.golf.models import GolfEvent, Golfer, GolfOddsSnapshot
 from apps.cfb.services.model_service import compute_house_win_prob
 from apps.cbb.services.model_service import compute_house_win_prob as cbb_house_prob
 from apps.datahub.team_colors import get_team_color
@@ -45,6 +46,10 @@ class Command(BaseCommand):
         CBBGame.objects.all().delete()
         CBBTeam.objects.all().delete()
         CBBConference.objects.all().delete()
+        # Golf
+        GolfOddsSnapshot.objects.all().delete()
+        GolfEvent.objects.all().delete()
+        Golfer.objects.all().delete()
         ModelPreset.objects.filter(user__username='demo').delete()
 
         # ── CFB ──────────────────────────────────────────────────────
@@ -254,6 +259,56 @@ class Command(BaseCommand):
             cbb_injury_count += 1
         self.stdout.write(f'  Created {cbb_injury_count} CBB injury impacts')
 
+        # ── Golf ─────────────────────────────────────────────────────
+        self.stdout.write('Seeding Golf data...')
+
+        golf_events_data = [
+            ('The Masters', 'the-masters', 3, 6),
+            ('PGA Championship', 'pga-championship', 10, 13),
+            ('U.S. Open', 'us-open', 17, 20),
+        ]
+        golf_events = []
+        for name, slug, start_offset, end_offset in golf_events_data:
+            event = GolfEvent.objects.create(
+                name=name, slug=slug,
+                start_date=(now + timedelta(days=start_offset)).date(),
+                end_date=(now + timedelta(days=end_offset)).date(),
+            )
+            golf_events.append(event)
+        self.stdout.write(f'  Created {len(golf_events)} golf events')
+
+        golfer_names = [
+            'Scottie Scheffler', 'Rory McIlroy', 'Jon Rahm', 'Viktor Hovland',
+            'Xander Schauffele', 'Collin Morikawa', 'Patrick Cantlay', 'Ludvig Aberg',
+            'Wyndham Clark', 'Brian Harman', 'Max Homa', 'Tommy Fleetwood',
+            'Jordan Spieth', 'Justin Thomas', 'Brooks Koepka', 'Hideki Matsuyama',
+        ]
+        golfers = []
+        for name in golfer_names:
+            golfer = Golfer.objects.create(name=name)
+            golfers.append(golfer)
+        self.stdout.write(f'  Created {len(golfers)} golfers')
+
+        # Golf odds snapshots — top golfers get realistic outright odds
+        odds_tiers = [
+            600, 800, 900, 1000, 1200, 1400, 1600, 1800,
+            2000, 2200, 2500, 2800, 3000, 3500, 4000, 5000,
+        ]
+        for event in golf_events:
+            shuffled_golfers = list(golfers)
+            random.shuffle(shuffled_golfers)
+            for i, golfer in enumerate(shuffled_golfers):
+                base_odds = odds_tiers[i] + random.randint(-100, 100)
+                implied = 100.0 / (base_odds + 100)
+                GolfOddsSnapshot.objects.create(
+                    event=event, golfer=golfer,
+                    captured_at=now - timedelta(hours=random.randint(2, 24)),
+                    sportsbook='consensus',
+                    outright_odds=base_odds,
+                    implied_prob=round(implied * 100, 2),
+                )
+        self.stdout.write('  Created golf odds snapshots')
+
         # ── Demo User ────────────────────────────────────────────────
         self.stdout.write('Setting up demo user...')
 
@@ -362,7 +417,8 @@ class Command(BaseCommand):
 
         # ── Mock Bets ────────────────────────────────────────────────
         self.stdout.write('Seeding mock bets...')
-        self._seed_mock_bets(demo_user, games, cbb_games, now, MockBet, MockBetSettlementLog)
+        self._seed_mock_bets(demo_user, games, cbb_games, now, MockBet, MockBetSettlementLog,
+                             golf_events=golf_events, golfers=golfers)
 
         self.stdout.write(self.style.SUCCESS('Demo data seeded successfully!'))
 
@@ -438,8 +494,9 @@ class Command(BaseCommand):
                 moneyline_away=self._prob_to_ml(1 - new_prob),
             )
 
-    def _seed_mock_bets(self, user, cfb_games, cbb_games, now, MockBet, MockBetSettlementLog):
-        """Seed 30 mock bets — mix of settled and pending, realistic outcomes."""
+    def _seed_mock_bets(self, user, cfb_games, cbb_games, now, MockBet, MockBetSettlementLog,
+                         golf_events=None, golfers=None):
+        """Seed ~40 mock bets — mix of settled and pending, realistic outcomes."""
         bet_templates = []
 
         # CFB settled bets (15 bets, placed 1-14 days ago, settled)
@@ -613,15 +670,92 @@ class Command(BaseCommand):
                 'settled_at': None,
             })
 
+        # Golf settled bets (6 bets)
+        golf_bet_types = ['outright', 'top_5', 'top_10', 'top_20', 'make_cut', 'outright']
+        if golf_events and golfers:
+            for i, bt in enumerate(golf_bet_types):
+                event = golf_events[i % len(golf_events)]
+                golfer = golfers[i % len(golfers)]
+                # Get odds for this golfer at this event
+                snap = GolfOddsSnapshot.objects.filter(event=event, golfer=golfer).first()
+                odds = snap.outright_odds if snap else random.choice([800, 1200, 2000])
+                implied = snap.implied_prob if snap else 8.0
+
+                roll = random.random()
+                if bt == 'make_cut':
+                    result = 'win' if roll < 0.65 else 'loss'
+                elif bt in ('top_10', 'top_20'):
+                    result = 'win' if roll < 0.3 else 'loss'
+                else:
+                    result = 'win' if roll < 0.12 else 'loss'
+
+                placed_days_ago = random.randint(1, 10)
+                placed_at = now - timedelta(days=placed_days_ago, hours=random.randint(1, 8))
+                settled_at = placed_at + timedelta(days=4)
+
+                stake = Decimal(str(random.choice([25, 50, 100])))
+                if result == 'win':
+                    payout = stake * Decimal(odds) / Decimal(100)
+                else:
+                    payout = Decimal('0.00')
+
+                bet_templates.append({
+                    'sport': 'golf',
+                    'golf_event': event,
+                    'golf_golfer': golfer,
+                    'bet_type': bt,
+                    'selection': golfer.name,
+                    'odds_american': odds,
+                    'implied_probability': Decimal(str(round(implied / 100, 4))),
+                    'stake_amount': stake,
+                    'result': result,
+                    'simulated_payout': payout if result == 'win' else Decimal('0.00'),
+                    'confidence_level': random.choice(['low', 'medium', 'high']),
+                    'model_source': random.choice(['house', 'user']),
+                    'expected_edge': None,
+                    'placed_at': placed_at,
+                    'settled_at': settled_at,
+                })
+
+            # Golf pending bets (3 bets — future events)
+            for i in range(3):
+                event = golf_events[i % len(golf_events)]
+                golfer = golfers[(i + 6) % len(golfers)]
+                snap = GolfOddsSnapshot.objects.filter(event=event, golfer=golfer).first()
+                odds = snap.outright_odds if snap else 1500
+                implied = snap.implied_prob if snap else 6.0
+
+                bet_templates.append({
+                    'sport': 'golf',
+                    'golf_event': event,
+                    'golf_golfer': golfer,
+                    'bet_type': random.choice(['outright', 'top_10', 'make_cut']),
+                    'selection': golfer.name,
+                    'odds_american': odds,
+                    'implied_probability': Decimal(str(round(implied / 100, 4))),
+                    'stake_amount': Decimal('50.00'),
+                    'result': 'pending',
+                    'simulated_payout': None,
+                    'confidence_level': 'medium',
+                    'model_source': 'house',
+                    'expected_edge': None,
+                    'placed_at': now - timedelta(hours=random.randint(1, 12)),
+                    'settled_at': None,
+                })
+
         # Create all bets
         settled_count = 0
         for tmpl in bet_templates:
             cfb_game = tmpl.pop('cfb_game', None)
             cbb_game = tmpl.pop('cbb_game', None)
+            golf_event = tmpl.pop('golf_event', None)
+            golf_golfer = tmpl.pop('golf_golfer', None)
             bet = MockBet.objects.create(
                 user=user,
                 cfb_game=cfb_game,
                 cbb_game=cbb_game,
+                golf_event=golf_event,
+                golf_golfer=golf_golfer,
                 **tmpl,
             )
             if bet.result != 'pending':

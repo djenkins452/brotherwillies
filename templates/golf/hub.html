@@ -5,16 +5,16 @@
 <h1 class="page-title">Golf</h1>
 
 <div class="card mb-2">
-    <p class="text-sm text-muted">Golf analytics coming soon. This section will feature tournament analysis and player modeling.</p>
+    <p class="text-sm text-muted">Browse PGA Tour events. Tap any tournament to see the field, odds, and place mock bets.</p>
 </div>
 
 {% if events %}
 <p class="section-title">Events</p>
 {% for event in events %}
-<div class="card">
+<a href="/golf/{{ event.slug }}/" class="game-card" style="display:block;text-decoration:none;">
     <div class="card-title">{{ event.name }}</div>
-    <div class="text-sm text-muted">{{ event.start_date|date:"M d" }} - {{ event.end_date|date:"M d, Y" }}</div>
-</div>
+    <div class="text-sm text-muted">{{ event.start_date|date:"M d" }} &ndash; {{ event.end_date|date:"M d, Y" }}</div>
+</a>
 {% endfor %}
 {% else %}
 <div class="empty-state">

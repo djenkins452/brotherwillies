@@ -48,7 +48,7 @@
     </div>
     <div class="vb-section-body">
         {% for event in golf_events %}
-        <a href="/golf/" class="game-card">
+        <a href="/golf/{{ event.slug }}/" class="game-card">
             <div class="teams">
                 <span class="team-name">{{ event.name }}</span>
             </div>

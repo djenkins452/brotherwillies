@@ -16,6 +16,15 @@
                 <input type="hidden" id="mb-event-id" value="">
                 <input type="hidden" id="mb-golfer-id" value="">
 
+                <div id="mb-golfer-search-group" class="form-group" style="display:none;">
+                    <label for="mb-golfer-search">Search Golfer</label>
+                    <div class="golfer-search-wrap">
+                        <input type="text" id="mb-golfer-search" class="form-control" placeholder="Type golfer name..." autocomplete="off">
+                        <div id="mb-golfer-results" class="golfer-search-results"></div>
+                    </div>
+                    <div id="mb-golfer-selected" class="text-sm mt-1" style="color:var(--accent);display:none;"></div>
+                </div>
+
                 <div class="form-group">
                     <label for="mb-bet-type">Bet Type</label>
                     <select id="mb-bet-type" class="form-control">
@@ -108,9 +117,34 @@ function openMockBetModal(opts) {
 
     // Pre-fill selection and odds if provided
     if (opts.selection) document.getElementById('mb-selection').value = opts.selection;
+    else document.getElementById('mb-selection').value = '';
     if (opts.odds) document.getElementById('mb-odds').value = opts.odds;
+    else document.getElementById('mb-odds').value = '';
     if (opts.bet_type) document.getElementById('mb-bet-type').value = opts.bet_type;
     if (opts.edge) document.getElementById('mb-edge').value = opts.edge;
+    else document.getElementById('mb-edge').value = '';
+
+    // Golf golfer search: show when sport is golf, reset state
+    var searchGroup = document.getElementById('mb-golfer-search-group');
+    var searchInput = document.getElementById('mb-golfer-search');
+    var selectedDisplay = document.getElementById('mb-golfer-selected');
+    var resultsDiv = document.getElementById('mb-golfer-results');
+    if (opts.sport === 'golf') {
+        searchGroup.style.display = '';
+        if (opts.golfer_id && opts.selection) {
+            // Pre-filled from event detail button — show selected golfer
+            searchInput.value = '';
+            selectedDisplay.textContent = 'Selected: ' + opts.selection;
+            selectedDisplay.style.display = '';
+        } else {
+            searchInput.value = '';
+            selectedDisplay.style.display = 'none';
+        }
+        resultsDiv.innerHTML = '';
+        resultsDiv.classList.remove('active');
+    } else {
+        searchGroup.style.display = 'none';
+    }
 
     document.getElementById('mb-error').style.display = 'none';
     document.getElementById('mockbet-modal').style.display = 'flex';
@@ -189,4 +223,58 @@ function getCsrfToken() {
     var cookie = document.cookie.split(';').find(function(c) { return c.trim().startsWith('csrftoken='); });
     return cookie ? cookie.split('=')[1] : '';
 }
+
+// Golfer search autocomplete
+(function() {
+    var searchInput = document.getElementById('mb-golfer-search');
+    var resultsDiv = document.getElementById('mb-golfer-results');
+    var selectedDisplay = document.getElementById('mb-golfer-selected');
+    var debounceTimer = null;
+
+    searchInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        var q = searchInput.value.trim();
+        if (q.length < 2) {
+            resultsDiv.innerHTML = '';
+            resultsDiv.classList.remove('active');
+            return;
+        }
+        debounceTimer = setTimeout(function() {
+            fetch('/golf/api/golfer-search/?q=' + encodeURIComponent(q), {
+                credentials: 'same-origin'
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                resultsDiv.innerHTML = '';
+                if (data.length === 0) {
+                    resultsDiv.classList.remove('active');
+                    return;
+                }
+                data.forEach(function(g) {
+                    var item = document.createElement('div');
+                    item.className = 'golfer-search-item';
+                    item.textContent = g.name;
+                    item.addEventListener('click', function() {
+                        document.getElementById('mb-golfer-id').value = g.id;
+                        document.getElementById('mb-selection').value = g.name;
+                        selectedDisplay.textContent = 'Selected: ' + g.name;
+                        selectedDisplay.style.display = '';
+                        searchInput.value = '';
+                        resultsDiv.innerHTML = '';
+                        resultsDiv.classList.remove('active');
+                    });
+                    resultsDiv.appendChild(item);
+                });
+                resultsDiv.classList.add('active');
+            });
+        }, 250);
+    });
+
+    // Close results when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.golfer-search-wrap')) {
+            resultsDiv.classList.remove('active');
+        }
+    });
+})();
 </script>
