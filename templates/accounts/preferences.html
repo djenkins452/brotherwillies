@@ -2,40 +2,477 @@
 {% block title %}Preferences - Brother Willies{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Preferences</h1>
+<style>
+/* ── Preferences page: accordion + tile layout ── */
 
-<div class="card">
-    <form method="post">
-        {% csrf_token %}
-        {% for field in form %}
-        <div class="form-group">
-            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-            {% if field.field.widget.input_type == 'checkbox' %}
-            <div style="display:flex;align-items:center;gap:8px;">
-                {{ field }}
-                <span class="text-sm text-muted">{{ field.help_text }}</span>
-            </div>
-            {% else %}
-            {{ field }}
-            {% if field.help_text and field.field.widget.input_type != 'checkbox' %}
-            <div class="text-sm text-muted mt-1">{{ field.help_text }}</div>
-            {% endif %}
-            {% endif %}
-            {% if field.name == 'zip_code' and profile.timezone %}
-            <div class="text-sm mt-1" style="color: var(--green);">Timezone: {{ profile.timezone }}</div>
-            {% endif %}
-            {% if field.errors %}
-            {% for error in field.errors %}
-            <div class="form-error">{{ error }}</div>
-            {% endfor %}
-            {% endif %}
+.pref-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+.pref-header h1 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0;
+}
+.pref-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pref-toggle-link {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 6px 10px;
+    min-height: 36px;
+}
+.pref-toggle-link:hover { color: var(--text-primary); }
+
+/* ── Accordion sections ── */
+.pref-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+}
+.pref-section:hover {
+    border-color: var(--accent);
+}
+
+.pref-section-header {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    cursor: pointer;
+    user-select: none;
+    gap: 12px;
+    min-height: 60px;
+}
+.pref-section-icon {
+    font-size: 1.3rem;
+    flex-shrink: 0;
+    width: 32px;
+    text-align: center;
+}
+.pref-section-info {
+    flex: 1;
+    min-width: 0;
+}
+.pref-section-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.pref-section-subtitle {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+.pref-section-badge {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--green);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.pref-section-chevron {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+    width: 20px;
+    text-align: center;
+}
+.pref-section.open .pref-section-chevron {
+    transform: rotate(180deg);
+}
+
+.pref-section-body {
+    display: none;
+    padding: 0 16px 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+}
+.pref-section.open .pref-section-body {
+    display: block;
+}
+
+/* ── Persona tiles ── */
+.persona-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+.persona-tile {
+    background: var(--bg-input);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 12px;
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.15s, background 0.15s;
+    min-height: 44px;
+}
+.persona-tile:hover {
+    border-color: var(--accent);
+    background: rgba(79, 140, 255, 0.06);
+}
+.persona-tile.selected {
+    border-color: var(--accent);
+    background: rgba(79, 140, 255, 0.12);
+}
+.persona-tile-icon {
+    font-size: 1.5rem;
+    margin-bottom: 6px;
+}
+.persona-tile-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.persona-tile-desc {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+/* hidden radio */
+.persona-tile input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ── Checkbox toggle switch ── */
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+}
+.toggle-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: background 0.2s;
+    cursor: pointer;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 2px;
+    width: 18px;
+    height: 18px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+    background: #fff;
+}
+
+/* ── Section form fields ── */
+.pref-field {
+    margin-bottom: 14px;
+}
+.pref-field:last-child {
+    margin-bottom: 0;
+}
+.pref-field > label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+.pref-field .form-control {
+    width: 100%;
+}
+.pref-field-help {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 3px;
+}
+.pref-field-success {
+    font-size: 0.75rem;
+    color: var(--green);
+    margin-top: 3px;
+}
+
+/* ── Two-column field grid ── */
+.pref-field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+@media (max-width: 480px) {
+    .pref-field-row { grid-template-columns: 1fr; }
+    .persona-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 769px) {
+    .persona-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* ── Save button ── */
+.pref-save-bar {
+    margin-top: 16px;
+    margin-bottom: 12px;
+}
+</style>
+
+<form method="post" id="preferencesForm">
+    {% csrf_token %}
+
+    <div class="pref-header">
+        <div>
+            <h1>Preferences</h1>
+            <p class="text-muted text-sm">Customize your Brother Willies experience</p>
         </div>
-        {% endfor %}
-        <button type="submit" class="btn btn-primary btn-block">Save Preferences</button>
-    </form>
-</div>
+        <div class="pref-header-actions">
+            <button type="button" class="pref-toggle-link" onclick="prefToggleAll(true)">Expand All</button>
+            <button type="button" class="pref-toggle-link" onclick="prefToggleAll(false)">Collapse All</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
+        </div>
+    </div>
 
-<div class="mt-2">
+    <!-- ── Location ── -->
+    <div class="pref-section" data-section="location">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#127760;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">Location</div>
+                <div class="pref-section-subtitle">Timezone for game times</div>
+            </div>
+            <span class="pref-section-badge">{% if profile.timezone %}{{ profile.timezone }}{% else %}Not set{% endif %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <div class="pref-field">
+                <label for="{{ form.zip_code.id_for_label }}">US Zip Code</label>
+                {{ form.zip_code }}
+                <div class="pref-field-help">Enter your 5-digit zip code to set your timezone</div>
+                {% if profile.timezone %}
+                <div class="pref-field-success">Resolved timezone: {{ profile.timezone }}</div>
+                {% endif %}
+                {% for error in form.zip_code.errors %}
+                <div class="form-error">{{ error }}</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ── CFB Favorites ── -->
+    <div class="pref-section" data-section="cfb">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#127944;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">CFB Favorites</div>
+                <div class="pref-section-subtitle">College football conference &amp; team</div>
+            </div>
+            <span class="pref-section-badge">{% if profile.favorite_team %}{{ profile.favorite_team }}{% else %}None{% endif %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <div class="pref-field">
+                <label for="{{ form.favorite_conference.id_for_label }}">Conference</label>
+                {{ form.favorite_conference }}
+            </div>
+            <div class="pref-field">
+                <label for="{{ form.favorite_team.id_for_label }}">Team</label>
+                {{ form.favorite_team }}
+            </div>
+        </div>
+    </div>
+
+    <!-- ── CBB Favorites ── -->
+    <div class="pref-section" data-section="cbb">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#127936;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">CBB Favorites</div>
+                <div class="pref-section-subtitle">College basketball conference &amp; team</div>
+            </div>
+            <span class="pref-section-badge">{% if profile.favorite_cbb_team %}{{ profile.favorite_cbb_team }}{% else %}None{% endif %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <div class="pref-field">
+                <label for="{{ form.favorite_cbb_conference.id_for_label }}">Conference</label>
+                {{ form.favorite_cbb_conference }}
+            </div>
+            <div class="pref-field">
+                <label for="{{ form.favorite_cbb_team.id_for_label }}">Team</label>
+                {{ form.favorite_cbb_team }}
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Value Board Filters ── -->
+    <div class="pref-section" data-section="filters">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#9881;&#65039;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">Value Board Filters</div>
+                <div class="pref-section-subtitle">Spread, odds, and edge thresholds</div>
+            </div>
+            <span class="pref-section-badge">{% if profile.preference_min_edge %}Edge {{ profile.preference_min_edge }}%+{% else %}Default{% endif %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <div class="toggle-row">
+                <span class="toggle-label">Always include favorite team</span>
+                <label class="toggle-switch">
+                    {{ form.always_include_favorite_team }}
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="pref-field-row mt-2">
+                <div class="pref-field">
+                    <label for="{{ form.preference_spread_min.id_for_label }}">Spread Min</label>
+                    {{ form.preference_spread_min }}
+                </div>
+                <div class="pref-field">
+                    <label for="{{ form.preference_spread_max.id_for_label }}">Spread Max</label>
+                    {{ form.preference_spread_max }}
+                </div>
+            </div>
+            <div class="pref-field-row">
+                <div class="pref-field">
+                    <label for="{{ form.preference_odds_min.id_for_label }}">Odds Min</label>
+                    {{ form.preference_odds_min }}
+                </div>
+                <div class="pref-field">
+                    <label for="{{ form.preference_odds_max.id_for_label }}">Odds Max</label>
+                    {{ form.preference_odds_max }}
+                </div>
+            </div>
+            <div class="pref-field">
+                <label for="{{ form.preference_min_edge.id_for_label }}">Minimum Edge (%)</label>
+                {{ form.preference_min_edge }}
+                <div class="pref-field-help">Only show games with at least this much house edge</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── AI Persona ── -->
+    <div class="pref-section" data-section="persona">
+        <div class="pref-section-header" onclick="prefToggle(this)">
+            <span class="pref-section-icon">&#129302;</span>
+            <div class="pref-section-info">
+                <div class="pref-section-title">AI Persona</div>
+                <div class="pref-section-subtitle">Tone of AI Insights on game pages</div>
+            </div>
+            <span class="pref-section-badge" id="personaBadge">{% for value, label in form.ai_persona.field.choices %}{% if value == form.ai_persona.value %}{{ label }}{% endif %}{% endfor %}</span>
+            <span class="pref-section-chevron">&#9660;</span>
+        </div>
+        <div class="pref-section-body">
+            <p class="text-muted text-sm mb-2">Choose how the AI communicates with you. This affects the tone of insights on game detail pages.</p>
+            <div class="persona-grid">
+                <label class="persona-tile{% if form.ai_persona.value == 'analyst' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="analyst"{% if form.ai_persona.value == 'analyst' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#128202;</div>
+                    <div class="persona-tile-name">Analyst</div>
+                    <div class="persona-tile-desc">Neutral, professional, and factual. Just the numbers.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'new_york_bookie' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="new_york_bookie"{% if form.ai_persona.value == 'new_york_bookie' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#127991;&#65039;</div>
+                    <div class="persona-tile-name">New York Bookie</div>
+                    <div class="persona-tile-desc">Blunt, sharp, and street-smart. No sugarcoating.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'southern_commentator' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="southern_commentator"{% if form.ai_persona.value == 'southern_commentator' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#129312;</div>
+                    <div class="persona-tile-name">Southern Commentator</div>
+                    <div class="persona-tile-desc">Calm, folksy, and confident. Sweet tea wisdom.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'ex_player' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="ex_player"{% if form.ai_persona.value == 'ex_player' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#127941;</div>
+                    <div class="persona-tile-name">Ex-Player</div>
+                    <div class="persona-tile-desc">Direct, experiential. Been in the trenches.</div>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Save bar ── -->
+    <div class="pref-save-bar">
+        <button type="submit" class="btn btn-primary btn-block">Save Changes</button>
+    </div>
+</form>
+
+<div class="mt-1">
     <a href="/profile/" class="btn btn-secondary btn-sm">&larr; Back to Profile</a>
 </div>
+
+<script>
+/* ── Accordion toggle ── */
+function prefToggle(headerEl) {
+    headerEl.closest('.pref-section').classList.toggle('open');
+}
+
+function prefToggleAll(open) {
+    document.querySelectorAll('.pref-section').forEach(function(s) {
+        if (open) s.classList.add('open');
+        else s.classList.remove('open');
+    });
+}
+
+/* ── Persona tile selection ── */
+document.querySelectorAll('.persona-tile').forEach(function(tile) {
+    tile.addEventListener('click', function() {
+        document.querySelectorAll('.persona-tile').forEach(function(t) {
+            t.classList.remove('selected');
+        });
+        tile.classList.add('selected');
+        tile.querySelector('input[type="radio"]').checked = true;
+        var badge = document.getElementById('personaBadge');
+        if (badge) badge.textContent = tile.querySelector('.persona-tile-name').textContent;
+    });
+});
+
+/* ── Open sections that have validation errors ── */
+document.querySelectorAll('.pref-section-body .form-error').forEach(function(err) {
+    var section = err.closest('.pref-section');
+    if (section) section.classList.add('open');
+});
+</script>
 {% endblock %}

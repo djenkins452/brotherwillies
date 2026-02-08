@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-02-08 - Preferences page redesign (accordion + persona tiles)
+
+**Summary:** Rebuilt the preferences page with a collapsible accordion layout inspired by WLJ. Each settings group (Location, CFB Favorites, CBB Favorites, Value Board Filters, AI Persona) is a card with icon, title, subtitle, and current-value badge. Sections collapse/expand on tap. AI persona selection uses visual tile cards instead of a dropdown. Expand All / Collapse All controls at top. Toggle switch for the "always include favorite" checkbox. Sections auto-open when they contain validation errors.
+
+### Changes:
+- `templates/accounts/preferences.html` — fully rewritten with accordion sections, persona tile grid, toggle switch, scoped CSS + JS
+- No backend changes — same form fields, same POST handling, same view logic
+
+---
+
 ## 2026-02-08 - Admin-configurable AI settings (SiteConfig)
 
 **Summary:** Added a `SiteConfig` singleton model editable from Django admin (`/bw-manage/`). AI temperature and max tokens are now configurable at runtime without redeploying. Temperature defaults to 0 (deterministic/most factual).
