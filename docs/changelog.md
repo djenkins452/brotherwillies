@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-02-08 - Help content update + CLAUDE.md analytics docs
+
+**Summary:** Updated context-aware help to explain exactly where every number comes from — model formulas, API sources, confidence thresholds, snapshot lifecycle. Added Analytics Pipeline and Context-Aware Help System sections to CLAUDE.md so future changes always keep help content in sync.
+
+### Changes:
+- `templates/includes/help_modal.html` — Rewrote `performance`, `game_detail`, and `home` help keys with detailed explanations of scores, status badges, CLV, calibration, model formula, confidence thresholds, data sources
+- `CLAUDE.md` — Added Analytics Pipeline section (cron order, model formula, snapshot fields, score sources, performance metrics), Context-Aware Help System section (all help keys, architecture, update rules), updated build progress and command lists
+
+---
+
 ## 2026-02-08 - Productive analytics pipeline + score tracking
 
 **Summary:** Analytics system now captures model predictions automatically, resolves game outcomes with real scores, and displays comprehensive performance metrics including accuracy by sport, calibration analysis, and closing line value (CLV). Game scores are ingested from APIs and displayed throughout the UI.

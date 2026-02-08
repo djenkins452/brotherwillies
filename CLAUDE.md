@@ -243,7 +243,9 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 - **Idempotent commands live in:** `apps/datahub/management/commands/`
   - `ensure_superuser.py` — creates superuser if not exists (hardcoded creds)
   - `ensure_seed.py` — runs seed_demo if no Conference rows exist, then runs live data ingestion if enabled
-  - `refresh_data.py` — refreshes schedule/odds/injuries for all enabled sports (designed for cron)
+  - `refresh_data.py` — refreshes schedule/odds/injuries + captures snapshots + resolves outcomes (designed for cron)
+  - `capture_snapshots.py` — captures house model predictions for games within 24h of start
+  - `resolve_outcomes.py` — resolves final_outcome + closing line for completed games
 
 ---
 
@@ -270,6 +272,7 @@ Helper: `user_has_feature(user, feature_key) -> bool`
 | 16 | User timezone via zip code | COMPLETE |
 | 17 | Security hardening & registration disabled | COMPLETE |
 | 18 | Live data ingestion (CBB → Golf → CFB) | COMPLETE |
+| 19 | Analytics pipeline (snapshots, scores, outcomes, CLV, performance) | COMPLETE |
 
 ---
 
@@ -301,7 +304,9 @@ CBBD_API_KEY=                    # CollegeBasketballData.com key
 python manage.py ingest_schedule --sport=cbb|cfb|golf
 python manage.py ingest_odds --sport=cbb|cfb|golf
 python manage.py ingest_injuries --sport=cbb|cfb
-python manage.py refresh_data          # Runs all ingestion for enabled sports (cron use)
+python manage.py capture_snapshots --sport=cbb|cfb|all [--window-hours=24]
+python manage.py resolve_outcomes --sport=cbb|cfb|all
+python manage.py refresh_data          # Runs all of the above for enabled sports (cron use)
 ```
 
 **Data Refresh:**
@@ -316,6 +321,98 @@ python manage.py refresh_data          # Runs all ingestion for enabled sports (
 - Home page shows "Live Now" section for games with `status='live'`
 - ESPN scoreboard fetches yesterday + today + 7 days to catch late-night games
 - Game status lifecycle: `scheduled` → `live` → `final` (updated on each ingestion run)
+
+---
+
+## Analytics Pipeline
+
+**Purpose:** Automatically capture model predictions, store game scores, resolve outcomes, and compute performance metrics.
+
+**Cron pipeline order** (executed per sport in `refresh_data`):
+1. `ingest_schedule` — updates game status (`scheduled` → `live` → `final`) and stores scores
+2. `ingest_odds` — captures latest odds snapshots
+3. `ingest_injuries` — updates injury reports
+4. `capture_snapshots` — for games within 24h of start that have odds, creates `ModelResultSnapshot` with house model probability, market probability, and data confidence
+5. `resolve_outcomes` — for completed games with scores, sets `final_outcome` (home win T/F) and `closing_market_prob` (last odds before kickoff/tipoff) on existing snapshots
+
+**Key models:**
+
+| Model | Location | Purpose |
+|-------|----------|---------|
+| `Game.home_score` / `Game.away_score` | `cfb/models.py`, `cbb/models.py` | Final scores (nullable, populated when game completes) |
+| `ModelResultSnapshot` | `analytics/models.py` | Pre-game prediction capture + post-game outcome |
+
+**ModelResultSnapshot fields:**
+- `game` / `cbb_game` — FK to the game (one or the other)
+- `market_prob` — market implied home win probability at capture time
+- `house_prob` — house model's home win probability at capture time
+- `house_model_version` — model version tag (currently `v1`)
+- `data_confidence` — `high` / `med` / `low` based on odds freshness + injury data
+- `closing_market_prob` — last market probability before game started (populated post-game)
+- `final_outcome` — `True` = home won, `False` = away won (populated post-game)
+
+**Score data sources:**
+- **CFB**: CFBD API provides `home_points` / `away_points` directly
+- **CBB**: ESPN API provides `competitor.score` per team
+
+**Performance dashboard** (`/profile/performance/`) computes from snapshots:
+- **Accuracy** — % of games where `house_prob > 0.5` matched `final_outcome`
+- **Brier Score** — `mean((house_prob - actual)²)` — calibration quality (0 = perfect, 0.25 = coin flip)
+- **By Sport** — separate accuracy/Brier for CFB and CBB
+- **Trends** — last 7 days and 30 days
+- **CLV** — did the market move toward the model? `abs(house_prob - market_prob) - abs(house_prob - closing_market_prob)`
+- **Calibration** — bucket predictions by range (50-60%, 60-70%, etc.) and compare predicted vs actual win rates
+
+**House model calculation** (`cfb/services/model_service.py`, `cbb/services/model_service.py`):
+1. `rating_diff = (home_team.rating - away_team.rating) * rating_weight`
+2. `hfa = 3.0 (CFB) or 3.5 (CBB) * hfa_weight` (0 if neutral site)
+3. `injury_effect = Σ(impact_per_injury * injury_weight)` — LOW=0.01, MED=0.03, HIGH=0.06
+4. `score = rating_diff + hfa + injury_effect`
+5. `probability = 1 / (1 + exp(-score/15))` clamped to [0.01, 0.99]
+
+**Data confidence rules:**
+- `high` — odds < 2 hours old AND injuries exist
+- `med` — odds < 12 hours old
+- `low` — odds > 12 hours old or no odds
+
+---
+
+## Context-Aware Help System
+
+**Architecture:** Single modal template, string-keyed content, available on every page.
+
+**Key file:** `templates/includes/help_modal.html` — all help content lives here in `{% if help_key == '...' %}` blocks.
+
+**How it works:**
+1. Each view passes `help_key` in its render context (e.g., `'help_key': 'performance'`)
+2. `base.html` includes `help_modal.html` on every page
+3. User taps "?" button → `toggleHelp()` JS function shows the modal
+4. Modal renders the content block matching the current `help_key`
+
+**Current help keys:**
+
+| Key | Page | What it explains |
+|-----|------|------------------|
+| `home` | Dashboard | Live scores, edge, market %, house %, confidence, data sources |
+| `value_board` | Value Board | House/user/delta edges, filters, confidence, data sources |
+| `cfb_hub` | CFB Hub | Conferences, game cards, data sources |
+| `cbb_hub` | CBB Hub | Same as CFB Hub for basketball |
+| `game_detail` | Game Detail | Scores, status badges, probabilities, edge, line movement, injuries, confidence thresholds, data sources |
+| `my_model` | My Model | Weight sliders, what each factor does, presets |
+| `my_stats` | My Stats | Activity metrics, agreement rate, confidence distribution |
+| `performance` | Performance | Accuracy, Brier score, sport breakdown, trends, CLV, calibration table, how snapshots work |
+| `parlays` | Parlays | Combined probability, correlation risk, 10% haircut |
+| `golf` | Golf | Tournament data sources |
+| `profile` | Profile | Personal info, quick links |
+| `preferences` | Preferences | Filters, favorite team, spread/odds/edge thresholds |
+| (default) | Fallback | General site overview |
+
+**IMPORTANT — When changing features, update the help content:**
+- If you add/change a metric on the Performance page → update the `performance` block in `help_modal.html`
+- If you add/change data displayed on Game Detail → update the `game_detail` block
+- If you change how calculations work (model formula, confidence thresholds) → update ALL blocks that reference those calculations
+- Help text should explain **where numbers come from** (which API, which formula), not just what they mean
+- Keep language neutral per legal guardrails — "analyzed", "modeled", never "guaranteed"
 
 ---
 
