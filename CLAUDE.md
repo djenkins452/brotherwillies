@@ -108,12 +108,16 @@ brotherwillies/
         cbb/                 # CBB schedule, odds, injuries providers
         cfb/                 # CFB schedule, odds, injuries providers
         golf/                # Golf schedule, odds providers
+    feedback/              # Partner-only feedback system
   static/
     css/style.css          # Global dark theme + responsive styles
+    css/auth.css           # Standalone 2-column auth layout (login, password reset)
+    branding/bw_logo.png   # Brand logo (used on auth pages)
     js/app.js              # Minimal vanilla JS (help modal, nav, etc.)
   templates/
     base.html              # Base layout with header, bottom nav, footer
     includes/              # Reusable partials (help modal, nav, etc.)
+    registration/          # Password reset templates (standalone, no base.html)
 ```
 
 ---
@@ -126,9 +130,10 @@ brotherwillies/
 | `accounts` | Register/login/logout, profile, preferences, My Model tuning, presets, My Stats, performance |
 | `cfb` | Conferences, teams, games, odds, injuries, house/user model services, CFB Value Board |
 | `cbb` | College basketball: conferences, teams, games, odds, injuries, model services, CBB Value Board |
-| `golf` | MVP scaffold (models + placeholder pages) |
+| `golf` | MVP scaffold (models + placeholder pages), golfer search API |
 | `parlays` | Parlay builder/scoring, correlation detection (analytics only) |
 | `analytics` | ModelResultSnapshot, UserGameInteraction, CLV tracking |
+| `feedback` | Partner-only feedback system (submit, review, status pipeline) |
 | `datahub` | Seed loader, live data ingestion, multi-sport provider layer |
 
 ---
@@ -151,10 +156,14 @@ brotherwillies/
 | `/cbb/game/<uuid>/` | CBB game detail |
 | `/golf/` | Golf hub (placeholder) |
 | `/accounts/register/` | Register (DISABLED — route removed) |
-| `/accounts/login/` | Login |
+| `/accounts/login/` | Login (default page for unauthenticated users) |
 | `/accounts/logout/` | Logout |
+| `/accounts/password-reset/` | Password reset request |
+| `/accounts/password-reset/done/` | Password reset email sent confirmation |
+| `/accounts/password-reset/<uidb64>/<token>/` | Password reset confirm (new password) |
+| `/accounts/password-reset/complete/` | Password reset success |
 | `/profile/` | Profile (personal info) |
-| `/profile/preferences/` | Preferences (favorites, filters, zip code/timezone) |
+| `/profile/preferences/` | Preferences (accordion: AI Persona → Favorites → Value Board Filters → Location) |
 | `/profile/my-model/` | My Model tuning |
 | `/profile/presets/` | Model presets |
 | `/profile/my-stats/` | Personal Statistics |
@@ -162,6 +171,9 @@ brotherwillies/
 | `/parlays/` | Parlay hub |
 | `/parlays/new/` | Build parlay |
 | `/parlays/<uuid>/` | Parlay detail |
+| `/golf/api/golfer-search/` | Golfer autocomplete search (AJAX, login required) |
+| `/feedback/new/` | Submit partner feedback (partner-only) |
+| `/feedback/console/` | Feedback dashboard (partner-only) |
 | `/api/ai-insight/<sport>/<uuid>/` | AI Insight AJAX endpoint (login required) |
 
 ---
@@ -458,6 +470,33 @@ Stored in `SiteConfig` singleton model (`apps/core/models.py`). Changes take eff
 - Language must be neutral per legal guardrails: "analyzed", "modeled", "suggests" — never "guaranteed", "lock", "best bet"
 - If data is missing or confidence is LOW, the AI states this explicitly
 - AI output is NOT stored as fact and NOT cached (MVP)
+
+---
+
+## Auth Pages (Login / Password Reset)
+
+**Design:** Standalone 2-column split layout (not extending `base.html`). Left column (66%) = dark panel with animated BW logo. Right column (34%) = white form card on light gray background. Stacks vertically on mobile.
+
+**Key files:**
+- `static/css/auth.css` — all auth page styles (standalone from `style.css`)
+- `templates/accounts/login.html` — standalone login page
+- `templates/registration/password_reset_*.html` — 4 password reset templates (form, done, confirm, complete)
+
+**Routing:** Unauthenticated visitors to `/` are redirected to `/accounts/login/`. Authenticated users land on the dashboard (`/`). `LOGIN_REDIRECT_URL = '/'` in settings.
+
+**Password reset:** Uses Django's built-in `PasswordResetView` etc. with explicit `success_url=reverse_lazy('accounts:...')` to handle the `accounts` namespace.
+
+---
+
+## Preferences Page
+
+**Layout:** Accordion sections with expand/collapse, scoped CSS + vanilla JS. All styles are in the template's `<style>` block.
+
+**Section order:** AI Persona → Favorites → Value Board Filters → Location
+
+**Favorites section:** Unified section with sport sub-groups (🏈 CFB, 🏀 CBB, ⛳ Golf). Golf uses AJAX autocomplete for golfer search. Badge dynamically shows all selected favorites.
+
+**AI Persona:** Visual tile selector (4 tiles: Analyst, NY Bookie, Southern Commentator, Ex-Player). Affects AI Insight tone on game detail pages.
 
 ---
 
