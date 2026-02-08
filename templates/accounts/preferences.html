@@ -249,6 +249,32 @@
     .persona-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
+/* ── Favorites sport sub-groups ── */
+.fav-sport-group {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+}
+.fav-sport-group:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 0;
+}
+.fav-sport-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.fav-sport-label span {
+    font-size: 1.1rem;
+}
+
 /* ── Golfer autocomplete ── */
 .golfer-search-wrap {
     position: relative;
@@ -363,108 +389,112 @@
         </div>
     </div>
 
-    <!-- ── Location ── -->
-    <div class="pref-section" data-section="location">
+    <!-- ── 1. AI Persona ── -->
+    <div class="pref-section" data-section="persona">
         <div class="pref-section-header" onclick="prefToggle(this)">
-            <span class="pref-section-icon">&#127760;</span>
+            <span class="pref-section-icon">&#129302;</span>
             <div class="pref-section-info">
-                <div class="pref-section-title">Location</div>
-                <div class="pref-section-subtitle">Timezone for game times</div>
+                <div class="pref-section-title">AI Persona</div>
+                <div class="pref-section-subtitle">Tone of AI Insights on game pages</div>
             </div>
-            <span class="pref-section-badge">{% if profile.timezone %}{{ profile.timezone }}{% else %}Not set{% endif %}</span>
+            <span class="pref-section-badge" id="personaBadge">{% for value, label in form.ai_persona.field.choices %}{% if value == form.ai_persona.value %}{{ label }}{% endif %}{% endfor %}</span>
             <span class="pref-section-chevron">&#9660;</span>
         </div>
         <div class="pref-section-body">
-            <div class="pref-field">
-                <label for="{{ form.zip_code.id_for_label }}">US Zip Code</label>
-                {{ form.zip_code }}
-                <div class="pref-field-help">Enter your 5-digit zip code to set your timezone</div>
-                {% if profile.timezone %}
-                <div class="pref-field-success">Resolved timezone: {{ profile.timezone }}</div>
-                {% endif %}
-                {% for error in form.zip_code.errors %}
-                <div class="form-error">{{ error }}</div>
-                {% endfor %}
+            <p class="text-muted text-sm mb-2">Choose how the AI communicates with you. This affects the tone of insights on game detail pages.</p>
+            <div class="persona-grid">
+                <label class="persona-tile{% if form.ai_persona.value == 'analyst' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="analyst"{% if form.ai_persona.value == 'analyst' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#128202;</div>
+                    <div class="persona-tile-name">Analyst</div>
+                    <div class="persona-tile-desc">Neutral, professional, and factual. Just the numbers.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'new_york_bookie' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="new_york_bookie"{% if form.ai_persona.value == 'new_york_bookie' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#127991;&#65039;</div>
+                    <div class="persona-tile-name">New York Bookie</div>
+                    <div class="persona-tile-desc">Blunt, sharp, and street-smart. No sugarcoating.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'southern_commentator' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="southern_commentator"{% if form.ai_persona.value == 'southern_commentator' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#129312;</div>
+                    <div class="persona-tile-name">Southern Commentator</div>
+                    <div class="persona-tile-desc">Calm, folksy, and confident. Sweet tea wisdom.</div>
+                </label>
+                <label class="persona-tile{% if form.ai_persona.value == 'ex_player' %} selected{% endif %}">
+                    <input type="radio" name="ai_persona" value="ex_player"{% if form.ai_persona.value == 'ex_player' %} checked{% endif %}>
+                    <div class="persona-tile-icon">&#127941;</div>
+                    <div class="persona-tile-name">Ex-Player</div>
+                    <div class="persona-tile-desc">Direct, experiential. Been in the trenches.</div>
+                </label>
             </div>
         </div>
     </div>
 
-    <!-- ── CFB Favorites ── -->
-    <div class="pref-section" data-section="cfb">
-        <div class="pref-section-header" onclick="prefToggle(this)">
-            <span class="pref-section-icon">&#127944;</span>
-            <div class="pref-section-info">
-                <div class="pref-section-title">CFB Favorites</div>
-                <div class="pref-section-subtitle">College football conference &amp; team</div>
-            </div>
-            <span class="pref-section-badge">{% if profile.favorite_team %}{{ profile.favorite_team }}{% else %}None{% endif %}</span>
-            <span class="pref-section-chevron">&#9660;</span>
-        </div>
-        <div class="pref-section-body">
-            <div class="pref-field">
-                <label for="{{ form.favorite_conference.id_for_label }}">Conference</label>
-                {{ form.favorite_conference }}
-            </div>
-            <div class="pref-field">
-                <label for="{{ form.favorite_team.id_for_label }}">Team</label>
-                {{ form.favorite_team }}
-            </div>
-        </div>
-    </div>
-
-    <!-- ── CBB Favorites ── -->
-    <div class="pref-section" data-section="cbb">
-        <div class="pref-section-header" onclick="prefToggle(this)">
-            <span class="pref-section-icon">&#127936;</span>
-            <div class="pref-section-info">
-                <div class="pref-section-title">CBB Favorites</div>
-                <div class="pref-section-subtitle">College basketball conference &amp; team</div>
-            </div>
-            <span class="pref-section-badge">{% if profile.favorite_cbb_team %}{{ profile.favorite_cbb_team }}{% else %}None{% endif %}</span>
-            <span class="pref-section-chevron">&#9660;</span>
-        </div>
-        <div class="pref-section-body">
-            <div class="pref-field">
-                <label for="{{ form.favorite_cbb_conference.id_for_label }}">Conference</label>
-                {{ form.favorite_cbb_conference }}
-            </div>
-            <div class="pref-field">
-                <label for="{{ form.favorite_cbb_team.id_for_label }}">Team</label>
-                {{ form.favorite_cbb_team }}
-            </div>
-        </div>
-    </div>
-
-    <!-- ── Golf Favorites ── -->
+    <!-- ── 2. Favorites (all sports) ── -->
     {{ form.favorite_golfer }}
-    <div class="pref-section" data-section="golf">
+    <div class="pref-section" data-section="favorites">
         <div class="pref-section-header" onclick="prefToggle(this)">
-            <span class="pref-section-icon">&#9971;</span>
+            <span class="pref-section-icon">&#11088;</span>
             <div class="pref-section-info">
-                <div class="pref-section-title">Golf Favorites</div>
-                <div class="pref-section-subtitle">Favorite PGA Tour player</div>
+                <div class="pref-section-title">Favorites</div>
+                <div class="pref-section-subtitle">Teams &amp; players across all sports</div>
             </div>
-            <span class="pref-section-badge" id="golferBadge">{% if profile.favorite_golfer %}{{ profile.favorite_golfer.name }}{% else %}None{% endif %}</span>
+            <span class="pref-section-badge" id="favBadge">{% if profile.favorite_team or profile.favorite_cbb_team or profile.favorite_golfer %}{% if profile.favorite_team %}{{ profile.favorite_team }}{% endif %}{% if profile.favorite_team and profile.favorite_cbb_team %}, {% endif %}{% if profile.favorite_cbb_team %}{{ profile.favorite_cbb_team }}{% endif %}{% if profile.favorite_golfer %}{% if profile.favorite_team or profile.favorite_cbb_team %}, {% endif %}{{ profile.favorite_golfer }}{% endif %}{% else %}None{% endif %}</span>
             <span class="pref-section-chevron">&#9660;</span>
         </div>
         <div class="pref-section-body">
-            <div class="pref-field">
-                <label for="golferSearchInput">Search Golfer</label>
-                <div class="golfer-search-wrap">
-                    <input type="text" id="golferSearchInput" class="golfer-search-input"
-                           placeholder="Start typing a name..." autocomplete="off">
-                    <div class="golfer-results" id="golferResults"></div>
+            <!-- CFB -->
+            <div class="fav-sport-group">
+                <div class="fav-sport-label"><span>&#127944;</span> College Football</div>
+                <div class="pref-field-row">
+                    <div class="pref-field">
+                        <label for="{{ form.favorite_conference.id_for_label }}">Conference</label>
+                        {{ form.favorite_conference }}
+                    </div>
+                    <div class="pref-field">
+                        <label for="{{ form.favorite_team.id_for_label }}">Team</label>
+                        {{ form.favorite_team }}
+                    </div>
                 </div>
-                <div class="pref-field-help">Search by first name, last name, or full name</div>
             </div>
-            <div id="golferSelected" class="golfer-selected" style="{% if not profile.favorite_golfer %}display:none{% endif %}">
-                <span class="golfer-selected-name" id="golferSelectedName">{% if profile.favorite_golfer %}{{ profile.favorite_golfer.name }}{% endif %}</span>
-                <button type="button" class="golfer-clear-btn" onclick="clearGolfer()" title="Remove">&times;</button>
+
+            <!-- CBB -->
+            <div class="fav-sport-group">
+                <div class="fav-sport-label"><span>&#127936;</span> College Basketball</div>
+                <div class="pref-field-row">
+                    <div class="pref-field">
+                        <label for="{{ form.favorite_cbb_conference.id_for_label }}">Conference</label>
+                        {{ form.favorite_cbb_conference }}
+                    </div>
+                    <div class="pref-field">
+                        <label for="{{ form.favorite_cbb_team.id_for_label }}">Team</label>
+                        {{ form.favorite_cbb_team }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Golf -->
+            <div class="fav-sport-group">
+                <div class="fav-sport-label"><span>&#9971;</span> Golf</div>
+                <div class="pref-field">
+                    <label for="golferSearchInput">Favorite Golfer</label>
+                    <div class="golfer-search-wrap">
+                        <input type="text" id="golferSearchInput" class="golfer-search-input"
+                               placeholder="Search by name..." autocomplete="off">
+                        <div class="golfer-results" id="golferResults"></div>
+                    </div>
+                    <div class="pref-field-help">Type at least 2 characters to search</div>
+                </div>
+                <div id="golferSelected" class="golfer-selected" style="{% if not profile.favorite_golfer %}display:none{% endif %}">
+                    <span class="golfer-selected-name" id="golferSelectedName">{% if profile.favorite_golfer %}{{ profile.favorite_golfer.name }}{% endif %}</span>
+                    <button type="button" class="golfer-clear-btn" onclick="clearGolfer()" title="Remove">&times;</button>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- ── Value Board Filters ── -->
+    <!-- ── 3. Value Board Filters ── -->
     <div class="pref-section" data-section="filters">
         <div class="pref-section-header" onclick="prefToggle(this)">
             <span class="pref-section-icon">&#9881;&#65039;</span>
@@ -512,44 +542,28 @@
         </div>
     </div>
 
-    <!-- ── AI Persona ── -->
-    <div class="pref-section" data-section="persona">
+    <!-- ── 4. Location ── -->
+    <div class="pref-section" data-section="location">
         <div class="pref-section-header" onclick="prefToggle(this)">
-            <span class="pref-section-icon">&#129302;</span>
+            <span class="pref-section-icon">&#127760;</span>
             <div class="pref-section-info">
-                <div class="pref-section-title">AI Persona</div>
-                <div class="pref-section-subtitle">Tone of AI Insights on game pages</div>
+                <div class="pref-section-title">Location</div>
+                <div class="pref-section-subtitle">Timezone for game times</div>
             </div>
-            <span class="pref-section-badge" id="personaBadge">{% for value, label in form.ai_persona.field.choices %}{% if value == form.ai_persona.value %}{{ label }}{% endif %}{% endfor %}</span>
+            <span class="pref-section-badge">{% if profile.timezone %}{{ profile.timezone }}{% else %}Not set{% endif %}</span>
             <span class="pref-section-chevron">&#9660;</span>
         </div>
         <div class="pref-section-body">
-            <p class="text-muted text-sm mb-2">Choose how the AI communicates with you. This affects the tone of insights on game detail pages.</p>
-            <div class="persona-grid">
-                <label class="persona-tile{% if form.ai_persona.value == 'analyst' %} selected{% endif %}">
-                    <input type="radio" name="ai_persona" value="analyst"{% if form.ai_persona.value == 'analyst' %} checked{% endif %}>
-                    <div class="persona-tile-icon">&#128202;</div>
-                    <div class="persona-tile-name">Analyst</div>
-                    <div class="persona-tile-desc">Neutral, professional, and factual. Just the numbers.</div>
-                </label>
-                <label class="persona-tile{% if form.ai_persona.value == 'new_york_bookie' %} selected{% endif %}">
-                    <input type="radio" name="ai_persona" value="new_york_bookie"{% if form.ai_persona.value == 'new_york_bookie' %} checked{% endif %}>
-                    <div class="persona-tile-icon">&#127991;&#65039;</div>
-                    <div class="persona-tile-name">New York Bookie</div>
-                    <div class="persona-tile-desc">Blunt, sharp, and street-smart. No sugarcoating.</div>
-                </label>
-                <label class="persona-tile{% if form.ai_persona.value == 'southern_commentator' %} selected{% endif %}">
-                    <input type="radio" name="ai_persona" value="southern_commentator"{% if form.ai_persona.value == 'southern_commentator' %} checked{% endif %}>
-                    <div class="persona-tile-icon">&#129312;</div>
-                    <div class="persona-tile-name">Southern Commentator</div>
-                    <div class="persona-tile-desc">Calm, folksy, and confident. Sweet tea wisdom.</div>
-                </label>
-                <label class="persona-tile{% if form.ai_persona.value == 'ex_player' %} selected{% endif %}">
-                    <input type="radio" name="ai_persona" value="ex_player"{% if form.ai_persona.value == 'ex_player' %} checked{% endif %}>
-                    <div class="persona-tile-icon">&#127941;</div>
-                    <div class="persona-tile-name">Ex-Player</div>
-                    <div class="persona-tile-desc">Direct, experiential. Been in the trenches.</div>
-                </label>
+            <div class="pref-field">
+                <label for="{{ form.zip_code.id_for_label }}">US Zip Code</label>
+                {{ form.zip_code }}
+                <div class="pref-field-help">Enter your 5-digit zip code to set your timezone</div>
+                {% if profile.timezone %}
+                <div class="pref-field-success">Resolved timezone: {{ profile.timezone }}</div>
+                {% endif %}
+                {% for error in form.zip_code.errors %}
+                <div class="form-error">{{ error }}</div>
+                {% endfor %}
             </div>
         </div>
     </div>
@@ -603,7 +617,7 @@ document.querySelectorAll('.pref-section-body .form-error').forEach(function(err
     var hidden = document.getElementById('{{ form.favorite_golfer.id_for_label }}');
     var selectedBox = document.getElementById('golferSelected');
     var selectedName = document.getElementById('golferSelectedName');
-    var badge = document.getElementById('golferBadge');
+    var badge = document.getElementById('favBadge');
     var debounceTimer = null;
     var highlightIdx = -1;
     var currentItems = [];
@@ -674,6 +688,17 @@ document.querySelectorAll('.pref-section-body .form-error').forEach(function(err
         }
     }
 
+    function rebuildFavBadge(golferName) {
+        if (!badge) return;
+        var parts = [];
+        var teamSel = document.getElementById('id_favorite_team');
+        var cbbSel = document.getElementById('id_favorite_cbb_team');
+        if (teamSel && teamSel.selectedIndex > 0) parts.push(teamSel.options[teamSel.selectedIndex].text);
+        if (cbbSel && cbbSel.selectedIndex > 0) parts.push(cbbSel.options[cbbSel.selectedIndex].text);
+        if (golferName) parts.push(golferName);
+        badge.textContent = parts.length ? parts.join(', ') : 'None';
+    }
+
     function selectGolfer(id, name) {
         hidden.value = id;
         input.value = '';
@@ -681,7 +706,7 @@ document.querySelectorAll('.pref-section-body .form-error').forEach(function(err
         results.classList.remove('visible');
         selectedName.textContent = name;
         selectedBox.style.display = 'flex';
-        if (badge) badge.textContent = name;
+        rebuildFavBadge(name);
     }
 
     // Make clearGolfer global
@@ -689,7 +714,7 @@ document.querySelectorAll('.pref-section-body .form-error').forEach(function(err
         hidden.value = '';
         selectedBox.style.display = 'none';
         selectedName.textContent = '';
-        if (badge) badge.textContent = 'None';
+        rebuildFavBadge(null);
     };
 
     // Close results on outside click

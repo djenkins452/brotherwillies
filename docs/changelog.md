@@ -2,6 +2,15 @@
 
 ---
 
+## 2026-02-08 - Merge favorites into unified section + reorder preferences
+
+**Summary:** Combined CFB, CBB, and Golf favorites into a single "Favorites" accordion section with sport sub-groups (🏈 College Football, 🏀 College Basketball, ⛳ Golf). Reordered preferences sections to: AI Persona → Favorites → Value Board Filters → Location. Badge on Favorites header dynamically shows all selected favorites. Golfer select/clear now rebuilds the combined badge correctly.
+
+### Modified files:
+- `templates/accounts/preferences.html` — merged three favorites sections into one with `.fav-sport-group` sub-sections, reordered accordion sections, added `favBadge` ID for dynamic badge updates, improved `rebuildFavBadge()` JS function
+
+---
+
 ## 2026-02-08 - Favorite golfer with autocomplete search
 
 **Summary:** Added favorite golfer selection to preferences. Users can search ~200 PGA Tour players by typing any part of their name (first, last, or full) with instant AJAX autocomplete. The Golfer model now stores first/last name split for better search. Data stored as FK on UserProfile, relatable to future golf odds/results/analytics.
