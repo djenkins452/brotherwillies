@@ -90,14 +90,6 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="18" r="3"/><path d="M12 3v12"/><path d="M12 3l6 4-6 2"/></svg>
             <span>Golf</span>
         </a>
-        <a href="/profile/" class="nav-item {% if nav_active == 'profile' %}active{% endif %}">
-            {% if user_profile.profile_picture_data %}
-                <img src="{{ user_profile.profile_picture_data }}" alt="Profile" class="nav-avatar">
-            {% else %}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg>
-            {% endif %}
-            <span>Profile</span>
-        </a>
     </nav>
 
     {% include "includes/help_modal.html" %}
