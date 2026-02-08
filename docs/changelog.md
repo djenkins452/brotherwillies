@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-02-08 - AI Insight Loading Message
+
+**Summary:** Added a visible "Acquiring your AI insights, one moment please..." message with a pulsing animation below the shimmer lines while the AI Insight is loading on game detail pages (CFB and CBB).
+
+### Modified files:
+- `templates/cfb/game_detail.html` — Added loading message paragraph
+- `templates/cbb/game_detail.html` — Added loading message paragraph
+- `static/css/style.css` — Added `.ai-loading-msg` style with `pulse-fade` animation
+
+---
+
 ## 2026-02-08 - Aged Parchment Background on Auth Pages
 
 **Summary:** Applied aged parchment texture (`bg_image.png`) as background on all auth page form panels. All white/gray surfaces replaced with translucent overlays so the natural paper texture — stains, scratches, and wear — shows through. Message backgrounds switched to transparent tints, input borders warmed to match.

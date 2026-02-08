@@ -1053,6 +1053,16 @@ input[type="range"]::-webkit-slider-thumb {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
+.ai-loading-msg {
+    margin: 6px 0 0;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    animation: pulse-fade 2s ease-in-out infinite;
+}
+@keyframes pulse-fade {
+    0%, 100% { opacity: .4; }
+    50% { opacity: 1; }
+}
 
 /* ========== Feedback Quick Status ========== */
 .fb-quick-status {
