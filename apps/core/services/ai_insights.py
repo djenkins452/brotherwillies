@@ -280,6 +280,16 @@ def generate_insight(game, data, sport, persona='analyst'):
             'meta': {},
         }
 
+    # Load admin-configurable AI settings (with sensible defaults)
+    try:
+        from apps.core.models import SiteConfig
+        config = SiteConfig.get()
+        temperature = config.ai_temperature
+        max_tokens = config.ai_max_tokens
+    except Exception:
+        temperature = 0.0
+        max_tokens = 800
+
     context = _build_context_from_game(game, data, sport)
     system_prompt = _build_system_prompt(persona)
     user_prompt = _build_user_prompt(context)
@@ -301,8 +311,8 @@ def generate_insight(game, data, sport, persona='analyst'):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
-            max_tokens=800,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
         content = response.choices[0].message.content

@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-02-08 - Admin-configurable AI settings (SiteConfig)
+
+**Summary:** Added a `SiteConfig` singleton model editable from Django admin (`/bw-manage/`). AI temperature and max tokens are now configurable at runtime without redeploying. Temperature defaults to 0 (deterministic/most factual).
+
+### Changes:
+- **`apps/core/models.py`** — new `SiteConfig` singleton with `ai_temperature` (default 0.0) and `ai_max_tokens` (default 800), enforced pk=1, `SiteConfig.get()` class method
+- **`apps/core/admin.py`** — registered with fieldset, description, no-delete, single-row enforcement
+- **`apps/core/services/ai_insights.py`** — reads temperature/max_tokens from `SiteConfig.get()` with fallback defaults
+- **`apps/core/migrations/0001_initial.py`** — creates SiteConfig table
+
+### Admin usage:
+1. Go to `/bw-manage/` → Core → Site Configuration
+2. Click "Add" (first time) or edit the existing row
+3. Change AI Temperature (0 = factual, 0.3 = slight variation, 1.0+ = creative)
+4. Change Max Tokens if needed
+5. Save — takes effect on next AI Insight request (no restart needed)
+
+---
+
 ## 2026-02-08 - AI Insight: general knowledge enrichment
 
 **Summary:** Updated AI system prompt to allow supplementing analysis with well-established general sports knowledge (conference history, program prestige, rivalries, coaching records, championship counts). Previously the AI was limited to ONLY the data we passed, which meant it couldn't correct bad data (e.g., Clemson listed as "Independent" instead of ACC) or add widely-known context.
