@@ -109,6 +109,8 @@ brotherwillies/
         cfb/                 # CFB schedule, odds, injuries providers
         golf/                # Golf schedule, odds providers
     feedback/              # Partner-only feedback system
+    datahub/
+      team_colors.py       # CFB (~133) + CBB (~360+) team primary colors by slug
   static/
     css/style.css          # Global dark theme + responsive styles
     css/auth.css           # Standalone 2-column auth layout (login, password reset)
@@ -143,7 +145,7 @@ brotherwillies/
 | Route | Description |
 |-------|-------------|
 | `/` | Home (dashboard preview) |
-| `/value/` | Unified Value Board with sport tabs (CBB/CFB/Golf) |
+| `/value/` | Unified Value Board with sport icons, accordion sections, compact data grid |
 | `/value/?sport=cbb` | Value Board — CBB tab |
 | `/value/?sport=cfb` | Value Board — CFB tab |
 | `/value/?sport=golf` | Value Board — Golf tab |
@@ -396,6 +398,7 @@ python manage.py refresh_data          # Runs all of the above for enabled sport
 - `high` — odds < 2 hours old AND injuries exist
 - `med` — odds < 12 hours old
 - `low` — odds > 12 hours old or no odds
+- **Note:** "No injuries reported" is normal (source checked, nothing found) — NOT treated as missing data
 
 ---
 
@@ -443,7 +446,7 @@ python manage.py refresh_data          # Runs all of the above for enabled sport
 1. One-line summary
 2. Market vs House snapshot
 3. Key drivers (bullet list, ordered by impact)
-4. Injury impact (if any)
+4. Injury impact (if injuries exist, explain; if none reported, briefly note and move on — not a red flag)
 5. Line movement context (if any)
 6. What would change this view
 7. Confidence & limitations
@@ -497,6 +500,36 @@ Stored in `SiteConfig` singleton model (`apps/core/models.py`). Changes take eff
 **Favorites section:** Unified section with sport sub-groups (🏈 CFB, 🏀 CBB, ⛳ Golf). Golf uses AJAX autocomplete for golfer search. Badge dynamically shows all selected favorites.
 
 **AI Persona:** Visual tile selector (4 tiles: Analyst, NY Bookie, Southern Commentator, Ex-Player). Affects AI Insight tone on game detail pages.
+
+---
+
+## Value Board
+
+**URL:** `/value/` with `?sport=cbb|cfb|golf` tabs
+
+**Sport tab icons:** SVG icons next to each sport name (basketball, football, golf flag)
+
+**Accordion sections:** Games grouped by timeframe — each section is collapsible:
+- **Big Matchups** (CFB/CBB only) — top 5 by combined team rating, collapsed by default
+- **Today's Games** — expanded by default
+- **Tomorrow's Games** — collapsed by default
+- **This Week** — collapsed by default (excludes today/tomorrow)
+- **Coming Up** — collapsed by default (beyond this week)
+
+Expand/collapse state persists via `localStorage` under `vb_sections` key. `data-default-open` attribute sets initial state.
+
+**Compact data grid on game cards:**
+| | Mkt | House | You |
+|---|---|---|---|
+| **Prob** | market_prob | house_prob | user_prob |
+| **vs Mkt** | — | house_edge | user_edge |
+| **vs House** | — | — | delta |
+
+Sort chips reorder cards — all values always visible.
+
+**Favorite team color highlighting:** Cards for the user's favorite team get a 4px colored accent bar at the top using the team's `primary_color`. Implemented via CSS custom property `--team-color` on the card element and a `::before` pseudo-element.
+
+**Team colors:** `apps/datahub/team_colors.py` contains `CFB_TEAM_COLORS` (~133 FBS teams) and `CBB_TEAM_COLORS` (~360+ D1 teams) dictionaries keyed by slug. Colors are set on team creation (seed + live ingestion) and backfilled for existing teams.
 
 ---
 
