@@ -16,8 +16,10 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
         </div>
         <div class="edge-row">
             <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>
@@ -33,8 +35,10 @@
         {% endif %}
         <div class="teams">
             <span class="team-name">{{ g.game.away_team.name }}</span>
+            {% if g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
             <span class="vs">@</span>
             <span class="team-name">{{ g.game.home_team.name }}</span>
+            {% if g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
         </div>
         <div class="edge-row">
             <span>Mkt: {{ g.market_prob|floatformat:0 }}%</span>

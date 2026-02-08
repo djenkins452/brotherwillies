@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-02-08 - Productive analytics pipeline + score tracking
+
+**Summary:** Analytics system now captures model predictions automatically, resolves game outcomes with real scores, and displays comprehensive performance metrics including accuracy by sport, calibration analysis, and closing line value (CLV). Game scores are ingested from APIs and displayed throughout the UI.
+
+### Changes:
+- `apps/cfb/models.py`, `apps/cbb/models.py` — added `home_score`, `away_score` fields to Game models
+- `apps/datahub/providers/cfb/schedule_provider.py` — persist `home_points`/`away_points` from CFBD API
+- `apps/datahub/providers/cbb/schedule_provider.py` — extract and persist scores from ESPN API
+- `apps/datahub/management/commands/capture_snapshots.py` — new: captures house model predictions for upcoming games (24h window)
+- `apps/datahub/management/commands/resolve_outcomes.py` — new: resolves final_outcome + closing_market_prob for completed games
+- `apps/datahub/management/commands/refresh_data.py` — integrated capture_snapshots + resolve_outcomes into cron cycle
+- `apps/accounts/views.py` — enhanced performance_view with sport breakdown, time trends, calibration, and CLV metrics
+- `templates/accounts/performance.html` — rebuilt with full analytics dashboard (overall, by sport, trends, CLV, calibration table, recent results)
+- `templates/cfb/game_detail.html`, `templates/cbb/game_detail.html` — display scores and status badges for live/final games
+- `templates/core/home.html` — display live scores in dashboard
+- `static/css/style.css` — `.game-score`, `.badge-gray`, `.text-green`, `.text-red`, `.table-wrap` styles
+
+### Cron pipeline order:
+1. `ingest_schedule` (updates status + scores)
+2. `ingest_odds` (fresh market lines)
+3. `ingest_injuries`
+4. `capture_snapshots` (pre-game predictions)
+5. `resolve_outcomes` (post-game results + CLV)
+
+---
+
 ## 2026-02-08 - Live games dashboard + cron refresh + data source docs
 
 **Summary:** Home dashboard now shows live/in-progress games in a dedicated "Live Now" section with pulsing red badge and dot. ESPN fetch window expanded to include yesterday's scoreboard for late-night games. Added `refresh_data` management command for Railway cron job. Help system now documents data sources on every page.

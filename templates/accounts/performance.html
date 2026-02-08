@@ -4,49 +4,169 @@
 {% block content %}
 <h1 class="page-title">Model Performance</h1>
 
+<!-- Overall -->
 <div class="stat-grid">
     <div class="stat-tile">
-        <div class="stat-value">{{ accuracy }}%</div>
-        <div class="stat-label">Directional Accuracy</div>
+        <div class="stat-value">{{ overall.accuracy }}%</div>
+        <div class="stat-label">Accuracy</div>
     </div>
     <div class="stat-tile">
-        <div class="stat-value">{{ brier_score }}</div>
+        <div class="stat-value">{{ overall.brier }}</div>
         <div class="stat-label">Brier Score</div>
     </div>
     <div class="stat-tile">
-        <div class="stat-value">{{ total_games }}</div>
-        <div class="stat-label">Games Evaluated</div>
+        <div class="stat-value">{{ overall.count }}</div>
+        <div class="stat-label">Games</div>
     </div>
 </div>
 
 <div class="card mb-2">
     <p class="text-sm text-muted">
-        <strong>Accuracy</strong> measures how often the model correctly predicted the winning team.
-        <strong>Brier Score</strong> measures calibration (lower is better; 0 = perfect, 0.25 = coin flip).
-        These are model quality indicators, not financial results.
+        <strong>Accuracy</strong> — correct directional picks.
+        <strong>Brier</strong> — calibration quality (lower is better; 0 = perfect, 0.25 = coin flip).
     </p>
 </div>
 
-<p class="section-title mt-2">Recent Results</p>
-{% for snap in snapshots %}
+<!-- Sport breakdown -->
+{% if cfb.count > 0 or cbb.count > 0 %}
+<p class="section-title mt-2">By Sport</p>
+<div class="card-grid">
+    {% if cfb.count > 0 %}
+    <div class="card">
+        <div class="card-title">College Football</div>
+        <div class="gap-row text-sm">
+            <span>{{ cfb.accuracy }}% acc</span>
+            <span>{{ cfb.brier }} brier</span>
+            <span>{{ cfb.count }} games</span>
+        </div>
+    </div>
+    {% endif %}
+    {% if cbb.count > 0 %}
+    <div class="card">
+        <div class="card-title">College Basketball</div>
+        <div class="gap-row text-sm">
+            <span>{{ cbb.accuracy }}% acc</span>
+            <span>{{ cbb.brier }} brier</span>
+            <span>{{ cbb.count }} games</span>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Trends -->
+{% if last_7d.count > 0 or last_30d.count > 0 %}
+<p class="section-title mt-2">Recent Trends</p>
+<div class="card-grid">
+    {% if last_7d.count > 0 %}
+    <div class="card">
+        <div class="card-title">Last 7 Days</div>
+        <div class="gap-row text-sm">
+            <span>{{ last_7d.accuracy }}% acc</span>
+            <span>{{ last_7d.brier }} brier</span>
+            <span>{{ last_7d.count }} games</span>
+        </div>
+    </div>
+    {% endif %}
+    {% if last_30d.count > 0 %}
+    <div class="card">
+        <div class="card-title">Last 30 Days</div>
+        <div class="gap-row text-sm">
+            <span>{{ last_30d.accuracy }}% acc</span>
+            <span>{{ last_30d.brier }} brier</span>
+            <span>{{ last_30d.count }} games</span>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- CLV -->
+{% if clv.count > 0 %}
+<p class="section-title mt-2">Closing Line Value</p>
+<div class="stat-grid">
+    <div class="stat-tile">
+        <div class="stat-value {% if clv.avg_clv > 0 %}text-green{% elif clv.avg_clv < 0 %}text-red{% endif %}">{{ clv.avg_clv }}%</div>
+        <div class="stat-label">Avg CLV</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ clv.positive_clv_pct }}%</div>
+        <div class="stat-label">Positive CLV Rate</div>
+    </div>
+    <div class="stat-tile">
+        <div class="stat-value">{{ clv.count }}</div>
+        <div class="stat-label">Games w/ Closing</div>
+    </div>
+</div>
+<div class="card mb-2">
+    <p class="text-sm text-muted">
+        CLV measures whether the market moved toward the model's prediction by game time.
+        Positive CLV indicates the model identified value that persisted to close.
+    </p>
+</div>
+{% endif %}
+
+<!-- Calibration -->
+{% if calibration %}
+<p class="section-title mt-2">Calibration</p>
 <div class="card">
-    <div class="card-title text-sm">{{ snap.game }}</div>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Range</th>
+                    <th>Predicted</th>
+                    <th>Actual</th>
+                    <th>Diff</th>
+                    <th>N</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for b in calibration %}
+                <tr>
+                    <td>{{ b.bucket }}</td>
+                    <td>{{ b.avg_prediction }}%</td>
+                    <td>{{ b.actual_rate }}%</td>
+                    <td class="{% if b.diff > 5 %}text-red{% elif b.diff < -5 %}text-red{% else %}text-green{% endif %}">{{ b.diff|floatformat:1 }}%</td>
+                    <td>{{ b.count }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="text-sm text-muted mt-1">
+        Well-calibrated models have predicted and actual rates closely aligned.
+    </p>
+</div>
+{% endif %}
+
+<!-- Recent results -->
+<p class="section-title mt-2">Recent Results</p>
+{% for snap in recent_snapshots %}
+<div class="card">
+    <div class="card-title text-sm">
+        {% if snap.game %}{{ snap.game }}{% else %}{{ snap.cbb_game }}{% endif %}
+        <span class="badge" style="font-size:.7rem;">{% if snap.game %}CFB{% else %}CBB{% endif %}</span>
+    </div>
     <div class="gap-row text-sm" style="justify-content:space-between;">
-        <span>Market: {{ snap.market_prob|floatformat:1 }}%</span>
+        <span>Mkt: {{ snap.market_prob|floatformat:1 }}%</span>
         <span>House: {{ snap.house_prob|floatformat:1 }}%</span>
+        {% if snap.closing_market_prob %}
+        <span>Close: {{ snap.closing_market_prob|floatformat:1 }}%</span>
+        {% endif %}
         {% if snap.final_outcome is not None %}
         <span class="badge {% if snap.final_outcome %}badge-green{% else %}badge-red{% endif %}">
-            {{ snap.final_outcome|yesno:"Home Win,Away Win" }}
+            {{ snap.final_outcome|yesno:"Home,Away" }}
         </span>
         {% endif %}
     </div>
     <div class="text-sm text-muted">{{ snap.captured_at|date:"M d" }} &middot; {{ snap.house_model_version }} &middot; {{ snap.data_confidence }}</div>
 </div>
 {% empty %}
-<div class="empty-state"><p>No completed games with results yet. Performance data will appear after games are finalized.</p></div>
+<div class="empty-state"><p>No completed games yet. Performance data will appear as games are finalized.</p></div>
 {% endfor %}
 
 <div class="card mt-3">
-    <p class="text-sm text-muted">Past performance does not predict future outcomes.</p>
+    <p class="text-sm text-muted">Past performance does not predict future outcomes. These metrics are for model evaluation only.</p>
 </div>
 {% endblock %}

@@ -233,6 +233,7 @@ a:hover {
 .badge-red { background: rgba(239,68,68,0.2); color: var(--red); }
 .badge-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
 .badge-blue { background: rgba(79,140,255,0.2); color: var(--accent); }
+.badge-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }
 .badge-fav {
     background: rgba(234,179,8,0.15);
     color: var(--yellow);
@@ -385,6 +386,10 @@ select.form-control {
 }
 
 /* ========== Tables (card style on mobile) ========== */
+.table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
 .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -491,6 +496,8 @@ select.form-control {
 /* ========== Utility ========== */
 .text-center { text-align: center; }
 .text-muted { color: var(--text-muted); }
+.text-green { color: var(--green); }
+.text-red { color: var(--red); }
 .text-sm { font-size: 0.8rem; }
 .mt-1 { margin-top: 8px; }
 .mt-2 { margin-top: 16px; }
@@ -608,6 +615,14 @@ select.form-control {
 .game-card .vs {
     color: var(--text-muted);
     font-size: 0.75rem;
+}
+.game-score {
+    font-weight: 700;
+    margin-left: 6px;
+    padding: 2px 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    font-size: 0.95em;
 }
 .game-card .game-meta {
     display: flex;

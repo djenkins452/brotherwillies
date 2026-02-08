@@ -79,6 +79,8 @@ class CBBScheduleProvider(AbstractProvider):
             away_team = ''
             home_conf = ''
             away_conf = ''
+            home_score = None
+            away_score = None
             for competitor in comp.get('competitors', []):
                 team_data = competitor.get('team', {})
                 name = team_data.get('displayName', '') or team_data.get('name', '')
@@ -89,12 +91,17 @@ class CBBScheduleProvider(AbstractProvider):
                 if isinstance(groups, dict):
                     conf = groups.get('shortName', '') or groups.get('name', '')
 
+                score_str = competitor.get('score')
+                score = int(score_str) if score_str and str(score_str).isdigit() else None
+
                 if competitor.get('homeAway') == 'home':
                     home_team = name
                     home_conf = conf
+                    home_score = score
                 else:
                     away_team = name
                     away_conf = conf
+                    away_score = score
 
             if not home_team or not away_team:
                 continue
@@ -122,6 +129,8 @@ class CBBScheduleProvider(AbstractProvider):
                 'start_date': start_date,
                 'status': status,
                 'neutral_site': bool(neutral_site),
+                'home_score': home_score,
+                'away_score': away_score,
             })
 
         return normalized
@@ -191,6 +200,12 @@ class CBBScheduleProvider(AbstractProvider):
                 if existing.status != item['status']:
                     existing.status = item['status']
                     changed = True
+                if item.get('home_score') is not None and existing.home_score != item['home_score']:
+                    existing.home_score = item['home_score']
+                    changed = True
+                if item.get('away_score') is not None and existing.away_score != item['away_score']:
+                    existing.away_score = item['away_score']
+                    changed = True
                 if changed:
                     existing.save()
                     updated += 1
@@ -201,6 +216,8 @@ class CBBScheduleProvider(AbstractProvider):
                     tipoff=tipoff,
                     neutral_site=item['neutral_site'],
                     status=item['status'],
+                    home_score=item.get('home_score'),
+                    away_score=item.get('away_score'),
                 )
                 created += 1
 

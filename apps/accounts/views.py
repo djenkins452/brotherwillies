@@ -311,32 +311,106 @@ def my_stats_view(request):
 
 @login_required
 def performance_view(request):
-    snapshots = ModelResultSnapshot.objects.filter(
-        final_outcome__isnull=False
-    ).order_by('-captured_at')[:50]
+    all_snaps = list(
+        ModelResultSnapshot.objects.filter(
+            final_outcome__isnull=False
+        ).select_related('game', 'cbb_game').order_by('-captured_at')
+    )
 
-    correct = 0
-    total = 0
-    brier_sum = 0
-    for snap in snapshots:
-        total += 1
-        predicted_home = snap.house_prob > 0.5
-        actual_home = snap.final_outcome
-        if predicted_home == actual_home:
-            correct += 1
-        brier_sum += (snap.house_prob - (1.0 if actual_home else 0.0)) ** 2
+    cfb_snaps = [s for s in all_snaps if s.game_id is not None]
+    cbb_snaps = [s for s in all_snaps if s.cbb_game_id is not None]
 
-    accuracy = round((correct / total) * 100, 1) if total > 0 else 0
-    brier = round(brier_sum / total, 3) if total > 0 else 0
+    now = timezone.now()
+    snaps_7d = [s for s in all_snaps if s.captured_at >= now - timedelta(days=7)]
+    snaps_30d = [s for s in all_snaps if s.captured_at >= now - timedelta(days=30)]
 
     return render(request, 'accounts/performance.html', {
-        'snapshots': snapshots,
-        'accuracy': accuracy,
-        'brier_score': brier,
-        'total_games': total,
+        'overall': _compute_metrics(all_snaps),
+        'cfb': _compute_metrics(cfb_snaps),
+        'cbb': _compute_metrics(cbb_snaps),
+        'last_7d': _compute_metrics(snaps_7d),
+        'last_30d': _compute_metrics(snaps_30d),
+        'calibration': _compute_calibration(all_snaps),
+        'clv': _compute_clv(all_snaps),
+        'recent_snapshots': all_snaps[:50],
         'help_key': 'performance',
         'nav_active': 'profile',
     })
+
+
+def _compute_metrics(snapshots):
+    correct = 0
+    total = 0
+    brier_sum = 0.0
+    for s in snapshots:
+        total += 1
+        predicted_home = s.house_prob > 0.5
+        if predicted_home == s.final_outcome:
+            correct += 1
+        brier_sum += (s.house_prob - (1.0 if s.final_outcome else 0.0)) ** 2
+    return {
+        'count': total,
+        'accuracy': round((correct / total) * 100, 1) if total else 0,
+        'brier': round(brier_sum / total, 3) if total else 0,
+    }
+
+
+def _compute_calibration(snapshots):
+    ranges = [
+        ('50-60%', 0.50, 0.60),
+        ('60-70%', 0.60, 0.70),
+        ('70-80%', 0.70, 0.80),
+        ('80-90%', 0.80, 0.90),
+        ('90-100%', 0.90, 1.01),
+    ]
+    buckets = {label: {'preds': [], 'actuals': []} for label, _, _ in ranges}
+    for s in snapshots:
+        # Use the favored-side probability for calibration
+        prob = s.house_prob if s.house_prob >= 0.5 else 1.0 - s.house_prob
+        actual = s.final_outcome if s.house_prob >= 0.5 else not s.final_outcome
+        for label, lo, hi in ranges:
+            if lo <= prob < hi:
+                buckets[label]['preds'].append(prob)
+                buckets[label]['actuals'].append(1 if actual else 0)
+                break
+    result = []
+    for label, _, _ in ranges:
+        b = buckets[label]
+        if b['actuals']:
+            avg_pred = sum(b['preds']) / len(b['preds']) * 100
+            actual_rate = sum(b['actuals']) / len(b['actuals']) * 100
+            result.append({
+                'bucket': label,
+                'count': len(b['actuals']),
+                'avg_prediction': round(avg_pred, 1),
+                'actual_rate': round(actual_rate, 1),
+                'diff': round(actual_rate - avg_pred, 1),
+            })
+    return result
+
+
+def _compute_clv(snapshots):
+    with_closing = [s for s in snapshots if s.closing_market_prob is not None]
+    if not with_closing:
+        return {'count': 0, 'avg_clv': 0, 'positive_clv_pct': 0}
+
+    clv_sum = 0.0
+    positive = 0
+    for s in with_closing:
+        # CLV = did the market move toward the model's prediction?
+        initial_edge = abs(s.house_prob - s.market_prob)
+        closing_edge = abs(s.house_prob - s.closing_market_prob)
+        clv = initial_edge - closing_edge  # positive = market moved toward model
+        clv_sum += clv
+        if clv > 0:
+            positive += 1
+
+    count = len(with_closing)
+    return {
+        'count': count,
+        'avg_clv': round((clv_sum / count) * 100, 2),
+        'positive_clv_pct': round((positive / count) * 100, 1),
+    }
 
 
 from django.db import models

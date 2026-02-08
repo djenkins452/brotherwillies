@@ -38,6 +38,8 @@ class Game(models.Model):
     tipoff = models.DateTimeField()
     neutral_site = models.BooleanField(default=False)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='scheduled')
+    home_score = models.IntegerField(null=True, blank=True)
+    away_score = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['tipoff']

@@ -75,6 +75,8 @@ class CFBScheduleProvider(AbstractProvider):
                 'start_date': start_date,
                 'status': status,
                 'neutral_site': bool(g.get('neutral_site', False)),
+                'home_score': home_points,
+                'away_score': away_points,
             })
 
         return normalized
@@ -144,6 +146,12 @@ class CFBScheduleProvider(AbstractProvider):
                 if existing.status != item['status']:
                     existing.status = item['status']
                     changed = True
+                if item.get('home_score') is not None and existing.home_score != item['home_score']:
+                    existing.home_score = item['home_score']
+                    changed = True
+                if item.get('away_score') is not None and existing.away_score != item['away_score']:
+                    existing.away_score = item['away_score']
+                    changed = True
                 if changed:
                     existing.save()
                     updated += 1
@@ -154,6 +162,8 @@ class CFBScheduleProvider(AbstractProvider):
                     kickoff=kickoff,
                     neutral_site=item['neutral_site'],
                     status=item['status'],
+                    home_score=item.get('home_score'),
+                    away_score=item.get('away_score'),
                 )
                 created += 1
 

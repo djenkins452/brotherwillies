@@ -10,10 +10,13 @@
 
     <div class="teams" style="font-size:1.1rem;">
         <span class="team-name">{{ game.away_team.name }}</span>
+        {% if game.away_score is not None %}<span class="game-score">{{ game.away_score }}</span>{% endif %}
         <span class="vs" style="margin:0 12px;">@</span>
         <span class="team-name">{{ game.home_team.name }}</span>
+        {% if game.home_score is not None %}<span class="game-score">{{ game.home_score }}</span>{% endif %}
     </div>
     <div class="text-sm text-muted mt-1">
+        {% if game.status == 'final' %}<span class="badge badge-gray">Final</span>{% elif game.status == 'live' %}<span class="badge badge-live">Live</span>{% endif %}
         {{ game.kickoff|date:"l, M d Y - g:i A" }} {% tz_abbr %}
         {% if game.neutral_site %} &middot; Neutral Site{% endif %}
     </div>

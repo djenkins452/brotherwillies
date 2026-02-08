@@ -34,6 +34,8 @@ class Command(BaseCommand):
                 call_command('ingest_odds', sport=sport, force=True)
                 if has_injuries:
                     call_command('ingest_injuries', sport=sport, force=True)
+                call_command('capture_snapshots', sport=sport)
+                call_command('resolve_outcomes', sport=sport)
                 self.stdout.write(self.style.SUCCESS(f'{sport} done'))
             except Exception as e:
                 self.stdout.write(self.style.WARNING(f'{sport} failed: {e}'))
