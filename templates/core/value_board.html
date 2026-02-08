@@ -88,7 +88,7 @@
         {% for g in section.games %}
         <a href="/{{ active_sport }}/game/{{ g.game.id }}/"
            class="game-card{% if g.is_favorite %} game-card-favorite{% endif %}"
-           {% if g.is_favorite and favorite_team_color %}style="border-top: 3px solid {{ favorite_team_color }}"{% endif %}>
+           {% if g.is_favorite and favorite_team_color %}style="--team-color: {{ favorite_team_color }}"{% endif %}>
             {% if g.is_favorite %}
             <span class="badge badge-fav">Your Team</span>
             {% endif %}
