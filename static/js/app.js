@@ -1,7 +1,15 @@
 // Help modal toggle
 function toggleHelp() {
     var modal = document.getElementById('help-modal');
+    var sheet = document.getElementById('help-sheet');
     if (modal.style.display === 'none' || modal.style.display === '') {
+        // Reset drag position on open
+        if (sheet) {
+            sheet.style.position = '';
+            sheet.style.left = '';
+            sheet.style.top = '';
+            sheet.style.margin = '';
+        }
         modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
     } else {
@@ -109,6 +117,48 @@ function collapseAllVB() {
     });
     saveVBSectionState(state);
 }
+
+// Help modal drag (desktop only)
+(function() {
+    var handle = document.getElementById('help-drag-handle');
+    var sheet = document.getElementById('help-sheet');
+    if (!handle || !sheet) return;
+
+    var isDragging = false;
+    var startX, startY, origX, origY;
+
+    handle.addEventListener('mousedown', function(e) {
+        if (window.innerWidth <= 768) return;
+        if (e.target.closest('.help-close')) return;
+        isDragging = true;
+        sheet.classList.add('is-dragging');
+        var rect = sheet.getBoundingClientRect();
+        origX = rect.left;
+        origY = rect.top;
+        startX = e.clientX;
+        startY = e.clientY;
+        // Switch from flex-centered to absolute positioning
+        sheet.style.position = 'fixed';
+        sheet.style.left = origX + 'px';
+        sheet.style.top = origY + 'px';
+        sheet.style.margin = '0';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!isDragging) return;
+        var dx = e.clientX - startX;
+        var dy = e.clientY - startY;
+        sheet.style.left = (origX + dx) + 'px';
+        sheet.style.top = (origY + dy) + 'px';
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (!isDragging) return;
+        isDragging = false;
+        sheet.classList.remove('is-dragging');
+    });
+})();
 
 // Initialize accordion sections on page load — always use server defaults
 document.addEventListener('DOMContentLoaded', function() {

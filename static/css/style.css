@@ -847,8 +847,17 @@ input[type="range"]::-webkit-slider-thumb {
         border-radius: var(--radius);
         margin-bottom: 10vh;
     }
+    .help-sheet.is-dragging {
+        transition: none;
+    }
     .help-overlay {
         align-items: center;
+    }
+    .help-draggable {
+        cursor: grab;
+    }
+    .help-draggable:active {
+        cursor: grabbing;
     }
 }
 
