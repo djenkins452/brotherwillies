@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load tz_extras %}
 {% block title %}{{ event.name }} - Brother Willies{% endblock %}
 
 {% block content %}
@@ -10,6 +11,11 @@
         <span class="badge badge-gray" style="margin-left:8px;">Completed</span>
         {% endif %}
     </div>
+    {% if last_odds_update %}
+    <div class="text-sm text-muted mt-1">
+        Odds last updated: {{ last_odds_update|date:"D M d, g:i A" }} {% tz_abbr %}
+    </div>
+    {% endif %}
 </div>
 
 {% if golfer_odds %}

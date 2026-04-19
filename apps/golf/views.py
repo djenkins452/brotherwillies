@@ -1,7 +1,7 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q, Subquery, OuterRef
+from django.db.models import Q, Subquery, OuterRef, Max
 from django.utils import timezone
 from .models import GolfEvent, Golfer, GolfOddsSnapshot
 
@@ -60,10 +60,17 @@ def event_detail(request, slug):
     # Check if event is still open for betting (end_date hasn't passed)
     event_open = event.end_date >= timezone.now().date()
 
+    # Most recent odds capture across all snapshots for this event
+    last_odds_update = (
+        GolfOddsSnapshot.objects.filter(event=event)
+        .aggregate(latest=Max('captured_at'))['latest']
+    )
+
     return render(request, 'golf/event_detail.html', {
         'event': event,
         'golfer_odds': golfer_odds,
         'event_open': event_open,
+        'last_odds_update': last_odds_update,
         'help_key': 'golf_event',
         'nav_active': 'golf',
     })

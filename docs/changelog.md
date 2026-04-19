@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-04-19 - Golf event detail: show last odds update
+
+**Summary:** The golf event detail page (e.g. `/golf/the-masters/`) now displays the timestamp of the most recent odds snapshot, rendered in the user's local timezone. Gives users a clear signal of data freshness.
+
+### Changes
+- `apps/golf/views.py` — `event_detail` now computes `last_odds_update` via `GolfOddsSnapshot.objects.filter(event=event).aggregate(Max('captured_at'))` and passes it in context.
+- `templates/golf/event_detail.html` — new muted line "Odds last updated: {timestamp}" under the date range, using the standard `D M d, g:i A` + `{% tz_abbr %}` pattern. Line only renders when snapshots exist.
+
+---
+
 ## 2026-04-19 - Golf odds windowed fetch
 
 **Summary:** Golf odds ingestion now only hits The Odds API when at least one `GolfEvent` is in its fetch window (start_date − 7 days → end_date), and persists no more than one snapshot per event per day. Reduces API usage and aligns data freshness with betting relevance. No other sports affected.
