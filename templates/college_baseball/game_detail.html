@@ -1,56 +1,170 @@
 {% extends "base.html" %}
 {% load tz_extras %}
-{% block title %}{{ game.away_team.name }} @ {{ game.home_team.name }} | College Baseball{% endblock %}
+{% block title %}{{ game.away_team.name }} @ {{ game.home_team.name }} - Brother Willies{% endblock %}
+
 {% block content %}
-<div class="container">
-  <div class="game-header">
-    <h1>{{ game.away_team.name }} @ {{ game.home_team.name }}</h1>
-    <p>{{ game.first_pitch|date:"l, F j Y g:i A" }} {% tz_abbr %}</p>
-    <p class="status status-{{ game.status }}">{{ game.get_status_display }}</p>
-  </div>
-
-  <section class="starting-pitchers card">
-    <h2>Starting Pitchers</h2>
-    <div class="pitchers-grid">
-      <div class="pitcher">
-        <h3>{{ game.away_team.name }}</h3>
-        {% if game.away_pitcher %}
-          <p class="pitcher-name">{{ game.away_pitcher.name }}</p>
-        {% else %}
-          <p class="muted">Probable pitcher TBD</p>
-        {% endif %}
-      </div>
-      <div class="pitcher">
-        <h3>{{ game.home_team.name }}</h3>
-        {% if game.home_pitcher %}
-          <p class="pitcher-name">{{ game.home_pitcher.name }}</p>
-        {% else %}
-          <p class="muted">Probable pitcher TBD</p>
-        {% endif %}
-      </div>
+<div class="card mb-2">
+    <div class="teams" style="font-size:1.25rem;font-weight:700;">
+        <span class="team-name">{{ game.away_team.name }}</span>
+        {% if data.latest_odds.spread is not None %}<span class="spread-tag">{{ data.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
+        {% if game.away_score is not None %}<span class="game-score">{{ game.away_score }}</span>{% endif %}
+        <span class="vs">@</span>
+        <span class="team-name">{{ game.home_team.name }}</span>
+        {% if data.latest_odds.spread is not None %}<span class="spread-tag">{{ data.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
+        {% if game.home_score is not None %}<span class="game-score">{{ game.home_score }}</span>{% endif %}
     </div>
-  </section>
-
-  {% if data.latest_odds %}
-    <section class="odds-section">
-      <h2>Market</h2>
-      <p>Home win: {{ data.market_prob|floatformat:1 }}% · Run line: {{ data.latest_odds.spread|default:"–" }} · Total: {{ data.latest_odds.total|default:"–" }}</p>
-    </section>
-  {% else %}
-    <section class="odds-section card card-muted">
-      <h2>Market</h2>
-      <p>Odds unavailable for this game.</p>
-    </section>
-  {% endif %}
-
-  <section class="model-section">
-    <h2>Model</h2>
-    <p>
-      House: {{ data.house_prob|floatformat:1 }}%
-      {% if data.user_prob %}· You: {{ data.user_prob|floatformat:1 }}%{% endif %}
-      · Edge: {{ data.house_edge|floatformat:1 }}
-    </p>
-    <p class="confidence confidence-{{ data.confidence_class }}">Confidence: {{ data.confidence|upper }}</p>
-  </section>
+    <div class="game-meta mt-1">
+        {% if game.status == 'final' %}<span class="badge badge-gray">Final</span>
+        {% elif game.status == 'live' %}<span class="badge badge-live">Live</span>
+        {% elif game.status == 'postponed' %}<span class="badge badge-gray">Postponed</span>
+        {% endif %}
+        <span>{{ game.first_pitch|date:"D M d, g:i A" }} {% tz_abbr %}</span>
+        {% if game.neutral_site %}<span class="badge">Neutral</span>{% endif %}
+        <span class="badge badge-{{ data.confidence_class }}">{{ data.confidence }}</span>
+    </div>
+    {% if data.line_movement %}
+    <div class="text-sm mt-1 {% if data.line_movement == 'up' %}line-up{% else %}line-down{% endif %}">Line moved</div>
+    {% endif %}
 </div>
+
+<p class="section-title">Starting Pitchers</p>
+<div class="card mb-2">
+    <div class="pitchers-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+        <div>
+            <div class="text-sm text-muted">{{ game.away_team.name }}</div>
+            {% if game.away_pitcher %}
+                <div style="font-size:1.1rem;font-weight:600;">{{ game.away_pitcher.name }}</div>
+            {% else %}
+                <div class="text-muted">Probable pitcher TBD</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-sm text-muted">{{ game.home_team.name }}</div>
+            {% if game.home_pitcher %}
+                <div style="font-size:1.1rem;font-weight:600;">{{ game.home_pitcher.name }}</div>
+            {% else %}
+                <div class="text-muted">Probable pitcher TBD</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if user.is_authenticated and game.status != 'final' %}
+<div class="mb-2">
+    <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'college_baseball',game_id:'{{ game.id }}'{% if data.latest_odds.moneyline_home %},odds:{{ data.latest_odds.moneyline_home }}{% endif %}})">Place Mock Bet</button>
+</div>
+{% endif %}
+
+{% if user.is_authenticated %}
+<div id="ai-insight-container" class="card ai-insight-card mb-2">
+    <div class="ai-insight-header">
+        <span class="badge badge-ai">AI Insight</span>
+        <span id="ai-insight-meta" class="text-sm text-muted"></span>
+    </div>
+    <div id="ai-insight-content" class="ai-insight-body">
+        <div class="ai-insight-loading">
+            <div class="shimmer-line"></div>
+            <div class="shimmer-line" style="width:85%"></div>
+            <div class="shimmer-line" style="width:70%"></div>
+            <p class="ai-loading-msg">Acquiring your AI insights, one moment please...</p>
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var container = document.getElementById('ai-insight-container');
+    var contentEl = document.getElementById('ai-insight-content');
+    var metaEl = document.getElementById('ai-insight-meta');
+
+    fetch('/api/ai-insight/college_baseball/{{ game.id }}/', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            container.style.display = 'none';
+        } else {
+            contentEl.innerHTML = formatInsight(data.content);
+            if (data.meta && data.meta.model) {
+                metaEl.textContent = data.meta.model + ' \u00B7 ' + data.meta.elapsed_seconds + 's';
+            }
+        }
+    })
+    .catch(function() { container.style.display = 'none'; });
+
+    function formatInsight(text) {
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/^### (.*$)/gm, '<h4>$1</h4>')
+            .replace(/^## (.*$)/gm, '<h4>$1</h4>')
+            .replace(/^- (.*$)/gm, '<li>$1</li>')
+            .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+            .replace(/<\/ul>\s*<ul>/g, '')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>');
+    }
+})();
+</script>
+{% endif %}
+
+<p class="section-title">Probability Comparison (Home Win)</p>
+<div class="card">
+    <table class="data-table">
+        <tr>
+            <td>Market</td>
+            <td>{{ data.market_prob|floatformat:0 }}%</td>
+            <td class="text-muted">&mdash;</td>
+        </tr>
+        <tr>
+            <td>House Model ({{ data.model_version }})</td>
+            <td>{{ data.house_prob|floatformat:0 }}%</td>
+            <td class="{% if data.house_edge > 0 %}edge-positive{% elif data.house_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.house_edge|floatformat:1 }}%</td>
+        </tr>
+        {% if data.user_prob is not None %}
+        <tr>
+            <td>Your Model</td>
+            <td>{{ data.user_prob|floatformat:0 }}%</td>
+            <td class="{% if data.user_edge > 0 %}edge-positive{% elif data.user_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.user_edge|floatformat:1 }}%</td>
+        </tr>
+        <tr>
+            <td>Delta (You &minus; House)</td>
+            <td></td>
+            <td class="{% if data.delta > 0 %}edge-positive{% elif data.delta < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ data.delta|floatformat:1 }}%</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+
+{% if data.latest_odds %}
+<p class="section-title mt-2">Odds Snapshot</p>
+<div class="card">
+    <div class="text-sm text-muted">{{ data.latest_odds.sportsbook }} &mdash; {{ data.latest_odds.captured_at|timesince }} ago</div>
+    {% if data.latest_odds.spread is not None %}
+    <div class="mt-1">Run Line: <strong>{{ data.latest_odds.spread|floatformat:1 }}</strong></div>
+    {% endif %}
+    {% if data.latest_odds.total is not None %}
+    <div>Total (runs): <strong>{{ data.latest_odds.total|floatformat:1 }}</strong></div>
+    {% endif %}
+    {% if data.latest_odds.moneyline_home is not None %}
+    <div class="mt-1 text-sm">ML Home: {{ data.latest_odds.moneyline_home }} | ML Away: {{ data.latest_odds.moneyline_away }}</div>
+    {% endif %}
+</div>
+{% else %}
+<p class="section-title mt-2">Odds Snapshot</p>
+<div class="card card-muted">
+    <div class="text-muted">Market data temporarily unavailable for this game.</div>
+</div>
+{% endif %}
+
+{% if not user.is_authenticated %}
+<div class="login-gate mt-2">
+    <p>Log in to see your model's analysis and track this game.</p>
+    <a href="/accounts/login/" class="btn btn-primary btn-sm">Log In</a>
+</div>
+{% endif %}
+
+{% if user.is_authenticated %}
+{% include "mockbets/includes/place_bet_modal.html" %}
+{% endif %}
 {% endblock %}
