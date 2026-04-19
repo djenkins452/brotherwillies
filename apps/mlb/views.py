@@ -19,6 +19,8 @@ def mlb_hub(request):
         'upcoming_games': upcoming,
         'live_games': live,
         'teams': Team.objects.select_related('conference').all(),
+        'nav_active': 'mlb',
+        'help_key': 'mlb_hub',
     })
 
 
@@ -32,4 +34,6 @@ def game_detail(request, game_id):
     return render(request, 'mlb/game_detail.html', {
         'game': game,
         'data': data,
+        'nav_active': 'mlb',
+        'help_key': 'mlb_game',
     })

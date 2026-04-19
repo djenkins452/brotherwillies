@@ -21,6 +21,8 @@ def hub(request):
         'conferences': conferences,
         'upcoming_games': upcoming,
         'live_games': live,
+        'nav_active': 'lobby',  # CB lives under Lobby in the nav
+        'help_key': 'college_baseball_hub',
     })
 
 
@@ -41,6 +43,7 @@ def conference_detail(request, slug):
         'conference': conference,
         'teams': teams,
         'games': games,
+        'nav_active': 'lobby',
     })
 
 
@@ -54,4 +57,6 @@ def game_detail(request, game_id):
     return render(request, 'college_baseball/game_detail.html', {
         'game': game,
         'data': data,
+        'nav_active': 'lobby',
+        'help_key': 'college_baseball_game',
     })
