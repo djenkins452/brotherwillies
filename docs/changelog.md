@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 8: Analytics + mockbet UI baseball-aware
+
+**Summary:** Wiring up the last baseball touchpoints across the existing analytics + mock-bet UI so baseball bets surface as first-class citizens in every filter, badge, chart, and management command.
+
+### Modified files
+- `apps/mockbets/management/commands/settle_mockbets.py` — `choices` now includes `mlb` and `college_baseball`; summary line reports all 5 sports (defensive `.get` so missing keys don't crash)
+- `apps/mockbets/admin.py` — `raw_id_fields` includes `mlb_game` and `college_baseball_game`
+- `templates/mockbets/my_bets.html` — filter chips for MLB and College Baseball added; sport-badge colors extended
+- `templates/mockbets/bet_detail.html` — `bet.game` link block handles baseball FKs; sport-badge colors extended
+- `templates/mockbets/analytics.html` — sport filter dropdown + chart `sportColors` dict include baseball entries (MLB=red, CB=blue)
+
+### Verified end-to-end
+- Created 3 MLB bets for a test user, settled as wins
+- KPIs compute correctly: total=3, ROI=83.33
+- Chart data includes `roi_by_sport` with baseball bucket
+- Routes render 200: `/`, `/?sport=mlb`, `/?sport=college_baseball`, `/mockbets/`, `/mockbets/?sport=mlb`, `/mockbets/analytics/`, `/mockbets/analytics/?sport=mlb`
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 7: AI Insight pitching-matchup extension
 
 **Summary:** The AI Insight service now knows about baseball. When the sport is MLB or College Baseball, the system prompt gains a short "BASEBALL CONTEXT" clause instructing the model to treat the SP-vs-SP matchup as the primary driver, and the user prompt includes a STARTING PITCHERS section with ERA / WHIP / K9 / rating / handedness — or explicit "Probable pitcher TBD (unknown)" when the pitcher is missing. Safety guardrails (no invented stats, no invented names, no betting advice) carry through unchanged.

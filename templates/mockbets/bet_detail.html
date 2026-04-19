@@ -11,7 +11,7 @@
 
 <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% else %}yellow{% endif %}">{{ bet.sport|upper }}</span>
+        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% elif bet.sport == 'mlb' %}red{% elif bet.sport == 'college_baseball' %}blue{% else %}yellow{% endif %}">{{ bet.sport|upper }}</span>
         {% if bet.result == 'win' %}<span class="badge badge-green">Win</span>
         {% elif bet.result == 'loss' %}<span class="badge badge-red">Loss</span>
         {% elif bet.result == 'push' %}<span class="badge badge-gray">Push</span>
@@ -27,6 +27,10 @@
         <a href="{% url 'cfb:game' bet.cfb_game.id %}" class="text-sm">{{ bet.cfb_game }}</a>
         {% elif bet.sport == 'cbb' %}
         <a href="{% url 'cbb:game' bet.cbb_game.id %}" class="text-sm">{{ bet.cbb_game }}</a>
+        {% elif bet.sport == 'mlb' %}
+        <a href="{% url 'mlb:game' bet.mlb_game.id %}" class="text-sm">{{ bet.mlb_game }}</a>
+        {% elif bet.sport == 'college_baseball' %}
+        <a href="{% url 'college_baseball:game' bet.college_baseball_game.id %}" class="text-sm">{{ bet.college_baseball_game }}</a>
         {% endif %}
     </div>
     {% elif bet.golf_event %}

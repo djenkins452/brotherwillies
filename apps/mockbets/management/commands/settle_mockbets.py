@@ -20,7 +20,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--sport',
             type=str,
-            choices=['cfb', 'cbb', 'golf', 'all'],
+            choices=['cfb', 'cbb', 'golf', 'mlb', 'college_baseball', 'all'],
             default='all',
         )
 
@@ -32,6 +32,8 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f'Settled {total} mock bets '
-                f'(CFB: {counts["cfb"]}, CBB: {counts["cbb"]}, Golf: {counts["golf"]})'
+                f'(CFB: {counts.get("cfb", 0)}, CBB: {counts.get("cbb", 0)}, '
+                f'MLB: {counts.get("mlb", 0)}, CB: {counts.get("college_baseball", 0)}, '
+                f'Golf: {counts.get("golf", 0)})'
             )
         )

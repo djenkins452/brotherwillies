@@ -36,6 +36,8 @@
     <a href="{% url 'mockbets:my_bets' %}" class="filter-chip {% if not current_sport %}active{% endif %}">All</a>
     <a href="{% url 'mockbets:my_bets' %}?sport=cfb{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'cfb' %}active{% endif %}">CFB</a>
     <a href="{% url 'mockbets:my_bets' %}?sport=cbb{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'cbb' %}active{% endif %}">CBB</a>
+    <a href="{% url 'mockbets:my_bets' %}?sport=mlb{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'mlb' %}active{% endif %}">MLB</a>
+    <a href="{% url 'mockbets:my_bets' %}?sport=college_baseball{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'college_baseball' %}active{% endif %}">CB</a>
     <a href="{% url 'mockbets:my_bets' %}?sport=golf{% if current_result %}&result={{ current_result }}{% endif %}" class="filter-chip {% if current_sport == 'golf' %}active{% endif %}">Golf</a>
 </div>
 
@@ -50,7 +52,7 @@
 {% for bet in bets %}
 <a href="{% url 'mockbets:bet_detail' bet.id %}" class="game-card">
     <div class="teams" style="justify-content:flex-start;gap:8px;">
-        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% else %}yellow{% endif %}" style="font-size:0.65rem;">{{ bet.sport|upper }}</span>
+        <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% elif bet.sport == 'mlb' %}red{% elif bet.sport == 'college_baseball' %}blue{% else %}yellow{% endif %}" style="font-size:0.65rem;">{{ bet.sport|upper }}</span>
         <span class="team-name">{{ bet.selection }}</span>
     </div>
     <div class="game-meta mt-1">
