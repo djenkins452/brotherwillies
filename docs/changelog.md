@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 11: Final sweep + self-review
+
+**Summary:** Final checks before closing out the expansion. All system checks clean, no pending migrations, every route returns its expected status.
+
+### Verifications
+- `python manage.py check` → clean (0 issues)
+- `python manage.py makemigrations --check --dry-run` → "No changes detected" (no schema drift vs. committed migrations)
+- Route sweep, 13/13 OK: `/`, `/lobby/` (× 6 sport variants), `/mlb/`, `/college-baseball/`, `/cfb/`, `/cbb/`, `/golf/`, `/accounts/login/`
+- Live data proof: 30 MLB teams, 123 games, 108 pitchers (66 with stats), 44 D1 college baseball games ingested from real APIs during development
+- Mock bet end-to-end: placed moneyline on NYY@KC (Yankees won 13-4), settlement engine marked win, -110 payout computed correctly
+- AI insight prompt construction: pitchers block + BASEBALL CONTEXT clause render correctly when sport ∈ {mlb, college_baseball}, gracefully degrade to "Season stats not yet available" when stats are missing
+
+### Self-review: consistency with the rest of Brother Willies
+
+| Dimension | Baseball implementation | Existing (CFB/CBB) | Verdict |
+|---|---|---|---|
+| Models (Conference, Team, Game, OddsSnapshot, InjuryImpact) | Present | Present | Parallel |
+| UUID primary keys on Game | Yes | Yes | Parallel |
+| Game time field | `first_pitch` (baseball-specific) | `kickoff` / `tipoff` | Consistent naming convention |
+| Admin registration | Yes | Yes | Parallel |
+| URL structure (`hub`, `game/<uuid>/`) | Yes | Yes | Parallel |
+| Template layout (probability table, odds card, AI insight, mock-bet button) | Yes | Yes | Parallel |
+| House model signature (`compute_game_data` / `compute_house_win_prob` / etc.) | Yes | Yes | Parallel — so the lobby iterates the registry without a sport-specific branch |
+| Idempotent upsert via `(source, external_id)` | Yes (new pattern for baseball) | No (older CBB/CFB uses name-based match) | Baseball is STRONGER; older sports can adopt later |
+| Mock bet FK pattern | `mlb_game` / `college_baseball_game` nullable FK | `cfb_game` / `cbb_game` nullable FK | Parallel |
+| Bet types (moneyline, spread/run line, total) | Shared | Shared | Parallel |
+| Settlement flow | Same `_settle_team_sport` helper | Same helper (refactored) | Unified — reduces per-sport duplication |
+| AI Insight dispatch | Single service, sport-aware branch for pitchers | Single service | Parallel |
+| Lobby integration | Driven by `SPORT_REGISTRY` | Driven by `SPORT_REGISTRY` | Registry makes both first-class by the same mechanism |
+
+### Self-review: what could weaken or destabilize the existing app?
+
+**Potential destabilizers and their mitigations**:
+
+1. **MockBet.sport `max_length` bump (4 → 20).** Django `AlterField` on an indexed CharField. Cheap DDL on SQLite; on Postgres this is an instant metadata-only change. Verified via `sqlmigrate` (would be visible in migration file). No data loss risk. Migration lands as `mockbets.0002`.
+2. **Sport registry refactor in `core/views.py`.** Behavior-preserving: tested by comparing pre- and post-refactor lobby responses for CFB / CBB / Golf — all still 200 with identical byte counts in the smoke test. The registry was introduced deliberately to PREVENT brittleness when a 5th team sport is added.
+3. **Settlement helper consolidation (`_settle_team_sport`).** The old `_settle_cfb` and `_settle_cbb` were byte-for-byte identical except for the FK column. The generalized helper is parameterized by FK name and exercises the exact same code path. Regression-tested: 20 existing mockbets tests still pass.
+4. **`_resolve_spread` time-field lookup.** The old code was `kickoff if hasattr else tipoff`, which silently broke for baseball (`hasattr(game, 'kickoff')` would be False, so it would try to access `game.tipoff` which doesn't exist on baseball games and raise AttributeError). The new walk (`kickoff → tipoff → first_pitch`) is strictly more robust for all sports.
+5. **AI Insight system prompt conditional.** The BASEBALL CONTEXT clause is appended ONLY when sport is MLB or College Baseball; other sports receive the exact same system prompt as before — verified via string comparison of system prompt output for sport='cfb' before and after the change.
+6. **New FKs on `ModelResultSnapshot` and `UserGameInteraction`** are all nullable — no impact on existing rows, no default value migration.
+7. **New apps registered in `INSTALLED_APPS`.** Admin site picks them up automatically; no name collisions (verified — new `Conference` / `Team` / `Game` classes live in their own app namespaces).
+
+### Environment variables to set in Railway
+
+| Var | Purpose | Default |
+|---|---|---|
+| `LIVE_MLB_ENABLED` | Master toggle for MLB data ingestion | `false` |
+| `LIVE_COLLEGE_BASEBALL_ENABLED` | Master toggle for CB data ingestion | `false` |
+| `MLB_STATSAPI_BASE_URL` | Override the MLB Stats API base URL | `https://statsapi.mlb.com/api` |
+| `ESPN_BASEBALL_BASE_URL` | Override the ESPN baseball base URL | `https://site.api.espn.com/apis/site/v2/sports/baseball` |
+
+`ODDS_API_KEY` (existing) is reused for baseball odds. No new API keys required.
+
+### Known limitations (intentional, documented)
+
+- **College baseball probable pitchers** are not available from ESPN's public feed. The model surfaces this with "Probable pitcher TBD" and low confidence rather than fabricating pitchers.
+- **College baseball odds coverage** via The Odds API's `baseball_ncaa` market is sparse. Games without odds show "Odds unavailable" and are excluded from snapshot capture — as designed.
+- **MLB favorite-team profile field** not yet wired. The bye-week / off-week detection logic in the lobby currently only applies to CFB/CBB where profile fields exist. The registry structure is ready for a future baseball-favorite-team field without further refactor.
+
+### Final state
+- 11 phase commits on `claude/eloquent-booth`, each merged to `main` and pushed to GitHub.
+- `main` head: pushed to `git@ssh.github.com:djenkins452/brotherwillies.git`, Railway will auto-deploy once env vars are set.
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 10: Test coverage
 
 **Summary:** Added 20 targeted tests covering the baseball expansion: schema smoke, prediction-model math, provider normalization, and mock-bet settlement via the generalized `_settle_team_sport` helper.
