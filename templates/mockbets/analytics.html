@@ -22,6 +22,8 @@
                     <option value="">All</option>
                     <option value="cfb" {% if current_sport == 'cfb' %}selected{% endif %}>CFB</option>
                     <option value="cbb" {% if current_sport == 'cbb' %}selected{% endif %}>CBB</option>
+                    <option value="mlb" {% if current_sport == 'mlb' %}selected{% endif %}>MLB</option>
+                    <option value="college_baseball" {% if current_sport == 'college_baseball' %}selected{% endif %}>College Baseball</option>
                     <option value="golf" {% if current_sport == 'golf' %}selected{% endif %}>Golf</option>
                 </select>
             </div>
@@ -433,7 +435,7 @@
     // ===== ROI by Sport =====
     if (chartData.roi_by_sport && Object.keys(chartData.roi_by_sport).length) {
         const sports = Object.keys(chartData.roi_by_sport);
-        const sportColors = { cfb: COLORS.accent, cbb: COLORS.green, golf: COLORS.yellow };
+        const sportColors = { cfb: COLORS.accent, cbb: COLORS.green, mlb: COLORS.red, college_baseball: COLORS.blue, golf: COLORS.yellow };
         new Chart(document.getElementById('roiBySportChart'), {
             type: 'bar',
             data: {

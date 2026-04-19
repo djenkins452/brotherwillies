@@ -9,7 +9,7 @@ class MockBetAdmin(admin.ModelAdmin):
     list_filter = ['sport', 'bet_type', 'result', 'confidence_level', 'model_source']
     search_fields = ['user__username', 'selection', 'notes']
     readonly_fields = ['id', 'placed_at']
-    raw_id_fields = ['user', 'cfb_game', 'cbb_game', 'golf_event', 'golf_golfer']
+    raw_id_fields = ['user', 'cfb_game', 'cbb_game', 'mlb_game', 'college_baseball_game', 'golf_event', 'golf_golfer']
 
 
 @admin.register(MockBetSettlementLog)
