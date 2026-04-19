@@ -53,6 +53,9 @@ class UserModelConfig(models.Model):
     injury_weight = models.FloatField(default=1.0)
     recent_form_weight = models.FloatField(default=1.0)
     conference_weight = models.FloatField(default=1.0)
+    # Baseball-specific: weight users can apply to pitcher-rating contribution.
+    # Default 1.0 keeps the house-model's pitcher emphasis intact.
+    pitcher_weight = models.FloatField(default=1.0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -77,6 +80,7 @@ class ModelPreset(models.Model):
     injury_weight = models.FloatField(default=1.0)
     recent_form_weight = models.FloatField(default=1.0)
     conference_weight = models.FloatField(default=1.0)
+    pitcher_weight = models.FloatField(default=1.0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
