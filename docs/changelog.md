@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 4: Rich game detail templates + views
+
+**Summary:** Baseball hub and game detail pages now match the visual richness of the CBB equivalents — probability comparison tables, odds snapshot cards, AI Insight container, mock-bet button stubs, and (for MLB) a prominent Starting Pitchers block with ERA / WHIP / K9 and derived rating. Missing pitcher data is rendered as "Probable pitcher TBD"; missing odds as "Market data temporarily unavailable" — no fabrication.
+
+### Modified files
+- `templates/mlb/game_detail.html` — full rewrite matching CBB style; Starting Pitchers section with stats; run-line terminology; mock-bet button passes `sport: 'mlb'`; AI insight fetches `/api/ai-insight/mlb/<uuid>/`
+- `templates/college_baseball/game_detail.html` — same treatment with simpler pitcher block (no stats when source is ESPN-only); mock-bet passes `sport: 'college_baseball'`
+- (AI insight endpoint wiring lives in Phase 7; the frontend fetches are wired now so Phase 7 is purely backend.)
+
+### Verified
+- `GET /mlb/` → 200 (14,640 bytes)
+- `GET /college-baseball/` → 200 (12,455 bytes)
+- `GET /mlb/game/<uuid>/` → 200 with pitcher names + "Starting Pitchers" section confirmed in HTML
+- `GET /college-baseball/game/<uuid>/` → 200 correctly showing "Probable pitcher TBD" since ESPN does not supply probable pitchers
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 3: Prediction model with pitcher weighting
 
 **Summary:** Replaced the stub model services with a real logistic-regression house model for both MLB and College Baseball. Pitching is the dominant driver per product direction.
