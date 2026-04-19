@@ -15,18 +15,28 @@ from apps.mockbets.models import MockBet, MockBetSettlementLog
 logger = logging.getLogger(__name__)
 
 
+# Team-sport settlement dispatch.
+# The settlement logic is identical for any game-based sport — only the
+# FK column differs. Keep this table in sync with MockBet's sport FKs.
+_TEAM_SPORT_FK = {
+    'cfb': 'cfb_game',
+    'cbb': 'cbb_game',
+    'mlb': 'mlb_game',
+    'college_baseball': 'college_baseball_game',
+}
+
+
 def settle_pending_bets(sport='all'):
     """Settle all pending mock bets for finalized games.
 
     Returns dict with counts per sport.
     """
-    counts = {'cfb': 0, 'cbb': 0, 'golf': 0}
+    counts = {k: 0 for k in _TEAM_SPORT_FK}
+    counts['golf'] = 0
 
-    if sport in ('cfb', 'all'):
-        counts['cfb'] = _settle_cfb()
-
-    if sport in ('cbb', 'all'):
-        counts['cbb'] = _settle_cbb()
+    for key, fk in _TEAM_SPORT_FK.items():
+        if sport in (key, 'all'):
+            counts[key] = _settle_team_sport(key, fk)
 
     if sport in ('golf', 'all'):
         counts['golf'] = _settle_golf()
@@ -34,51 +44,36 @@ def settle_pending_bets(sport='all'):
     return counts
 
 
-def _settle_cfb():
-    bets = MockBet.objects.filter(
-        sport='cfb',
-        result='pending',
-        cfb_game__status='final',
-        cfb_game__home_score__isnull=False,
-        cfb_game__away_score__isnull=False,
-    ).select_related('cfb_game', 'cfb_game__home_team', 'cfb_game__away_team')
+def _settle_team_sport(sport_key, fk_name):
+    """Generic team-sport settlement keyed by (sport, FK column name)."""
+    filter_kwargs = {
+        'sport': sport_key,
+        'result': 'pending',
+        f'{fk_name}__status': 'final',
+        f'{fk_name}__home_score__isnull': False,
+        f'{fk_name}__away_score__isnull': False,
+    }
+    bets = (
+        MockBet.objects.filter(**filter_kwargs)
+        .select_related(fk_name, f'{fk_name}__home_team', f'{fk_name}__away_team')
+    )
 
     settled = 0
     for bet in bets:
-        game = bet.cfb_game
+        game = getattr(bet, fk_name)
+        if game is None:
+            continue
         try:
-            result = _resolve_game_bet(bet, game.home_score, game.away_score,
-                                       game.home_team.name, game.away_team.name,
-                                       game)
+            result = _resolve_game_bet(
+                bet,
+                game.home_score, game.away_score,
+                game.home_team.name, game.away_team.name,
+                game,
+            )
             _apply_settlement(bet, result['result'], result['reason'])
             settled += 1
         except Exception as e:
-            logger.error(f'Failed to settle CFB mock bet {bet.id}: {e}')
-
-    return settled
-
-
-def _settle_cbb():
-    bets = MockBet.objects.filter(
-        sport='cbb',
-        result='pending',
-        cbb_game__status='final',
-        cbb_game__home_score__isnull=False,
-        cbb_game__away_score__isnull=False,
-    ).select_related('cbb_game', 'cbb_game__home_team', 'cbb_game__away_team')
-
-    settled = 0
-    for bet in bets:
-        game = bet.cbb_game
-        try:
-            result = _resolve_game_bet(bet, game.home_score, game.away_score,
-                                       game.home_team.name, game.away_team.name,
-                                       game)
-            _apply_settlement(bet, result['result'], result['reason'])
-            settled += 1
-        except Exception as e:
-            logger.error(f'Failed to settle CBB mock bet {bet.id}: {e}')
-
+            logger.error(f'Failed to settle {sport_key.upper()} mock bet {bet.id}: {e}')
     return settled
 
 
@@ -153,11 +148,16 @@ def _resolve_spread(bet, margin, game):
             continue
 
     if spread_val is None:
-        # Try to get from latest odds
-        time_field = game.kickoff if hasattr(game, 'kickoff') else game.tipoff
+        # Try to get from latest odds. Walk possible game-time attrs
+        # (kickoff for CFB, tipoff for CBB, first_pitch for baseball).
+        time_field = (
+            getattr(game, 'kickoff', None)
+            or getattr(game, 'tipoff', None)
+            or getattr(game, 'first_pitch', None)
+        )
         latest_odds = game.odds_snapshots.filter(
             captured_at__lt=time_field
-        ).order_by('-captured_at').first()
+        ).order_by('-captured_at').first() if time_field else None
         if latest_odds and latest_odds.spread is not None:
             spread_val = latest_odds.spread
         else:

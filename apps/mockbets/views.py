@@ -22,7 +22,7 @@ def my_bets(request):
 
     # Apply filters
     sport = request.GET.get('sport')
-    if sport in ('cfb', 'cbb', 'golf'):
+    if sport in ('cfb', 'cbb', 'golf', 'mlb', 'college_baseball'):
         bets = bets.filter(sport=sport)
 
     result = request.GET.get('result')
@@ -44,6 +44,8 @@ def my_bets(request):
     bets = bets.select_related(
         'cfb_game__home_team', 'cfb_game__away_team',
         'cbb_game__home_team', 'cbb_game__away_team',
+        'mlb_game__home_team', 'mlb_game__away_team',
+        'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
 
@@ -96,7 +98,7 @@ def place_bet(request):
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
 
     sport = data.get('sport')
-    if sport not in ('cfb', 'cbb', 'golf'):
+    if sport not in ('cfb', 'cbb', 'golf', 'mlb', 'college_baseball'):
         return JsonResponse({'error': 'Invalid sport'}, status=400)
 
     bet_type = data.get('bet_type')
@@ -176,6 +178,18 @@ def place_bet(request):
             bet.cbb_game = CBBGame.objects.get(id=game_id)
         except CBBGame.DoesNotExist:
             return JsonResponse({'error': 'CBB game not found'}, status=404)
+    elif sport == 'mlb' and game_id:
+        from apps.mlb.models import Game as MLBGame
+        try:
+            bet.mlb_game = MLBGame.objects.get(id=game_id)
+        except MLBGame.DoesNotExist:
+            return JsonResponse({'error': 'MLB game not found'}, status=404)
+    elif sport == 'college_baseball' and game_id:
+        from apps.college_baseball.models import Game as CBGame
+        try:
+            bet.college_baseball_game = CBGame.objects.get(id=game_id)
+        except CBGame.DoesNotExist:
+            return JsonResponse({'error': 'College Baseball game not found'}, status=404)
     elif sport == 'golf':
         event_id = data.get('event_id')
         golfer_id = data.get('golfer_id')
@@ -208,6 +222,8 @@ def bet_detail(request, bet_id):
         MockBet.objects.select_related(
             'cfb_game__home_team', 'cfb_game__away_team',
             'cbb_game__home_team', 'cbb_game__away_team',
+            'mlb_game__home_team', 'mlb_game__away_team',
+            'college_baseball_game__home_team', 'college_baseball_game__away_team',
             'golf_event', 'golf_golfer',
         ),
         id=bet_id,
@@ -255,12 +271,14 @@ def analytics_dashboard(request):
     bets = MockBet.objects.filter(user=request.user).select_related(
         'cfb_game__home_team', 'cfb_game__away_team',
         'cbb_game__home_team', 'cbb_game__away_team',
+        'mlb_game__home_team', 'mlb_game__away_team',
+        'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
 
     # Apply filters
     sport = request.GET.get('sport')
-    if sport in ('cfb', 'cbb', 'golf'):
+    if sport in ('cfb', 'cbb', 'golf', 'mlb', 'college_baseball'):
         bets = bets.filter(sport=sport)
 
     bet_type = request.GET.get('bet_type')
