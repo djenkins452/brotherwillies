@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 3: Prediction model with pitcher weighting
+
+**Summary:** Replaced the stub model services with a real logistic-regression house model for both MLB and College Baseball. Pitching is the dominant driver per product direction.
+
+### Model
+```
+score = 0.35 * (home.rating - away.rating)    * weights['rating']
+      + 0.65 * (home_pitcher.rating - away_pitcher.rating) * weights['pitcher']
+      + HFA                                   * weights['hfa']  (if not neutral)
+prob  = sigmoid(score / 15)   clamped [0.01, 0.99]
+```
+- HFA: MLB = 2.5, College Baseball = 2.0
+- Missing pitcher on either side → `pitcher_diff = 0` AND confidence downgraded to `low`. No fabricated pitcher data.
+- User weights plug in via the new `pitcher_weight` field on `UserModelConfig` and `ModelPreset` (default 1.0, so behavior for users on other sports is unchanged).
+
+### Modified files
+- `apps/accounts/models.py` — added `pitcher_weight` to `UserModelConfig` and `ModelPreset`; migration `accounts.0008` applied
+- `apps/mlb/services/model_service.py` — full house/user model replacing the Phase 1/2 stub
+- `apps/college_baseball/services/model_service.py` — same shape, HFA=2.0
+
+### Verified against live MLB data
+- NYM (Myers r=64) @ CHC (Assad r=12) → house says CHC wins 11.1% — matches intuition for a ~52-point pitcher rating gap
+- LAD (Sasaki r=28) @ COL (Lorenzen r=15) → house says COL wins 40.3% — slight home edge, pitching advantage, reasonable
+- Same-rated/default pitchers → HFA-only result (54.2% home), confirming team-rating weight behaves as designed
+
+### Confidence rules
+- No odds snapshot → `low`
+- Missing starting pitcher → `low`
+- Odds < 2h old AND both pitchers known → `high`
+- Odds < 12h old → `med`
+- Else → `low`
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 2: Live data ingestion
 
 **Summary:** Baseball data now flows from real production APIs. MLB pulls schedule, teams, probable pitchers, and live scores from `statsapi.mlb.com`; pitcher season stats pull from the MLB `/people` endpoint and are distilled into a 10–95 rating. College Baseball pulls full D1 schedule + live scores from ESPN's public scoreboard. Odds for both sports come from the existing Odds API. All ingestion is idempotent via `(source, external_id)` constraints. Verified against live data: 30 MLB teams / 123 games / 108 pitchers / 66 with stats ingested in a single run; 44 D1 baseball games ingested concurrently.

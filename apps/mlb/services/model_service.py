@@ -1,33 +1,102 @@
-"""Placeholder MLB model service — real implementation lands in Phase 3.
+"""MLB house + user prediction model.
 
-Public surface matches apps.cbb.services.model_service so downstream
-callers (capture_snapshots, views, AI insights) can import the same
-function names from all team-sport modules.
+Score formula (home team perspective):
+    score =  weights['rating']   * 0.35 * (home.rating - away.rating)
+           + weights['pitcher']  * 0.65 * (home_pitcher.rating - away_pitcher.rating)
+           + weights['hfa']      * HFA  if not neutral_site else 0
 
-All returned probabilities are neutral and confidence is explicitly low;
-`compute_game_data` surfaces real market odds if present but will never
-fabricate a model signal.
+    prob = sigmoid(score / 15.0), clamped to [0.01, 0.99]
+
+Pitching is the primary driver (0.65 coefficient vs 0.35 for team rating)
+per product direction. If either starting pitcher is unknown we set
+pitcher_diff = 0 and downgrade confidence to 'low' — we never fabricate
+a substitute pitcher rating.
+
+HFA is smaller than basketball/football because MLB's home edge is ~54%
+historical, vs ~60%+ for college sports.
 """
+import math
+
 from django.utils import timezone
 
-HOUSE_MODEL_VERSION = 'v1-stub'
+HOUSE_MODEL_VERSION = 'v1'
+HFA = 2.5
+
+HOUSE_WEIGHTS = {
+    'rating': 1.0,
+    'pitcher': 1.0,
+    'hfa': 1.0,
+    'injury': 1.0,
+}
+
+
+def _get_latest_odds(game):
+    return game.odds_snapshots.order_by('-captured_at').first()
+
+
+def _injuries(game):
+    return list(game.injuries.all())
+
+
+def _pitcher_diff(game):
+    """Home - away pitcher rating. Returns (diff, both_known_bool)."""
+    hp = game.home_pitcher
+    ap = game.away_pitcher
+    if hp is None or ap is None:
+        return 0.0, False
+    return (hp.rating - ap.rating), True
+
+
+def _score(game, weights):
+    team_diff = (game.home_team.rating - game.away_team.rating) * 0.35 * weights['rating']
+    pitcher_diff_raw, _both_known = _pitcher_diff(game)
+    pitcher_diff = pitcher_diff_raw * 0.65 * weights['pitcher']
+    hfa = HFA * weights['hfa'] if not game.neutral_site else 0.0
+    return team_diff + pitcher_diff + hfa
+
+
+def _sigmoid(x):
+    return 1.0 / (1.0 + math.exp(-x / 15.0))
 
 
 def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None):
-    return 0.5
+    prob = _sigmoid(_score(game, HOUSE_WEIGHTS))
+    return max(0.01, min(0.99, prob))
 
 
 def compute_user_win_prob(game, user_config, injuries=None):
-    return 0.5
+    weights = {
+        'rating': user_config.rating_weight,
+        'pitcher': getattr(user_config, 'pitcher_weight', 1.0),
+        'hfa': user_config.hfa_weight,
+        'injury': user_config.injury_weight,
+    }
+    prob = _sigmoid(_score(game, weights))
+    return max(0.01, min(0.99, prob))
 
 
 def compute_data_confidence(game, latest_odds=None, injuries=None):
+    """Confidence weighed toward pitcher availability.
+
+    - Missing starting pitcher (either side) -> always 'low'.
+    - No odds snapshot -> always 'low'.
+    - Odds within 2h AND both pitchers known -> 'high'.
+    - Odds within 12h -> 'med'.
+    - Otherwise 'low'.
+    """
     if latest_odds is None:
-        latest_odds = game.odds_snapshots.order_by('-captured_at').first()
+        latest_odds = _get_latest_odds(game)
     if not latest_odds:
         return 'low'
-    age = (timezone.now() - latest_odds.captured_at).total_seconds() / 3600.0
-    if age < 6:
+
+    _, both_pitchers = _pitcher_diff(game)
+    age_h = (timezone.now() - latest_odds.captured_at).total_seconds() / 3600.0
+
+    if not both_pitchers:
+        return 'low'
+    if age_h < 2:
+        return 'high'
+    if age_h < 12:
         return 'med'
     return 'low'
 
@@ -45,24 +114,43 @@ def compute_edges(market_prob, house_prob, user_prob=None):
 
 
 def compute_game_data(game, user=None):
-    latest_odds = game.odds_snapshots.order_by('-captured_at').first()
+    latest_odds = _get_latest_odds(game)
+    injuries = _injuries(game)
+
     market_prob = latest_odds.market_home_win_prob if latest_odds else 0.5
-    house_prob = 0.5
-    confidence = compute_data_confidence(game, latest_odds)
-    edges = compute_edges(market_prob, house_prob)
+    house_prob = compute_house_win_prob(game, latest_odds, injuries)
+
+    user_prob = None
+    if user and user.is_authenticated:
+        from apps.accounts.models import UserModelConfig
+        config = UserModelConfig.get_or_create_for_user(user)
+        user_prob = compute_user_win_prob(game, config, injuries)
+
+    edges = compute_edges(market_prob, house_prob, user_prob)
+    confidence = compute_data_confidence(game, latest_odds, injuries)
+
+    # Line movement detection (same convention as CFB/CBB)
+    line_movement = None
+    if latest_odds:
+        snaps = list(game.odds_snapshots.order_by('-captured_at')[:2])
+        if len(snaps) == 2:
+            diff = (snaps[0].market_home_win_prob - snaps[1].market_home_win_prob) * 100
+            if abs(diff) > 0.5:
+                line_movement = 'up' if diff > 0 else 'down'
+
     return {
         'game': game,
         'latest_odds': latest_odds,
         'market_prob': market_prob * 100,
         'house_prob': house_prob * 100,
-        'user_prob': None,
+        'user_prob': (user_prob * 100) if user_prob else None,
         'house_edge': edges['house_edge'],
         'user_edge': edges['user_edge'],
         'delta': edges['delta'],
         'confidence': confidence,
         'confidence_class': {'high': 'green', 'med': 'yellow', 'low': 'red'}[confidence],
         'is_favorite': False,
-        'line_movement': None,
-        'injuries': [],
+        'line_movement': line_movement,
+        'injuries': injuries,
         'model_version': HOUSE_MODEL_VERSION,
     }
