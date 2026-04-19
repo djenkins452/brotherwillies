@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-baseball">Apr 19, 2026 &mdash; Baseball Expansion</a> <span class="text-sm text-muted">&bull; MLB + College Baseball live, pitcher-weighted model, mock bets</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-golf">Feb 8, 2026 &mdash; Golf Mock Bets</a> <span class="text-sm text-muted">&bull; Event detail pages, golfer odds, mock bet placement</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-rebrand">Feb 8, 2026 &mdash; Rebrand</a> <span class="text-sm text-muted">&bull; New logo, penny gold color scheme, parchment textures</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-latest">Feb 8, 2026 &mdash; Latest</a> <span class="text-sm text-muted">&bull; Mock Bets: full simulation + analytics + AI commentary</span></li>
@@ -20,6 +21,56 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 Baseball Expansion                                             #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-baseball">
+    <p class="card-title">Apr 19, 2026 &mdash; Baseball Expansion: MLB + College Baseball</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Live MLB and D1 college baseball data, a pitcher-weighted prediction model, and mock bets on real games.</p>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">MLB is now live</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Visit the <a href="/mlb/">MLB Hub</a> or the <a href="/lobby/?sport=mlb">Lobby MLB tab</a> to see today's games, probable pitchers, and live scores. Data is pulled directly from the official <code>statsapi.mlb.com</code> endpoint — no API key required, no simulated data, no filler. If a pitcher hasn't been announced yet, the card says "Probable pitcher TBD" rather than making something up.
+        </p>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">College baseball (full D1)</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The <a href="/college-baseball/">College Baseball Hub</a> and <a href="/lobby/?sport=college_baseball">Lobby tab</a> cover all NCAA Division I programs via ESPN's public scoreboard. Coverage is schedule + live scores + finals; ESPN doesn't expose probable pitchers for college baseball, so those are marked TBD and the model's confidence reflects it.
+        </p>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Pitcher-weighted prediction model</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            The baseball house model weights the starting-pitcher matchup at 65%, team rating at 35%, plus a modest home-field adjustment (2.5 for MLB, 2.0 for college baseball). Pitcher ratings are derived from season ERA, WHIP, and K/9 on a 10–95 scale. If either starter is unknown, pitcher contribution is zero and confidence drops to low — no fabrication.
+        </p>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Mock bets on MLB and college baseball</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            You can now place moneyline, run line (spread), and total bets on any baseball game. Settlement uses real final scores. Baseball bets flow into every analytics chart and filter on the Mock Bets dashboard.
+        </p>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">AI Insight knows about pitchers</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            When you open a baseball game and ask for an AI Insight, the prompt now includes the full pitcher matchup (name, handedness, ERA/WHIP/K9, rating) and a focused instruction to treat pitching as the primary driver. Same guardrails: no betting advice, no invented stats.
+        </p>
+    </div>
+
+    <div style="margin-bottom:0;">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Under the hood</p>
+        <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+            Added a <code>sport_registry</code> that's now the single source of truth for team-sport metadata — the brittle "kickoff-or-tipoff" ternary is gone, and adding a sixth team sport is a single registry entry instead of a file sweep. Settlement logic for CFB/CBB/MLB/CB now dispatches through one shared helper instead of per-sport copies.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}
