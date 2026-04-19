@@ -2,6 +2,15 @@
 
 ---
 
+## 2026-04-19 - ensure_seed: add MLB + College Baseball to live ingestion
+
+**Summary:** `ensure_seed` (which runs on every Railway deploy) only invoked live ingestion for CBB, CFB, and Golf. MLB and College Baseball were absent from the sports list, so their `LIVE_*_ENABLED` env vars had no effect at deploy time — only `refresh_data` (cron) would pick them up. Added both to the list, matching the `refresh_data` config (MLB includes pitcher stats).
+
+### Changes
+- `apps/datahub/management/commands/ensure_seed.py` — extended `sports_config` tuple to `(sport, toggle, has_injuries, has_pitcher_stats)` and added entries for `mlb` and `college_baseball`. Adds a conditional `ingest_pitcher_stats` call for MLB.
+
+---
+
 ## 2026-04-19 - Golf event detail: show last odds update
 
 **Summary:** The golf event detail page (e.g. `/golf/the-masters/`) now displays the timestamp of the most recent odds snapshot, rendered in the user's local timezone. Gives users a clear signal of data freshness.

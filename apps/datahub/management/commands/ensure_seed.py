@@ -31,12 +31,15 @@ class Command(BaseCommand):
             return
 
         sports_config = [
-            ('cbb', 'LIVE_CBB_ENABLED', True),
-            ('cfb', 'LIVE_CFB_ENABLED', True),
-            ('golf', 'LIVE_GOLF_ENABLED', False),
+            # (sport, toggle, has_injuries, has_pitcher_stats)
+            ('cbb',              'LIVE_CBB_ENABLED',              True,  False),
+            ('cfb',              'LIVE_CFB_ENABLED',              True,  False),
+            ('golf',             'LIVE_GOLF_ENABLED',             False, False),
+            ('mlb',              'LIVE_MLB_ENABLED',              False, True),
+            ('college_baseball', 'LIVE_COLLEGE_BASEBALL_ENABLED', False, False),
         ]
 
-        for sport, toggle, has_injuries in sports_config:
+        for sport, toggle, has_injuries, has_pitcher_stats in sports_config:
             if not getattr(settings, toggle, False):
                 self.stdout.write(f'{toggle} disabled — skipping {sport}')
                 continue
@@ -47,6 +50,8 @@ class Command(BaseCommand):
                 call_command('ingest_odds', sport=sport, force=True)
                 if has_injuries:
                     call_command('ingest_injuries', sport=sport, force=True)
+                if has_pitcher_stats:
+                    call_command('ingest_pitcher_stats', sport=sport, force=True)
                 self.stdout.write(self.style.SUCCESS(f'{sport} ingestion complete'))
             except Exception as e:
                 self.stdout.write(self.style.WARNING(
