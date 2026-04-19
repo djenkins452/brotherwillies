@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 1: MLB + College Baseball apps scaffolded
+
+**Summary:** Added two new Django apps — `apps.mlb` and `apps.college_baseball` — as first-class sports alongside CFB, CBB, and Golf. This phase lays the schema, admin, URL, and template foundation. No live data is ingested yet (Phase 2), no prediction model is wired (Phase 3), and no lobby/mockbet integration is in place (Phases 5 & 6). Hitting `/mlb/` or `/college-baseball/` now renders a "Data temporarily unavailable" state until ingestion is enabled.
+
+### Design highlights
+- **`first_pitch`** field on `Game` (parallel to CFB `kickoff`, CBB `tipoff`) — no brittle ternaries, a dispatch map lands in Phase 5.
+- **`StartingPitcher`** first-class entity in both apps; `home_pitcher`/`away_pitcher` nullable FKs + `pitchers_updated_at` freshness tracker on `Game`. Stats fields (era/whip/k_per_9) are all nullable so missing data is explicit rather than fabricated.
+- **`source` + `external_id`** on Team / Game / StartingPitcher with unique constraints — idempotent upserts from MLB Stats API / ESPN / future providers with zero risk of duplicates.
+- **No seed data for baseball** — baseball tables are empty until live ingestion runs, per product requirement.
+
+### New env vars (default `false`)
+- `LIVE_MLB_ENABLED`
+- `LIVE_COLLEGE_BASEBALL_ENABLED`
+- `MLB_STATSAPI_BASE_URL` (defaults to `https://statsapi.mlb.com/api`)
+- `ESPN_BASEBALL_BASE_URL` (defaults to the ESPN public site.api.espn.com endpoint)
+
+### New files
+- `apps/mlb/{__init__,apps,models,admin,urls,views,tests}.py`
+- `apps/mlb/services/{__init__,model_service}.py` (stub)
+- `apps/mlb/migrations/0001_initial.py`
+- `apps/college_baseball/{__init__,apps,models,admin,urls,views,tests}.py`
+- `apps/college_baseball/services/{__init__,model_service}.py` (stub)
+- `apps/college_baseball/migrations/0001_initial.py`
+- `templates/mlb/{hub,game_detail}.html`
+- `templates/college_baseball/{hub,conference,game_detail}.html`
+
+### Modified files
+- `brotherwillies/settings.py` — registered both apps in `INSTALLED_APPS`, added baseball env toggles + API base URLs
+- `brotherwillies/urls.py` — mounted `/mlb/` and `/college-baseball/`
+
+### Verified
+- `python manage.py check` — clean
+- `python manage.py makemigrations mlb college_baseball` — generated cleanly
+- `python manage.py migrate` — applied to local SQLite without issue
+- `python manage.py test apps.mlb.tests apps.college_baseball.tests` — 2/2 pass
+- Pre-existing CBB/CFB/other tests exhibit only the known staticfiles-manifest issue (unrelated)
+
+---
+
 ## 2026-02-08 - Lobby: Always Show Live Section + Fix Default Expand
 
 **Summary:** Live Now section now always appears in the Lobby (even with 0 live games), showing "No live games right now" when empty. Fixed accordion default-open logic — server-side smart defaults (Live > Big Matchups > Today) now always apply on page load instead of being overridden by stale localStorage state.

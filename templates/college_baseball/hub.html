@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}College Baseball | Brother Willies{% endblock %}
+{% block content %}
+<div class="container">
+  <h1>College Baseball</h1>
+  {% if not live_games and not upcoming_games %}
+    <div class="card card-muted">
+      <p>Data temporarily unavailable. Live college baseball data will appear here when ingestion is enabled.</p>
+    </div>
+  {% else %}
+    {% if live_games %}
+      <section>
+        <h2>Live Now</h2>
+        <ul class="game-list">
+          {% for g in live_games %}
+            <li>
+              <a href="{% url 'college_baseball:game' g.id %}">
+                {{ g.away_team.name }} @ {{ g.home_team.name }}
+                {% if g.away_score is not None %}({{ g.away_score }}–{{ g.home_score }}){% endif %}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+    {% if upcoming_games %}
+      <section>
+        <h2>Upcoming</h2>
+        <ul class="game-list">
+          {% for g in upcoming_games %}
+            <li>
+              <a href="{% url 'college_baseball:game' g.id %}">
+                {{ g.away_team.name }} @ {{ g.home_team.name }} — {{ g.first_pitch|date:"M j, g:i A" }}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  {% endif %}
+  {% if conferences %}
+    <section>
+      <h2>Conferences</h2>
+      <ul>
+        {% for c in conferences %}
+          <li><a href="{% url 'college_baseball:conference' c.slug %}">{{ c.name }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}
