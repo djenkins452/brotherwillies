@@ -1,6 +1,7 @@
 """Golf Odds Provider — fetches outright winner odds from The Odds API."""
 
 import logging
+from datetime import timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -21,6 +22,24 @@ GOLF_SPORT_KEYS = [
     'golf_the_open_championship_winner',
     'golf_us_open_winner',
 ]
+
+# Fetch window: start 7 days before event start_date, end at event end_date
+FETCH_WINDOW_DAYS_BEFORE = 7
+
+
+def is_event_in_window(event, today=None):
+    """Return (bool, reason) — whether odds should be fetched/persisted for this event today."""
+    if today is None:
+        today = timezone.now().date()
+
+    fetch_start = event.start_date - timedelta(days=FETCH_WINDOW_DAYS_BEFORE)
+    fetch_end = event.end_date
+
+    if today < fetch_start:
+        return False, "outside_window"
+    if today > fetch_end:
+        return False, "event_complete"
+    return True, "in_window"
 
 
 def american_to_prob(ml):
@@ -48,7 +67,36 @@ class GolfOddsProvider(AbstractProvider):
         )
 
     def fetch(self):
-        """Fetch golf outright odds from all active golf markets."""
+        """Fetch golf outright odds from all active golf markets.
+
+        Gates the API calls to the fetch window: odds are fetched only if at
+        least one GolfEvent is currently within [start_date - 7d, end_date].
+        """
+        today = timezone.now().date()
+
+        # Candidate events: anything not already well past its end date.
+        # is_event_in_window does the authoritative filtering below.
+        candidate_events = GolfEvent.objects.filter(
+            end_date__gte=today - timedelta(days=FETCH_WINDOW_DAYS_BEFORE),
+        )
+
+        in_window_events = [
+            e for e in candidate_events if is_event_in_window(e, today)[0]
+        ]
+
+        if not in_window_events:
+            logger.info(
+                "golf_odds_fetch_skipped_no_events date=%s candidates=%d",
+                today, candidate_events.count(),
+            )
+            return []
+
+        logger.info(
+            "golf_odds_fetch_started date=%s events_in_window=%s",
+            today,
+            [e.name for e in in_window_events],
+        )
+
         all_events = []
         for sport_key in GOLF_SPORT_KEYS:
             try:
@@ -66,6 +114,11 @@ class GolfOddsProvider(AbstractProvider):
             except Exception as e:
                 logger.info(f"No active odds for {sport_key}: {e}")
                 continue
+
+        logger.info(
+            "golf_odds_fetch_completed date=%s raw_events=%d",
+            today, len(all_events),
+        )
         return all_events
 
     def normalize(self, raw):
@@ -100,20 +153,57 @@ class GolfOddsProvider(AbstractProvider):
         return normalized
 
     def persist(self, normalized):
-        """Create GolfOddsSnapshot records (append-only)."""
+        """Create GolfOddsSnapshot records (append-only).
+
+        Enforces the fetch window at persist time for data integrity, and a
+        once-per-day guard per event to avoid duplicate daily inserts when the
+        scheduler runs more than once in a day.
+        """
         created = 0
         skipped = 0
         now = timezone.now()
+        today = now.date()
 
         # Cache current/upcoming events
         upcoming_events = {e.name.lower(): e for e in GolfEvent.objects.filter(
-            end_date__gte=now.date(),
+            end_date__gte=today,
         )}
+
+        # Cache of events that have already been persisted today (prevents
+        # duplicate daily inserts across repeated scheduler runs).
+        already_fetched_today = set()
 
         for item in normalized:
             # Match event by name (fuzzy)
             event = _match_event(item['event_name'], upcoming_events)
             if not event:
+                skipped += 1
+                continue
+
+            # Window gate (data safety — mirrors fetch-level gating)
+            in_window, reason = is_event_in_window(event, today)
+            if not in_window:
+                logger.info(
+                    "golf_odds_persist_skipped_window event=%s date=%s reason=%s",
+                    event.name, today, reason,
+                )
+                skipped += 1
+                continue
+
+            # Once-per-day guard (no schema change — use captured_at date)
+            if event.id not in already_fetched_today:
+                exists_today = GolfOddsSnapshot.objects.filter(
+                    event=event,
+                    captured_at__date=today,
+                ).exists()
+                if exists_today:
+                    already_fetched_today.add(event.id)
+
+            if event.id in already_fetched_today:
+                logger.info(
+                    "golf_odds_persist_skipped_duplicate event=%s date=%s",
+                    event.name, today,
+                )
                 skipped += 1
                 continue
 

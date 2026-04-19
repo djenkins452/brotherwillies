@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-04-19 - Golf odds windowed fetch
+
+**Summary:** Golf odds ingestion now only hits The Odds API when at least one `GolfEvent` is in its fetch window (start_date − 7 days → end_date), and persists no more than one snapshot per event per day. Reduces API usage and aligns data freshness with betting relevance. No other sports affected.
+
+### Changes
+- `apps/datahub/providers/golf/odds_provider.py`
+  - Added `is_event_in_window(event, today)` pure helper — returns `(bool, reason)` where reason ∈ `{outside_window, event_complete, in_window}`.
+  - `fetch()`: gates the HTTP calls. Skips all 4 PGA sport keys entirely when no `GolfEvent` is in window. Emits structured logs `golf_odds_fetch_skipped_no_events`, `golf_odds_fetch_started`, `golf_odds_fetch_completed`.
+  - `persist()`: enforces the window per event (data-integrity backstop) and a once-per-day guard using `GolfOddsSnapshot.captured_at__date=today` (no schema change). Logs `golf_odds_persist_skipped_window` and `golf_odds_persist_skipped_duplicate`.
+- `apps/datahub/tests.py` — 13 new unit tests covering window predicate boundary cases, fetch-level gating (API calls suppressed / allowed), and persist-level gating (window + same-day dedupe).
+
+### Not touched
+- `AbstractProvider`, other sport providers (CBB, CFB, MLB, college baseball)
+- `refresh_data`, scheduler, registry, API client
+- `_match_event`, normalization logic
+- Models — no migration required (`GolfEvent.start_date` / `end_date` already exist)
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 11: Final sweep + self-review
 
 **Summary:** Final checks before closing out the expansion. All system checks clean, no pending migrations, every route returns its expected status.
