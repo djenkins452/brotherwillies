@@ -11,6 +11,8 @@ class MockBet(models.Model):
         ('cfb', 'College Football'),
         ('cbb', 'College Basketball'),
         ('golf', 'Golf'),
+        ('mlb', 'MLB'),
+        ('college_baseball', 'College Baseball'),
     ]
 
     # CFB/CBB bet types
@@ -57,7 +59,8 @@ class MockBet(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mock_bets')
-    sport = models.CharField(max_length=4, choices=SPORT_CHOICES)
+    # max_length=20 to fit the longest sport code ('college_baseball')
+    sport = models.CharField(max_length=20, choices=SPORT_CHOICES)
 
     # Game FKs (nullable — only one will be set based on sport)
     cfb_game = models.ForeignKey(
@@ -71,6 +74,12 @@ class MockBet(models.Model):
     )
     golf_golfer = models.ForeignKey(
         'golf.Golfer', on_delete=models.CASCADE, null=True, blank=True, related_name='mock_bets'
+    )
+    mlb_game = models.ForeignKey(
+        'mlb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='mock_bets'
+    )
+    college_baseball_game = models.ForeignKey(
+        'college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='mock_bets'
     )
 
     bet_type = models.CharField(max_length=10, choices=BET_TYPE_CHOICES)
@@ -105,6 +114,10 @@ class MockBet(models.Model):
             return self.cfb_game
         elif self.sport == 'cbb':
             return self.cbb_game
+        elif self.sport == 'mlb':
+            return self.mlb_game
+        elif self.sport == 'college_baseball':
+            return self.college_baseball_game
         return None
 
     @property

@@ -34,12 +34,14 @@ def home(request):
     bets = MockBet.objects.filter(user=request.user).select_related(
         'cfb_game__home_team', 'cfb_game__away_team',
         'cbb_game__home_team', 'cbb_game__away_team',
+        'mlb_game__home_team', 'mlb_game__away_team',
+        'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
 
     # Apply filters
     sport = request.GET.get('sport')
-    if sport in ('cfb', 'cbb', 'golf'):
+    if sport in ('cfb', 'cbb', 'golf', 'mlb', 'college_baseball'):
         bets = bets.filter(sport=sport)
 
     bet_type = request.GET.get('bet_type')

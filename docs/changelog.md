@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 6: Mock bets for MLB + College Baseball
+
+**Summary:** Mock betting is now available on every baseball game the system ingests. Moneyline, run line (stored as spread), and total bets flow through the same settlement pipeline the other team sports use — with the duplicated per-sport settlement helpers collapsed into a single `_settle_team_sport(sport_key, fk_name)` function.
+
+### Model changes
+- `apps/mockbets/models.py`:
+  - `SPORT_CHOICES` gains `('mlb', 'MLB')` and `('college_baseball', 'College Baseball')`
+  - `sport` CharField max_length bumped from **4 → 20** to fit the longest new key
+  - New FKs `mlb_game` and `college_baseball_game` (nullable, one-of pattern)
+  - `.game` property extended for both new sports
+- Migration `mockbets.0002` applied
+
+### Settlement refactor
+- `_settle_cfb()` + `_settle_cbb()` (byte-for-byte identical except FK column) collapsed into `_settle_team_sport(sport_key, fk_name)`. CFB / CBB / MLB / CB all dispatch through a single `_TEAM_SPORT_FK` mapping.
+- `_resolve_spread` helper generalized — the old `kickoff if hasattr else tipoff` ternary now walks `kickoff → tipoff → first_pitch`.
+- Behavior unchanged for existing CFB/CBB/Golf paths.
+
+### Views
+- `apps/mockbets/views.py`:
+  - `place_bet` accepts `sport='mlb'` or `sport='college_baseball'` and sets the appropriate FK
+  - `my_bets` and `analytics_dashboard` filter and prefetch both new sports
+- `apps/core/views.py` home view (mock bet analytics dashboard) prefetches new FKs and accepts new sport filters
+
+### Verified end-to-end against live data
+- Placed a moneyline bet on a final MLB game (NYY 13, KC 4)
+- `settle_pending_bets(sport='mlb')` settled it as a win
+- `.game` property correctly returned the MLB game
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 5: Lobby integration + sport registry refactor
 
 **Summary:** Baseball is now a first-class citizen in the Lobby — MLB and College Baseball tabs, Live/Today/Tomorrow/This Week timeframe grouping, Big Matchups surfacing, all working with the same UX as CFB/CBB. Under the hood this is powered by a new `apps/core/sport_registry.py` that replaces the brittle `time_field = 'kickoff' if sport == 'cfb' else 'tipoff'` ternary and the pair of near-identical `_get_cfb_value_data` / `_get_cbb_value_data` helpers.
