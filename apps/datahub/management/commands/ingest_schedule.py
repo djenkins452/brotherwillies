@@ -9,6 +9,8 @@ SPORT_TOGGLES = {
     'cbb': 'LIVE_CBB_ENABLED',
     'cfb': 'LIVE_CFB_ENABLED',
     'golf': 'LIVE_GOLF_ENABLED',
+    'mlb': 'LIVE_MLB_ENABLED',
+    'college_baseball': 'LIVE_COLLEGE_BASEBALL_ENABLED',
 }
 
 
@@ -19,8 +21,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--sport',
             required=True,
-            choices=['cbb', 'cfb', 'golf'],
-            help='Sport to ingest (cbb, cfb, golf)',
+            choices=['cbb', 'cfb', 'golf', 'mlb', 'college_baseball'],
+            help='Sport to ingest',
         )
         parser.add_argument(
             '--force',
