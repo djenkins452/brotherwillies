@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ conference.name }} | College Baseball{% endblock %}
+{% block content %}
+<div class="container">
+  <h1>{{ conference.name }}</h1>
+
+  <section>
+    <h2>Teams</h2>
+    <ul>
+      {% for t in teams %}
+        <li>{{ t.name }}</li>
+      {% empty %}
+        <li class="muted">No teams yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Upcoming Games</h2>
+    <ul class="game-list">
+      {% for g in games %}
+        <li>
+          <a href="{% url 'college_baseball:game' g.id %}">
+            {{ g.away_team.name }} @ {{ g.home_team.name }} — {{ g.first_pitch|date:"M j, g:i A" }}
+          </a>
+        </li>
+      {% empty %}
+        <li class="muted">No upcoming games for this conference.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

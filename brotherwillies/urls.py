@@ -14,6 +14,8 @@ urlpatterns = [
     path('cbb/value/', cbb_value_redirect, name='cbb_value_redirect'),
     path('value/', RedirectView.as_view(url='/lobby/', permanent=True), name='value_redirect'),
     path('golf/', include('apps.golf.urls')),
+    path('mlb/', include('apps.mlb.urls')),
+    path('college-baseball/', include('apps.college_baseball.urls')),
     path('parlays/', include('apps.parlays.urls')),
     path('profile/', include('apps.accounts.profile_urls')),
     path('feedback/', include('apps.feedback.urls')),

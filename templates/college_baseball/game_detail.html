@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}{{ game.away_team.name }} @ {{ game.home_team.name }} | College Baseball{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="game-header">
+    <h1>{{ game.away_team.name }} @ {{ game.home_team.name }}</h1>
+    <p>{{ game.first_pitch|date:"l, F j Y g:i A" }} {% tz_abbr %}</p>
+    <p class="status status-{{ game.status }}">{{ game.get_status_display }}</p>
+  </div>
+
+  <section class="starting-pitchers card">
+    <h2>Starting Pitchers</h2>
+    <div class="pitchers-grid">
+      <div class="pitcher">
+        <h3>{{ game.away_team.name }}</h3>
+        {% if game.away_pitcher %}
+          <p class="pitcher-name">{{ game.away_pitcher.name }}</p>
+        {% else %}
+          <p class="muted">Probable pitcher TBD</p>
+        {% endif %}
+      </div>
+      <div class="pitcher">
+        <h3>{{ game.home_team.name }}</h3>
+        {% if game.home_pitcher %}
+          <p class="pitcher-name">{{ game.home_pitcher.name }}</p>
+        {% else %}
+          <p class="muted">Probable pitcher TBD</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  {% if data.latest_odds %}
+    <section class="odds-section">
+      <h2>Market</h2>
+      <p>Home win: {{ data.market_prob|floatformat:1 }}% · Run line: {{ data.latest_odds.spread|default:"–" }} · Total: {{ data.latest_odds.total|default:"–" }}</p>
+    </section>
+  {% else %}
+    <section class="odds-section card card-muted">
+      <h2>Market</h2>
+      <p>Odds unavailable for this game.</p>
+    </section>
+  {% endif %}
+
+  <section class="model-section">
+    <h2>Model</h2>
+    <p>
+      House: {{ data.house_prob|floatformat:1 }}%
+      {% if data.user_prob %}· You: {{ data.user_prob|floatformat:1 }}%{% endif %}
+      · Edge: {{ data.house_edge|floatformat:1 }}
+    </p>
+    <p class="confidence confidence-{{ data.confidence_class }}">Confidence: {{ data.confidence|upper }}</p>
+  </section>
+</div>
+{% endblock %}

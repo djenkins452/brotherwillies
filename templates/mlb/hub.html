@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}MLB | Brother Willies{% endblock %}
+{% block content %}
+<div class="container">
+  <h1>MLB</h1>
+  {% if not live_games and not upcoming_games %}
+    <div class="card card-muted">
+      <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
+    </div>
+  {% else %}
+    {% if live_games %}
+      <section>
+        <h2>Live Now</h2>
+        <ul class="game-list">
+          {% for g in live_games %}
+            <li>
+              <a href="{% url 'mlb:game' g.id %}">
+                {{ g.away_team.name }} @ {{ g.home_team.name }}
+                {% if g.away_score is not None %}({{ g.away_score }}–{{ g.home_score }}){% endif %}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+    {% if upcoming_games %}
+      <section>
+        <h2>Upcoming</h2>
+        <ul class="game-list">
+          {% for g in upcoming_games %}
+            <li>
+              <a href="{% url 'mlb:game' g.id %}">
+                {{ g.away_team.name }} @ {{ g.home_team.name }} — {{ g.first_pitch|date:"M j, g:i A" }}
+                {% if g.home_pitcher or g.away_pitcher %}
+                  <small>
+                    {{ g.away_pitcher.name|default:"TBD" }} vs {{ g.home_pitcher.name|default:"TBD" }}
+                  </small>
+                {% endif %}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

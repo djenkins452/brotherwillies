@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}{{ game.away_team.name }} @ {{ game.home_team.name }} | MLB{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="game-header">
+    <h1>{{ game.away_team.name }} @ {{ game.home_team.name }}</h1>
+    <p>{{ game.first_pitch|date:"l, F j Y g:i A" }} {% tz_abbr %}</p>
+    <p class="status status-{{ game.status }}">{{ game.get_status_display }}</p>
+  </div>
+
+  <section class="starting-pitchers card card-prominent">
+    <h2>Starting Pitchers</h2>
+    <div class="pitchers-grid">
+      <div class="pitcher">
+        <h3>{{ game.away_team.name }}</h3>
+        {% if game.away_pitcher %}
+          <p class="pitcher-name">{{ game.away_pitcher.name }} ({{ game.away_pitcher.get_throws_display|default:"–" }})</p>
+          {% if game.away_pitcher.has_stats %}
+            <ul class="pitcher-stats">
+              <li>ERA: {{ game.away_pitcher.era|floatformat:2 }}</li>
+              <li>WHIP: {{ game.away_pitcher.whip|floatformat:2 }}</li>
+              <li>K/9: {{ game.away_pitcher.k_per_9|floatformat:1 }}</li>
+            </ul>
+          {% else %}
+            <p class="muted">Season stats not yet available.</p>
+          {% endif %}
+        {% else %}
+          <p class="muted">Probable pitcher TBD</p>
+        {% endif %}
+      </div>
+      <div class="pitcher">
+        <h3>{{ game.home_team.name }}</h3>
+        {% if game.home_pitcher %}
+          <p class="pitcher-name">{{ game.home_pitcher.name }} ({{ game.home_pitcher.get_throws_display|default:"–" }})</p>
+          {% if game.home_pitcher.has_stats %}
+            <ul class="pitcher-stats">
+              <li>ERA: {{ game.home_pitcher.era|floatformat:2 }}</li>
+              <li>WHIP: {{ game.home_pitcher.whip|floatformat:2 }}</li>
+              <li>K/9: {{ game.home_pitcher.k_per_9|floatformat:1 }}</li>
+            </ul>
+          {% else %}
+            <p class="muted">Season stats not yet available.</p>
+          {% endif %}
+        {% else %}
+          <p class="muted">Probable pitcher TBD</p>
+        {% endif %}
+      </div>
+    </div>
+    {% if game.pitchers_updated_at %}
+      <p class="muted small">Pitcher info updated {{ game.pitchers_updated_at|timesince }} ago</p>
+    {% endif %}
+  </section>
+
+  {% if data.latest_odds %}
+    <section class="odds-section">
+      <h2>Market</h2>
+      <p>Home win: {{ data.market_prob|floatformat:1 }}% · Run line: {{ data.latest_odds.spread|default:"–" }} · Total: {{ data.latest_odds.total|default:"–" }}</p>
+    </section>
+  {% endif %}
+
+  <section class="model-section">
+    <h2>Model</h2>
+    <p>
+      House: {{ data.house_prob|floatformat:1 }}%
+      {% if data.user_prob %}· You: {{ data.user_prob|floatformat:1 }}%{% endif %}
+      · Edge: {{ data.house_edge|floatformat:1 }}
+    </p>
+    <p class="confidence confidence-{{ data.confidence_class }}">Confidence: {{ data.confidence|upper }}</p>
+  </section>
+</div>
+{% endblock %}

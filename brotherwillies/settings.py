@@ -23,6 +23,8 @@ INSTALLED_APPS = [
     'apps.cfb',
     'apps.cbb',
     'apps.golf',
+    'apps.mlb',
+    'apps.college_baseball',
     'apps.parlays',
     'apps.analytics',
     'apps.datahub',
@@ -130,6 +132,15 @@ LIVE_DATA_ENABLED = os.environ.get('LIVE_DATA_ENABLED', 'false').lower() == 'tru
 LIVE_CBB_ENABLED = os.environ.get('LIVE_CBB_ENABLED', 'false').lower() == 'true'
 LIVE_CFB_ENABLED = os.environ.get('LIVE_CFB_ENABLED', 'false').lower() == 'true'
 LIVE_GOLF_ENABLED = os.environ.get('LIVE_GOLF_ENABLED', 'false').lower() == 'true'
+LIVE_MLB_ENABLED = os.environ.get('LIVE_MLB_ENABLED', 'false').lower() == 'true'
+LIVE_COLLEGE_BASEBALL_ENABLED = os.environ.get('LIVE_COLLEGE_BASEBALL_ENABLED', 'false').lower() == 'true'
+
+# Baseball API base URLs (override if the official endpoints change or a mirror is needed)
+MLB_STATSAPI_BASE_URL = os.environ.get('MLB_STATSAPI_BASE_URL', 'https://statsapi.mlb.com/api')
+ESPN_BASEBALL_BASE_URL = os.environ.get(
+    'ESPN_BASEBALL_BASE_URL',
+    'https://site.api.espn.com/apis/site/v2/sports/baseball',
+)
 ODDS_API_KEY = os.environ.get('ODDS_API_KEY', '')
 CFBD_API_KEY = os.environ.get('CFBD_API_KEY', '')
 CBBD_API_KEY = os.environ.get('CBBD_API_KEY', '')
