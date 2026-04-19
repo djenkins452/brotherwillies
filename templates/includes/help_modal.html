@@ -87,6 +87,33 @@
                     <li><strong>Where does this data come from?</strong> CBB game schedules are fetched from <strong>ESPN's public API</strong>, which covers all Division I men's college basketball games. Historical game data comes from the <strong>CollegeBasketballData.com (CBBD) API</strong>. Betting odds are sourced from <strong>The Odds API</strong>, which aggregates real-time lines from major US sportsbooks. Injury reports come from ESPN. All edge and probability numbers are calculated by our own model using this data as input.</li>
                 </ul>
 
+            {% elif help_key == 'mlb_hub' %}
+                <h4>MLB Hub</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> Your gateway to real MLB games — today, upcoming, and live. Each game card shows the two teams and first pitch time.</li>
+                    <li><strong>Starting pitchers</strong> — The matchup between the two starting pitchers is the dominant driver of our win-probability model. Tap any game to see ERA, WHIP, K/9, and a derived rating for each starter.</li>
+                    <li><strong>Probable pitcher TBD</strong> — When a starter hasn't been announced yet, we say so explicitly. We never fabricate a pitcher name or stats.</li>
+                    <li><strong>Data source</strong> — Schedule, teams, probable pitchers, live status and scores all come from the official MLB Stats API (<code>statsapi.mlb.com</code>). Odds come from <strong>The Odds API</strong>. No demo data, no simulated results — if a provider is down, the page says "Data temporarily unavailable."</li>
+                </ul>
+
+            {% elif help_key == 'college_baseball_hub' %}
+                <h4>College Baseball Hub</h4>
+                <ul>
+                    <li><strong>What is this page?</strong> All NCAA Division I baseball games, pulled live from ESPN. Browse by conference or drill into a single game.</li>
+                    <li><strong>Pitcher data</strong> — ESPN's public college baseball feed does not currently expose probable pitchers. When we can't identify a starter, we say "Probable pitcher TBD" — we do not invent one. Our model reflects this by lowering its confidence rating on the game.</li>
+                    <li><strong>Odds</strong> — College baseball odds coverage is sparse outside of marquee matchups. When odds aren't available, the card shows "Odds unavailable" rather than stale or fabricated numbers.</li>
+                    <li><strong>Data source</strong> — Schedule, teams, and scores from ESPN's public <code>college-baseball/scoreboard</code> endpoint (D1 group 50). Odds from <strong>The Odds API</strong> (<code>baseball_ncaa</code>).</li>
+                </ul>
+
+            {% elif help_key == 'mlb_game' or help_key == 'college_baseball_game' %}
+                <h4>Baseball Game Detail</h4>
+                <ul>
+                    <li><strong>Starting Pitchers block</strong> — The most important info for a baseball bet. For MLB we show ERA, WHIP, K/9, and a derived rating (10–95 scale); for college baseball we show the pitcher's name when available. Missing pitchers are shown as "Probable pitcher TBD" — never fabricated.</li>
+                    <li><strong>Model</strong> — Our house model weighs the pitcher-rating gap at 65% and team-rating gap at 35%, plus a modest home-field adjustment (MLB ≈ 2.5, College Baseball ≈ 2.0 on our logistic scale).</li>
+                    <li><strong>Run Line</strong> — Baseball's equivalent of a point spread. MLB run lines are almost always ±1.5. Stored alongside spread bets, settled the same way.</li>
+                    <li><strong>Mock bets</strong> — You can place moneyline, run line, or total bets. Settlement uses real final scores pulled from the live data feed.</li>
+                </ul>
+
             {% elif help_key == 'game_detail' %}
                 <h4>Game Detail</h4>
                 <ul>

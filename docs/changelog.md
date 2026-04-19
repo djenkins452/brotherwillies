@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 9: Standing docs updated
+
+**Summary:** Updated all standing documentation surfaces to describe the baseball expansion — user-visible help, user guide, and "what's new" page, plus this changelog.
+
+### Modified files
+- `templates/includes/help_modal.html` — new `help_key` entries for `mlb_hub`, `college_baseball_hub`, and a shared `mlb_game` / `college_baseball_game` block explaining starting pitchers, the model's pitcher weighting, run lines, and the data sources
+- `templates/accounts/user_guide.html` — site overview now lists MLB and College Baseball; new dedicated Baseball section covering the pitcher-weighted model, TBD pitcher handling, bet types, and data sources; Mock Bets section updated to reference all team sports
+- `templates/accounts/whats_new.html` — new Apr 19, 2026 release card at the top with sections for MLB live, College Baseball D1, prediction model, mock bets, AI Insight, and the sport-registry refactor
+- `docs/changelog.md` — running phase-by-phase log (this file)
+
+### Verified
+- `/profile/user-guide/` → 200 (37,792 bytes)
+- `/profile/whats-new/` → 200 (41,933 bytes)
+- `/mlb/` and `/college-baseball/` hubs still 200
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 8: Analytics + mockbet UI baseball-aware
 
 **Summary:** Wiring up the last baseball touchpoints across the existing analytics + mock-bet UI so baseball bets surface as first-class citizens in every filter, badge, chart, and management command.

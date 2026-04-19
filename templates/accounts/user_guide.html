@@ -31,7 +31,8 @@
     <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
         Brother Willies is a sports analytics platform that compares a mathematical house model against the
         betting market to identify where they disagree. The site covers <strong>College Basketball (CBB)</strong>,
-        <strong>College Football (CFB)</strong>, and <strong>Golf</strong>.
+        <strong>College Football (CFB)</strong>, <strong>MLB</strong>, <strong>College Baseball</strong>,
+        and <strong>Golf</strong>.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Important:</strong> This site is for informational and entertainment purposes only. It does not provide
@@ -44,8 +45,10 @@
         model thinks the home team is more likely to win than the market does.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Data sources:</strong> Schedules and scores come from ESPN and sport-specific APIs (CFBD, CBBD).
-        Betting odds come from The Odds API. Injury reports come from ESPN. All data refreshes automatically.
+        <strong>Data sources:</strong> Schedules and scores come from ESPN and sport-specific APIs
+        (CFBD for CFB, CBBD for CBB, the official <code>statsapi.mlb.com</code> for MLB — including probable
+        pitchers — and ESPN's D1 college-baseball scoreboard). Betting odds come from The Odds API. Injury
+        reports come from ESPN. All data refreshes automatically.
     </p>
 </div>
 
@@ -283,6 +286,40 @@
     </p>
 </div>
 
+{# ── Baseball (MLB + College Baseball) ──────────────────────────────── #}
+<div class="card mb-2" id="baseball">
+    <p class="card-title">Baseball (MLB + College Baseball)</p>
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
+        Baseball is a first-class sport in Brother Willies — MLB games appear on their own
+        <a href="/mlb/">MLB Hub</a> and in the Lobby tab, and college baseball games appear on the
+        <a href="/college-baseball/">College Baseball Hub</a> and Lobby tab.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Starting pitchers are the primary driver.</strong> Our baseball house model weights the
+        starting-pitcher-rating gap at 65% and the team-rating gap at 35%, with a modest home-field
+        adjustment (MLB ≈ 2.5, College Baseball ≈ 2.0 on our logistic scale). A pitcher's rating is
+        derived from their season ERA, WHIP, and K/9 and ranges roughly 10 (poor) to 95 (elite).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Missing pitcher data</strong> — We never invent a pitcher when the starter hasn't been
+        announced. Games with a "Probable pitcher TBD" marker automatically show lower confidence in
+        the model output. ESPN does not expose probable pitchers for college baseball, so most CB games
+        currently have TBD pitchers; this is surfaced plainly.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Bet types</strong> — Moneyline, <em>run line</em> (baseball's equivalent of the point
+        spread — MLB run lines are almost always ±1.5), and total runs over/under. All three settle
+        against real final scores pulled from the live feed.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Data sources</strong> — MLB schedule / teams / probable pitchers / live scores come from
+        the official <code>statsapi.mlb.com</code> (no API key required). College baseball schedule
+        and scores come from ESPN's public scoreboard (<code>groups=50</code>, full D1). Odds for both
+        come from The Odds API. If a provider is unreachable, the UI says "Data temporarily unavailable"
+        rather than fabricating content.
+    </p>
+</div>
+
 {# ── 10. Mock Bets ──────────────────────────────────────────────────── #}
 <div class="card mb-2" id="mock-bets">
     <p class="card-title">10. Mock Bets</p>
@@ -291,7 +328,7 @@
         <strong>No real money is involved</strong> &mdash; this is a decision-quality analysis tool.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Placing a Mock Bet:</strong> From any game detail page (CFB or CBB), tap "Place Mock Bet" to open the
+        <strong>Placing a Mock Bet:</strong> From any game detail page (CFB, CBB, MLB, or College Baseball), tap "Place Mock Bet" to open the
         placement modal. Choose a bet type (moneyline, spread, total), enter your selection and odds, set a simulated
         stake amount, and choose a confidence level and model source (House or Your Model).
     </p>
