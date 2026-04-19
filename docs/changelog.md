@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 7: AI Insight pitching-matchup extension
+
+**Summary:** The AI Insight service now knows about baseball. When the sport is MLB or College Baseball, the system prompt gains a short "BASEBALL CONTEXT" clause instructing the model to treat the SP-vs-SP matchup as the primary driver, and the user prompt includes a STARTING PITCHERS section with ERA / WHIP / K9 / rating / handedness — or explicit "Probable pitcher TBD (unknown)" when the pitcher is missing. Safety guardrails (no invented stats, no invented names, no betting advice) carry through unchanged.
+
+### Modified files
+- `apps/core/services/ai_insights.py`:
+  - `_build_system_prompt` accepts a `sport` kwarg; when baseball, appends a focused clause about pitching dominance and TBD-handling.
+  - `_build_context_from_game` adds a `pitchers` dict (home/away) to the context for baseball sports, preserving nulls for missing pitchers and tagging them in `missing_data` for confidence signaling.
+  - `_build_user_prompt` renders a STARTING PITCHERS section listing name + handedness + stats, or an explicit "Probable pitcher TBD (unknown)".
+  - `generate_insight` now passes the sport into system-prompt construction.
+
+### Verified (no OpenAI call required)
+- With a game whose pitchers both have stats (Cubs-Mets): the prompt renders `Javier Assad (RHP) … ERA 8.10 | WHIP 1.60 | K/9 5.4 | rating 12` and the mirrored Mets line.
+- With a game whose pitchers lack stats: prompt correctly renders "Season stats not yet available" instead of fabricating numbers.
+- System prompt includes the baseball context clause exactly when sport ∈ {mlb, college_baseball}.
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 6: Mock bets for MLB + College Baseball
 
 **Summary:** Mock betting is now available on every baseball game the system ingests. Moneyline, run line (stored as spread), and total bets flow through the same settlement pipeline the other team sports use — with the duplicated per-sport settlement helpers collapsed into a single `_settle_team_sport(sport_key, fk_name)` function.

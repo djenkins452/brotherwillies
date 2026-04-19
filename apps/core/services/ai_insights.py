@@ -44,10 +44,26 @@ PERSONA_PROMPTS = {
 
 # ── Prompt construction ─────────────────────────────────────────────────
 
-def _build_system_prompt(persona):
-    """Build the system prompt with persona + strict rules."""
+_BASEBALL_SPORTS = {'mlb', 'college_baseball'}
+
+
+def _build_system_prompt(persona, sport=None):
+    """Build the system prompt with persona + strict rules.
+
+    For baseball sports, adds a paragraph emphasizing pitching as the
+    primary matchup driver so the model discusses the SP vs SP dynamic.
+    """
     persona_text = PERSONA_PROMPTS.get(persona, PERSONA_PROMPTS['analyst'])
-    return f"""{persona_text}
+    baseball_clause = ""
+    if sport in _BASEBALL_SPORTS:
+        baseball_clause = (
+            "\n\nBASEBALL CONTEXT: This is a baseball game. The starting-pitcher matchup is "
+            "the primary driver of win probability, more so than team rating. Discuss the "
+            "pitcher matchup explicitly when pitcher data is provided. If probable pitchers "
+            "are unknown, state that plainly and note that the model's confidence is reduced "
+            "as a result. Never invent pitcher stats or names.\n"
+        )
+    return f"""{persona_text}{baseball_clause}
 
 CRITICAL RULES — you MUST follow these:
 
@@ -141,6 +157,26 @@ def _build_user_prompt(context):
     parts.append(f"  {game['away_team']} rating: {game.get('away_rating', 'N/A')}")
     parts.append(f"  {game['home_team']} conference: {game.get('home_conference', 'N/A')}")
     parts.append(f"  {game['away_team']} conference: {game.get('away_conference', 'N/A')}")
+
+    pitchers = context.get('pitchers')
+    if pitchers is not None:
+        parts.append("")
+        parts.append("STARTING PITCHERS:")
+        for side_label, side_key in [(game['home_team'], 'home'), (game['away_team'], 'away')]:
+            p = pitchers.get(side_key)
+            if p is None:
+                parts.append(f"  {side_label}: Probable pitcher TBD (unknown)")
+                continue
+            line = f"  {side_label}: {p['name']}"
+            if p.get('throws'):
+                line += f" ({p['throws']}HP)"
+            parts.append(line)
+            if p.get('has_stats'):
+                parts.append(
+                    f"    ERA {p['era']:.2f} | WHIP {p['whip']:.2f} | K/9 {p['k_per_9']:.1f} | rating {p['rating']:.0f}"
+                )
+            else:
+                parts.append("    Season stats not yet available")
 
     if injuries:
         parts.append("")
@@ -247,6 +283,32 @@ def _build_context_from_game(game, data, sport):
     if not data.get('latest_odds'):
         missing_data.append('odds data')
 
+    # Baseball-specific: capture starting pitcher matchup. Nulls are preserved
+    # so the AI explicitly discusses "probable pitcher TBD" instead of
+    # fabricating a name.
+    pitchers = None
+    if sport in _BASEBALL_SPORTS:
+        def _pitcher_dict(p):
+            if not p:
+                return None
+            return {
+                'name': p.name,
+                'throws': p.throws or None,
+                'era': p.era,
+                'whip': p.whip,
+                'k_per_9': p.k_per_9,
+                'rating': p.rating,
+                'has_stats': p.era is not None and p.whip is not None,
+            }
+        pitchers = {
+            'home': _pitcher_dict(getattr(game, 'home_pitcher', None)),
+            'away': _pitcher_dict(getattr(game, 'away_pitcher', None)),
+        }
+        if pitchers['home'] is None:
+            missing_data.append('home starting pitcher')
+        if pitchers['away'] is None:
+            missing_data.append('away starting pitcher')
+
     data_confidence = {
         'level': data.get('confidence', 'low'),
         'missing_data': missing_data,
@@ -260,6 +322,7 @@ def _build_context_from_game(game, data, sport):
         'injuries': injuries,
         'line_movement': line_movement,
         'data_confidence': data_confidence,
+        'pitchers': pitchers,
     }
 
 
@@ -299,7 +362,7 @@ def generate_insight(game, data, sport, persona='analyst'):
         max_tokens = 800
 
     context = _build_context_from_game(game, data, sport)
-    system_prompt = _build_system_prompt(persona)
+    system_prompt = _build_system_prompt(persona, sport=sport)
     user_prompt = _build_user_prompt(context)
 
     # Compute prompt hash for logging
