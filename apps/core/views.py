@@ -9,18 +9,14 @@ from apps.cfb.models import Game as CFBGame
 from apps.cfb.services.model_service import compute_game_data as cfb_compute
 from apps.cbb.models import Game as CBBGame
 from apps.cbb.services.model_service import compute_game_data as cbb_compute
-
-# Sports seasons by month (inclusive)
-# CFB: August through January
-# CBB: November through April
-SPORT_SEASONS = {
-    'cfb': [8, 9, 10, 11, 12, 1],
-    'cbb': [11, 12, 1, 2, 3, 4],
-}
+from apps.core.sport_registry import SPORT_REGISTRY, all_team_sports, get_sport
 
 
 def _is_in_season(sport):
-    return timezone.now().month in SPORT_SEASONS.get(sport, [])
+    entry = get_sport(sport)
+    if not entry:
+        return False
+    return timezone.now().month in entry['season_months']
 
 
 def home(request):
@@ -95,21 +91,25 @@ def home(request):
 # ── Lobby (formerly Value Board) ─────────────────────────────────────────────────
 
 def _get_available_sports():
-    """Return list of sports that have upcoming games/events, ordered by relevance."""
+    """Return list of sports that have upcoming games/events, ordered by relevance.
+
+    Team sports come from SPORT_REGISTRY; Golf is appended separately since it
+    has an entirely different model shape (events + golfers, not games).
+    """
     now = timezone.now()
     sports = []
 
-    # CBB
-    cbb_count = CBBGame.objects.filter(tipoff__gte=now, status='scheduled').count()
-    if cbb_count > 0 or _is_in_season('cbb'):
-        sports.append({'key': 'cbb', 'label': 'CBB', 'count': cbb_count})
+    for key, entry in all_team_sports():
+        model = entry['game_model']
+        time_field = entry['time_field']
+        count = model.objects.filter(
+            **{f'{time_field}__gte': now},
+            status='scheduled',
+        ).count()
+        if count > 0 or _is_in_season(key):
+            sports.append({'key': key, 'label': entry['label'], 'count': count})
 
-    # CFB
-    cfb_count = CFBGame.objects.filter(kickoff__gte=now, status='scheduled').count()
-    if cfb_count > 0 or _is_in_season('cfb'):
-        sports.append({'key': 'cfb', 'label': 'CFB', 'count': cfb_count})
-
-    # Golf
+    # Golf — separate structure (events, not games)
     from apps.golf.models import GolfEvent
     golf_count = GolfEvent.objects.filter(end_date__gte=now.date()).count()
     if golf_count > 0:
@@ -148,14 +148,27 @@ def _apply_filters(games_data, user):
     return filtered
 
 
-def _get_cfb_value_data(user, sort_by):
-    """Fetch and compute CFB value board data."""
-    now = timezone.now()
-    games = CFBGame.objects.filter(
-        kickoff__gte=now, status='scheduled'
-    ).select_related('home_team', 'away_team').order_by('kickoff')
+def _get_value_data_for_sport(sport, user, sort_by):
+    """Fetch and compute value-board data for any registered team sport.
 
-    games_data = [cfb_compute(g, user) for g in games]
+    Generalized from the per-sport CFB/CBB helpers: behavior is identical
+    but parameterized by the SPORT_REGISTRY entry.
+    """
+    entry = get_sport(sport)
+    if not entry:
+        return []
+
+    now = timezone.now()
+    time_field = entry['time_field']
+    games = (
+        entry['game_model'].objects
+        .filter(**{f'{time_field}__gte': now}, status='scheduled')
+        .select_related('home_team', 'away_team')
+        .order_by(time_field)
+    )
+
+    compute_fn = entry['compute_fn']
+    games_data = [compute_fn(g, user) for g in games]
     games_data = _apply_filters(games_data, user)
 
     if sort_by == 'user_edge':
@@ -163,29 +176,25 @@ def _get_cfb_value_data(user, sort_by):
     elif sort_by == 'delta':
         games_data.sort(key=lambda g: abs(g.get('delta', 0) or 0), reverse=True)
     else:
-        games_data.sort(key=lambda g: abs(g.get('house_edge', 0)), reverse=True)
+        games_data.sort(key=lambda g: abs(g.get('house_edge', 0) or 0), reverse=True)
 
     return games_data
 
 
-def _get_cbb_value_data(user, sort_by):
-    """Fetch and compute CBB value board data."""
-    now = timezone.now()
-    games = CBBGame.objects.filter(
-        tipoff__gte=now, status='scheduled'
-    ).select_related('home_team', 'away_team').order_by('tipoff')
-
-    games_data = [cbb_compute(g, user) for g in games]
-    games_data = _apply_filters(games_data, user)
-
-    if sort_by == 'user_edge':
-        games_data.sort(key=lambda g: abs(g.get('user_edge', 0) or 0), reverse=True)
-    elif sort_by == 'delta':
-        games_data.sort(key=lambda g: abs(g.get('delta', 0) or 0), reverse=True)
-    else:
-        games_data.sort(key=lambda g: abs(g.get('house_edge', 0)), reverse=True)
-
-    return games_data
+def _get_live_data_for_sport(sport, user):
+    """Fetch live (in-progress) games for any team sport via the registry."""
+    entry = get_sport(sport)
+    if not entry:
+        return []
+    time_field = entry['time_field']
+    games = (
+        entry['game_model'].objects
+        .filter(status='live')
+        .select_related('home_team', 'away_team')
+        .order_by(time_field)
+    )
+    compute_fn = entry['compute_fn']
+    return [compute_fn(g, user) for g in games]
 
 
 def _get_golf_events():
@@ -218,8 +227,8 @@ def _group_games_by_timeframe(games_data, active_sport, live_data=None):
 
     big_game_ids = set()
 
-    # "Big Games" section — top 5 by combined team rating (all team sports)
-    if active_sport in ('cfb', 'cbb') and games_data:
+    # "Big Games" section — top 5 by combined team rating (all registered team sports)
+    if active_sport in SPORT_REGISTRY and games_data:
         big_games = sorted(
             games_data,
             key=lambda g: (g['game'].home_team.rating + g['game'].away_team.rating),
@@ -235,8 +244,9 @@ def _group_games_by_timeframe(games_data, active_sport, live_data=None):
                 'default_open': False,
             })
 
-    # Determine game time field
-    time_field = 'kickoff' if active_sport == 'cfb' else 'tipoff'
+    # Determine game time field from the sport registry
+    entry = get_sport(active_sport)
+    time_field = entry['time_field'] if entry else 'tipoff'
 
     # Bucket remaining games
     today_games = []
@@ -332,16 +342,15 @@ def value_board(request):
     is_offseason = False
     show_bye_message = False
 
-    if sport == 'cfb':
-        games_data = _get_cfb_value_data(user, sort_by)
-        is_offseason = not _is_in_season('cfb')
-        # Fetch live CFB games
-        cfb_live = CFBGame.objects.filter(
-            status='live'
-        ).select_related('home_team', 'away_team').order_by('kickoff')
-        live_data = [cfb_compute(g, user) for g in cfb_live]
-        # Bye week detection
-        if user:
+    if sport in SPORT_REGISTRY:
+        games_data = _get_value_data_for_sport(sport, user, sort_by)
+        is_offseason = not _is_in_season(sport)
+        live_data = _get_live_data_for_sport(sport, user)
+
+        # Bye-week / off-week detection — currently only wired for CFB & CBB
+        # because only those sports expose a favorite_team on the profile.
+        # Baseball favorite-team UI can plug in here without changing structure.
+        if user and sport == 'cfb':
             try:
                 profile = user.profile
                 if profile.favorite_team:
@@ -350,16 +359,7 @@ def value_board(request):
                         show_bye_message = True
             except Exception:
                 pass
-
-    elif sport == 'cbb':
-        games_data = _get_cbb_value_data(user, sort_by)
-        # Fetch live CBB games
-        cbb_live = CBBGame.objects.filter(
-            status='live'
-        ).select_related('home_team', 'away_team').order_by('tipoff')
-        live_data = [cbb_compute(g, user) for g in cbb_live]
-        # Bye week detection
-        if user:
+        elif user and sport == 'cbb':
             try:
                 profile = user.profile
                 fav_id = getattr(profile, 'favorite_cbb_team_id', None)
@@ -430,27 +430,27 @@ def cbb_value_redirect(request):
 @login_required
 def ai_insight_view(request, sport, game_id):
     """AJAX endpoint that returns AI insight for a game as JSON."""
-    if sport not in ('cfb', 'cbb'):
+    entry = get_sport(sport)
+    if not entry:
         return JsonResponse({'error': 'Invalid sport.'}, status=400)
 
-    if sport == 'cfb':
-        game = get_object_or_404(
-            CFBGame.objects.select_related(
-                'home_team', 'away_team',
-                'home_team__conference', 'away_team__conference'
-            ),
-            id=game_id
-        )
-        data = cfb_compute(game, request.user)
-    else:
-        game = get_object_or_404(
-            CBBGame.objects.select_related(
-                'home_team', 'away_team',
-                'home_team__conference', 'away_team__conference'
-            ),
-            id=game_id
-        )
-        data = cbb_compute(game, request.user)
+    select_fields = ['home_team', 'away_team']
+    # CFB/CBB have conference FKs; baseball has a different structure.
+    # Prefetch conference if the model field exists — cheap safety.
+    try:
+        entry['game_model']._meta.get_field('home_team').related_model._meta.get_field('conference')
+        select_fields.extend(['home_team__conference', 'away_team__conference'])
+    except Exception:
+        pass
+    # Baseball additionally selects pitchers so AI prompt can inspect them.
+    if sport in ('mlb', 'college_baseball'):
+        select_fields.extend(['home_pitcher', 'away_pitcher'])
+
+    game = get_object_or_404(
+        entry['game_model'].objects.select_related(*select_fields),
+        id=game_id,
+    )
+    data = entry['compute_fn'](game, request.user)
 
     # Get user persona
     persona = 'analyst'

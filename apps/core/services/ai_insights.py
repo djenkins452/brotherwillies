@@ -173,12 +173,21 @@ def _build_user_prompt(context):
     return "\n".join(parts)
 
 
+_TIME_ATTR_BY_SPORT = {
+    'cfb': 'kickoff',
+    'cbb': 'tipoff',
+    'mlb': 'first_pitch',
+    'college_baseball': 'first_pitch',
+}
+
+
 def _build_context_from_game(game, data, sport):
     """
     Build the structured context dict from a game object and its computed data.
-    Works for both CFB and CBB games.
+    Works across all team sports via _TIME_ATTR_BY_SPORT.
     """
-    time_field = game.kickoff if sport == 'cfb' else game.tipoff
+    time_attr = _TIME_ATTR_BY_SPORT.get(sport)
+    time_field = getattr(game, time_attr, None) if time_attr else None
 
     game_context = {
         'sport': sport,

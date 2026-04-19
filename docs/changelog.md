@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 5: Lobby integration + sport registry refactor
+
+**Summary:** Baseball is now a first-class citizen in the Lobby — MLB and College Baseball tabs, Live/Today/Tomorrow/This Week timeframe grouping, Big Matchups surfacing, all working with the same UX as CFB/CBB. Under the hood this is powered by a new `apps/core/sport_registry.py` that replaces the brittle `time_field = 'kickoff' if sport == 'cfb' else 'tipoff'` ternary and the pair of near-identical `_get_cfb_value_data` / `_get_cbb_value_data` helpers.
+
+### Architectural note
+`SPORT_REGISTRY` is the **single source of truth** for team-sport metadata. Adding a fifth sport is now a single entry in that file — no sweep across `views.py`, no new per-sport helper functions, no template fork. The lobby, AI insight view, and timeframe grouper all consume the registry.
+
+### New files
+- `apps/core/sport_registry.py` — registry of `{label, game_model, time_field, compute_fn, season_months}` keyed by sport code
+
+### Modified files
+- `apps/core/views.py`
+  - `SPORT_SEASONS` dict removed; `_is_in_season()` reads from registry
+  - `_get_available_sports()` iterates the registry in display order (CBB, CFB, MLB, College Baseball), then appends Golf
+  - `_get_cfb_value_data` + `_get_cbb_value_data` collapsed into a single `_get_value_data_for_sport(sport, user, sort_by)` helper; behavior preserved
+  - `_get_live_data_for_sport()` helper extracted
+  - `_group_games_by_timeframe()` now reads `time_field` from the registry; Big Matchups logic extends to all registered sports (previously hard-coded to `{'cfb','cbb'}`)
+  - `value_board()` uses `if sport in SPORT_REGISTRY` branch for all team sports, then preserves CFB/CBB bye-week detection (baseball has no favorite-team profile field yet, but the structure is ready)
+  - `ai_insight_view()` now accepts any registered sport; baseball select_related adds pitcher FKs
+- `apps/core/services/ai_insights.py` — `_build_context_from_game()` uses `_TIME_ATTR_BY_SPORT` map instead of CFB/CBB ternary (baseball wiring landed here; full pitcher-aware prompt is Phase 7)
+- `templates/base.html` — MLB added to the bottom nav (now 6 items: Home | Lobby | CFB | CBB | MLB | Golf). College Baseball remains first-class via the Lobby tabs — matching our UX convention that niche sports live under Lobby.
+- `apps/mlb/views.py` + `apps/college_baseball/views.py` — all views now pass `nav_active` + `help_key` for proper nav highlighting and help-modal wiring (MLB highlights the MLB tile; CB highlights the Lobby tile)
+
+### Verified
+- `GET /lobby/?sport=mlb` → 200 (23,665 bytes with real games rendered through timeframe grouping)
+- `GET /lobby/?sport=college_baseball` → 200 (21,116 bytes)
+- `GET /lobby/?sport=cfb` / `cbb` / `golf` → 200 (unchanged — same 10,676 bytes as before the refactor, confirming no regression)
+- `GET /mlb/` + `/college-baseball/` hub pages → 200
+- Full test suite: 30/34 pass (4 failing tests are pre-existing unrelated staticfiles-env issues, identical to pre-refactor state)
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 4: Rich game detail templates + views
 
 **Summary:** Baseball hub and game detail pages now match the visual richness of the CBB equivalents — probability comparison tables, odds snapshot cards, AI Insight container, mock-bet button stubs, and (for MLB) a prominent Starting Pitchers block with ERA / WHIP / K9 and derived rating. Missing pitcher data is rendered as "Probable pitcher TBD"; missing odds as "Market data temporarily unavailable" — no fabrication.
