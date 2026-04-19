@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 10: Test coverage
+
+**Summary:** Added 20 targeted tests covering the baseball expansion: schema smoke, prediction-model math, provider normalization, and mock-bet settlement via the generalized `_settle_team_sport` helper.
+
+### New tests
+- `apps/mlb/tests.py` (10 tests):
+  - App installed smoke
+  - `compute_house_win_prob` is 0.5 when teams + pitchers + neutral site are symmetric
+  - Pitcher advantage drives probability past 0.95 when rating gap is extreme
+  - Missing pitcher → confidence forced to `low` regardless of other factors
+  - `compute_game_data` returns the expected dict shape
+  - `MLBScheduleProvider.normalize()` round-trips a hand-built sample payload and extracts pitcher IDs
+  - `MLBScheduleProvider.normalize()` correctly drops rows with missing team IDs
+  - `compute_pitcher_rating()` returns high values for elite stats, low for poor stats, and `None` when any stat is missing (no fabrication)
+- `apps/college_baseball/tests.py` (6 tests):
+  - App installed smoke
+  - Missing pitchers → low confidence
+  - CB HFA=2.0 produces the expected probability at parity
+  - Neutral site strips HFA cleanly
+  - ESPN event payload normalizes correctly
+  - Missing competitions → normalize skips the row
+- `apps/mockbets/tests.py` → `MLBSettlementTests` (4 tests):
+  - Moneyline win on home
+  - Moneyline loss on home when away wins
+  - Total over win
+  - `sport='all'` settles MLB bets alongside other sports
+
+### Regression
+- Full `apps.*` test suite: **52 tests, 48 pass, 4 pre-existing staticfiles-manifest errors** (same 4 errors that existed before this session — unrelated to baseball work)
+- All 20 new tests pass
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 9: Standing docs updated
 
 **Summary:** Updated all standing documentation surfaces to describe the baseball expansion — user-visible help, user guide, and "what's new" page, plus this changelog.

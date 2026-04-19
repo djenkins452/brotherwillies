@@ -416,3 +416,79 @@ class MockBetAnalyticsTests(TestCase):
         resp = self.client.post('/mockbets/ai-commentary/', content_type='application/json', data='{}')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('5 settled bets', resp.json()['error'])
+
+
+class MLBSettlementTests(TestCase):
+    """Verify the generalized _settle_team_sport helper works for MLB."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConference
+        from apps.mlb.models import Team as MLBTeam
+        self.user = User.objects.create_user('baseballbettor', password='pw')
+        conf, _ = MLBConference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='yankees', conference=conf,
+            source='mlb_stats_api', external_id='147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='royals', conference=conf,
+            source='mlb_stats_api', external_id='118',
+        )
+
+    def _final_game(self, home_score, away_score):
+        from apps.mlb.models import Game as MLBGame
+        return MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now(), status='final',
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+
+    def test_moneyline_win_on_home(self):
+        game = self._final_game(6, 2)
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        counts = settle_pending_bets(sport='mlb')
+        self.assertEqual(counts['mlb'], 1)
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')
+        self.assertEqual(bet.game, game)  # .game property dispatches correctly
+
+    def test_moneyline_loss_on_home_when_away_wins(self):
+        game = self._final_game(2, 6)
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        settle_pending_bets(sport='mlb')
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'loss')
+
+    def test_total_over_win(self):
+        game = self._final_game(5, 4)  # total 9
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='total',
+            selection='Over 8.5', odds_american=-110,
+            implied_probability=Decimal('0.52'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        settle_pending_bets(sport='mlb')
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')
+
+    def test_all_sport_settles_mlb_too(self):
+        game = self._final_game(5, 4)
+        MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-110,
+            implied_probability=Decimal('0.52'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        counts = settle_pending_bets(sport='all')
+        self.assertEqual(counts['mlb'], 1)
