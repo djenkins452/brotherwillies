@@ -11,6 +11,8 @@ class UserGameInteraction(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='game_interactions')
     game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
     cbb_game = models.ForeignKey('cbb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
+    mlb_game = models.ForeignKey('mlb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
+    college_baseball_game = models.ForeignKey('college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='interactions')
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     page_key = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -30,6 +32,8 @@ class ModelResultSnapshot(models.Model):
     ]
     game = models.ForeignKey('cfb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
     cbb_game = models.ForeignKey('cbb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
+    mlb_game = models.ForeignKey('mlb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
+    college_baseball_game = models.ForeignKey('college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='result_snapshots')
     captured_at = models.DateTimeField(auto_now_add=True)
     market_prob = models.FloatField()
     house_prob = models.FloatField()

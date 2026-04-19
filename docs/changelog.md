@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-04-19 - Baseball Expansion Phase 2: Live data ingestion
+
+**Summary:** Baseball data now flows from real production APIs. MLB pulls schedule, teams, probable pitchers, and live scores from `statsapi.mlb.com`; pitcher season stats pull from the MLB `/people` endpoint and are distilled into a 10–95 rating. College Baseball pulls full D1 schedule + live scores from ESPN's public scoreboard. Odds for both sports come from the existing Odds API. All ingestion is idempotent via `(source, external_id)` constraints. Verified against live data: 30 MLB teams / 123 games / 108 pitchers / 66 with stats ingested in a single run; 44 D1 baseball games ingested concurrently.
+
+### New providers
+- `apps/datahub/providers/mlb/schedule_provider.py` — statsapi.mlb.com `/v1/schedule` with `hydrate=probablePitcher`
+- `apps/datahub/providers/mlb/pitcher_stats_provider.py` — `/v1/people?personIds=...&hydrate=stats(...)` batched by 40
+- `apps/datahub/providers/mlb/odds_provider.py` — Odds API `baseball_mlb`
+- `apps/datahub/providers/mlb/name_aliases.py` — minor-variation normalizer
+- `apps/datahub/providers/college_baseball/schedule_provider.py` — ESPN public `college-baseball/scoreboard`, `groups=50` (full D1)
+- `apps/datahub/providers/college_baseball/odds_provider.py` — Odds API `baseball_ncaa` (sparse; degrades gracefully to empty)
+
+### Pipeline wiring
+- `apps/datahub/providers/registry.py` — all 5 new provider entries
+- `apps/datahub/management/commands/ingest_schedule.py` / `ingest_odds.py` — added `mlb` + `college_baseball` choices and toggle keys
+- `apps/datahub/management/commands/ingest_pitcher_stats.py` — NEW, separate cadence for MLB pitcher stats
+- `apps/datahub/management/commands/refresh_data.py` — new SPORTS_CONFIG shape `(sport, toggle, has_injuries, has_pitcher_stats)`; disabled sports now print a visible "skipped" line instead of silently skipping
+- `apps/datahub/management/commands/capture_snapshots.py` — added MLB + CB branches
+- `apps/datahub/management/commands/resolve_outcomes.py` — collapsed per-sport duplication into a shared `_resolve_by_fk(fk, time_field)` helper covering CFB / CBB / MLB / CB (refactor, no behavior change for existing sports)
+
+### Model changes
+- `apps/analytics/models.py` — added nullable FKs `mlb_game` and `college_baseball_game` on both `ModelResultSnapshot` and `UserGameInteraction`; migration `analytics.0003` applied
+- `apps/datahub/team_colors.py` — added 30 MLB hex colors; `get_team_color(slug, sport)` extended with `mlb` and `college_baseball` (CB falls back to CFB/CBB colors for shared programs)
+- `apps/mlb/services/model_service.py` + `apps/college_baseball/services/model_service.py` — stubs expanded to include `compute_house_win_prob`, `compute_user_win_prob`, `compute_data_confidence`, `compute_edges` so downstream callers can bind against a stable interface now; real logistic model lands Phase 3
+
+### Architectural note
+Per project direction ("shared abstractions are the right move, use them"), `resolve_outcomes` was refactored into a parameterized helper rather than adding two more copies of 30 nearly-identical lines. Behavior is unchanged for existing CFB/CBB paths.
+
+### Verified
+- `python manage.py check` — clean
+- `python manage.py makemigrations` — analytics 0003 only; no spurious migrations on other apps
+- `python manage.py refresh_data` with all baseball toggles off — clean, prints skip lines
+- `python manage.py ingest_schedule --sport=mlb --force` — 123 games created against live `statsapi.mlb.com`
+- `python manage.py ingest_pitcher_stats --sport=mlb --force` — 66 pitchers updated with real ERA/WHIP/K9, ratings spread 11.8–87.7
+- `python manage.py ingest_schedule --sport=college_baseball --force` — 44 D1 games created against ESPN
+- Smoke tests for mlb/college_baseball/analytics still green
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 1: MLB + College Baseball apps scaffolded
 
 **Summary:** Added two new Django apps — `apps.mlb` and `apps.college_baseball` — as first-class sports alongside CFB, CBB, and Golf. This phase lays the schema, admin, URL, and template foundation. No live data is ingested yet (Phase 2), no prediction model is wired (Phase 3), and no lobby/mockbet integration is in place (Phases 5 & 6). Hitting `/mlb/` or `/college-baseball/` now renders a "Data temporarily unavailable" state until ingestion is enabled.

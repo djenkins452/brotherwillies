@@ -3,6 +3,10 @@
 Populates final_outcome and closing_market_prob on ModelResultSnapshot
 records for games that have finished and have scores. Designed to run
 as part of the refresh_data cron cycle.
+
+Per-sport helpers exist because each sport model has its own game-time
+field name (kickoff / tipoff / first_pitch). The body of each helper is
+otherwise identical — kept readable over DRY-for-DRY's-sake here.
 """
 
 import logging
@@ -14,6 +18,8 @@ from apps.analytics.models import ModelResultSnapshot
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_SPORTS = ['cfb', 'cbb', 'mlb', 'college_baseball', 'all']
+
 
 class Command(BaseCommand):
     help = 'Resolve outcomes for completed games'
@@ -22,74 +28,66 @@ class Command(BaseCommand):
         parser.add_argument(
             '--sport',
             type=str,
-            choices=['cfb', 'cbb', 'all'],
+            choices=SUPPORTED_SPORTS,
             default='all',
         )
 
     def handle(self, *args, **options):
         sport = options['sport']
-
-        cfb_count = 0
-        cbb_count = 0
+        counts = {'cfb': 0, 'cbb': 0, 'mlb': 0, 'college_baseball': 0}
 
         if sport in ('cfb', 'all'):
-            cfb_count = self._resolve_cfb()
-
+            counts['cfb'] = self._resolve_cfb()
         if sport in ('cbb', 'all'):
-            cbb_count = self._resolve_cbb()
+            counts['cbb'] = self._resolve_cbb()
+        if sport in ('mlb', 'all'):
+            counts['mlb'] = self._resolve_by_fk(
+                fk='mlb_game', time_field='first_pitch',
+            )
+        if sport in ('college_baseball', 'all'):
+            counts['college_baseball'] = self._resolve_by_fk(
+                fk='college_baseball_game', time_field='first_pitch',
+            )
 
-        self.stdout.write(
-            self.style.SUCCESS(f'Resolved {cfb_count} CFB + {cbb_count} CBB outcomes')
-        )
+        self.stdout.write(self.style.SUCCESS(
+            f"Resolved {counts['cfb']} CFB + {counts['cbb']} CBB + "
+            f"{counts['mlb']} MLB + {counts['college_baseball']} CB outcomes"
+        ))
 
     def _resolve_cfb(self):
-        snapshots = ModelResultSnapshot.objects.filter(
-            game__isnull=False,
-            final_outcome__isnull=True,
-            game__status='final',
-            game__home_score__isnull=False,
-            game__away_score__isnull=False,
-        ).select_related('game').prefetch_related('game__odds_snapshots')
-
-        resolved = 0
-        for snap in snapshots:
-            game = snap.game
-            home_won = game.home_score > game.away_score
-
-            # Closing line = last odds captured before kickoff
-            closing_odds = game.odds_snapshots.filter(
-                captured_at__lt=game.kickoff
-            ).order_by('-captured_at').first()
-            closing_prob = closing_odds.market_home_win_prob if closing_odds else None
-
-            try:
-                with transaction.atomic():
-                    snap.final_outcome = home_won
-                    snap.closing_market_prob = closing_prob
-                    snap.save()
-                resolved += 1
-            except Exception as e:
-                logger.error(f'Failed to resolve CFB snapshot {snap.id}: {e}')
-
-        return resolved
+        return self._resolve_by_fk(fk='game', time_field='kickoff')
 
     def _resolve_cbb(self):
-        snapshots = ModelResultSnapshot.objects.filter(
-            cbb_game__isnull=False,
-            final_outcome__isnull=True,
-            cbb_game__status='final',
-            cbb_game__home_score__isnull=False,
-            cbb_game__away_score__isnull=False,
-        ).select_related('cbb_game').prefetch_related('cbb_game__odds_snapshots')
+        return self._resolve_by_fk(fk='cbb_game', time_field='tipoff')
+
+    def _resolve_by_fk(self, fk, time_field):
+        """Shared resolver parameterized by FK column + time field name."""
+        filter_kwargs = {
+            f'{fk}__isnull': False,
+            'final_outcome__isnull': True,
+            f'{fk}__status': 'final',
+            f'{fk}__home_score__isnull': False,
+            f'{fk}__away_score__isnull': False,
+        }
+        snapshots = (
+            ModelResultSnapshot.objects.filter(**filter_kwargs)
+            .select_related(fk)
+            .prefetch_related(f'{fk}__odds_snapshots')
+        )
 
         resolved = 0
         for snap in snapshots:
-            game = snap.cbb_game
+            game = getattr(snap, fk)
+            if game is None:
+                continue
             home_won = game.home_score > game.away_score
+            game_time = getattr(game, time_field)
 
-            closing_odds = game.odds_snapshots.filter(
-                captured_at__lt=game.tipoff
-            ).order_by('-captured_at').first()
+            closing_odds = (
+                game.odds_snapshots.filter(captured_at__lt=game_time)
+                .order_by('-captured_at')
+                .first()
+            )
             closing_prob = closing_odds.market_home_win_prob if closing_odds else None
 
             try:
@@ -99,6 +97,6 @@ class Command(BaseCommand):
                     snap.save()
                 resolved += 1
             except Exception as e:
-                logger.error(f'Failed to resolve CBB snapshot {snap.id}: {e}')
+                logger.error(f'Failed to resolve {fk} snapshot {snap.id}: {e}')
 
         return resolved

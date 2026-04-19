@@ -545,10 +545,55 @@ CBB_TEAM_COLORS = {
 }
 
 
+MLB_TEAM_COLORS = {
+    'arizona-diamondbacks': '#A71930',
+    'atlanta-braves': '#CE1141',
+    'baltimore-orioles': '#DF4601',
+    'boston-red-sox': '#BD3039',
+    'chicago-cubs': '#0E3386',
+    'chicago-white-sox': '#27251F',
+    'cincinnati-reds': '#C6011F',
+    'cleveland-guardians': '#00385D',
+    'colorado-rockies': '#33006F',
+    'detroit-tigers': '#0C2340',
+    'houston-astros': '#002D62',
+    'kansas-city-royals': '#004687',
+    'los-angeles-angels': '#BA0021',
+    'los-angeles-dodgers': '#005A9C',
+    'miami-marlins': '#00A3E0',
+    'milwaukee-brewers': '#12284B',
+    'minnesota-twins': '#002B5C',
+    'new-york-mets': '#002D72',
+    'new-york-yankees': '#0C2C56',
+    'oakland-athletics': '#003831',
+    'athletics': '#003831',
+    'philadelphia-phillies': '#E81828',
+    'pittsburgh-pirates': '#FDB827',
+    'san-diego-padres': '#2F241D',
+    'san-francisco-giants': '#FD5A1E',
+    'seattle-mariners': '#0C2C56',
+    'st-louis-cardinals': '#C41E3A',
+    'tampa-bay-rays': '#092C5C',
+    'texas-rangers': '#003278',
+    'toronto-blue-jays': '#134A8E',
+    'washington-nationals': '#AB0003',
+}
+
+
 def get_team_color(slug, sport='cfb'):
     """Look up a team's primary color by slug.
     Returns hex color string or empty string if not found.
     """
     if sport == 'cbb':
         return CBB_TEAM_COLORS.get(slug, '')
+    if sport == 'mlb':
+        return MLB_TEAM_COLORS.get(slug, '')
+    if sport == 'college_baseball':
+        # Many D1 baseball schools share colors with their CFB/CBB programs;
+        # fall back through both before giving up.
+        return (
+            CFB_TEAM_COLORS.get(slug)
+            or CBB_TEAM_COLORS.get(slug)
+            or ''
+        )
     return CFB_TEAM_COLORS.get(slug, '')

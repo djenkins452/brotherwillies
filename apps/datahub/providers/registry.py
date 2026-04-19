@@ -6,6 +6,15 @@ from apps.datahub.providers.cfb.odds_provider import CFBOddsProvider
 from apps.datahub.providers.cfb.injuries_provider import CFBInjuriesProvider
 from apps.datahub.providers.golf.schedule_provider import GolfScheduleProvider
 from apps.datahub.providers.golf.odds_provider import GolfOddsProvider
+from apps.datahub.providers.mlb.schedule_provider import MLBScheduleProvider
+from apps.datahub.providers.mlb.pitcher_stats_provider import MLBPitcherStatsProvider
+from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
+from apps.datahub.providers.college_baseball.schedule_provider import (
+    CollegeBaseballScheduleProvider,
+)
+from apps.datahub.providers.college_baseball.odds_provider import (
+    CollegeBaseballOddsProvider,
+)
 
 _PROVIDERS = {
     ('cbb', 'schedule'): CBBScheduleProvider,
@@ -16,6 +25,11 @@ _PROVIDERS = {
     ('cfb', 'injuries'): CFBInjuriesProvider,
     ('golf', 'schedule'): GolfScheduleProvider,
     ('golf', 'odds'): GolfOddsProvider,
+    ('mlb', 'schedule'): MLBScheduleProvider,
+    ('mlb', 'pitcher_stats'): MLBPitcherStatsProvider,
+    ('mlb', 'odds'): MLBOddsProvider,
+    ('college_baseball', 'schedule'): CollegeBaseballScheduleProvider,
+    ('college_baseball', 'odds'): CollegeBaseballOddsProvider,
 }
 
 
