@@ -38,6 +38,8 @@ class Team(models.Model):
     abbreviation = models.CharField(max_length=5, blank=True, default='')
     external_id = models.CharField(max_length=50, blank=True, default='')
     source = models.CharField(max_length=30, choices=SOURCE_CHOICES, blank=True, default='')
+    wins = models.IntegerField(null=True, blank=True)
+    losses = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']
@@ -78,6 +80,8 @@ class StartingPitcher(models.Model):
     whip = models.FloatField(null=True, blank=True)
     k_per_9 = models.FloatField(null=True, blank=True)
     innings_pitched = models.FloatField(null=True, blank=True)
+    wins = models.IntegerField(null=True, blank=True)
+    losses = models.IntegerField(null=True, blank=True)
 
     # Derived
     rating = models.FloatField(default=50.0)

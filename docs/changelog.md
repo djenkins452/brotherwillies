@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-04-19 - Pitcher + team W/L records (MLB & College Baseball)
+
+**Summary:** Baseball game detail pages now display W/L records — team records in the matchup header for both MLB and College Baseball, and pitcher W/L as a small badge next to the pitcher's name on MLB. Data comes from existing API endpoints (no new third-party dependencies); only extra call is one `/v1/standings` request per MLB refresh cycle.
+
+### Changes
+- `apps/mlb/models.py` — added nullable `wins`/`losses` IntegerField to `Team` and `StartingPitcher`. Migration: `mlb/0002_startingpitcher_losses_startingpitcher_wins_and_more`.
+- `apps/college_baseball/models.py` — added nullable `wins`/`losses` IntegerField to `Team`. Migration: `college_baseball/0002_team_losses_team_wins`.
+- `apps/datahub/providers/mlb/pitcher_stats_provider.py` — parses `wins`/`losses` from the existing `/v1/people?hydrate=stats(...)` response and persists on each `StartingPitcher`. No new API call.
+- `apps/datahub/providers/mlb/team_record_provider.py` — **new** provider. Calls `/v1/standings?leagueId=103,104` once per refresh, upserts W/L onto every `Team`.
+- `apps/datahub/providers/registry.py` — registers `('mlb', 'team_record')`.
+- `apps/datahub/management/commands/ingest_team_records.py` — **new** command wrapping the provider (MLB-only for now). Gated by `LIVE_DATA_ENABLED` + `LIVE_MLB_ENABLED`.
+- `apps/datahub/management/commands/refresh_data.py` + `ensure_seed.py` — extended the sports config tuple with `has_team_records` and wired MLB to invoke `ingest_team_records` after pitcher stats.
+- `apps/datahub/providers/college_baseball/schedule_provider.py` — new helpers `_parse_record_summary` and `_extract_overall_record` pull team W/L from the ESPN competitor `records` array. `_upsert_team` now accepts `wins`/`losses` and only overwrites when provided (avoids stomping a fresher value with None). No new API call.
+- `templates/mlb/game_detail.html` — team record `(W-L)` in matchup header; pitcher W/L badge next to pitcher name (only rendered when both values non-null).
+- `templates/college_baseball/game_detail.html` — team record `(W-L)` in matchup header.
+
+### Tests (13 new)
+- `apps/mlb/tests.py`: pitcher W/L normalize (with + without keys), pitcher W/L persist, team record normalize, persist, skip-unknown-team.
+- `apps/college_baseball/tests.py`: record summary parsing (valid + garbage), overall-record extraction (named + fallback), end-to-end scoreboard normalize with records.
+
+### Not touched
+- Pitcher `rating` formula (unchanged — still ERA/WHIP/K/9 only; W/L is context, not a rating input)
+- Other sports (CFB, CBB, Golf)
+- `refresh_data` / `ensure_seed` structure — just added one column to the config tuple
+
+### Migration safety
+4 nullable `IntegerField`s across 2 apps, no defaults, no data loss. Applied on next Railway deploy via existing `migrate --noinput` in the start command.
+
+---
+
 ## 2026-04-19 - ensure_seed: add MLB + College Baseball to live ingestion
 
 **Summary:** `ensure_seed` (which runs on every Railway deploy) only invoked live ingestion for CBB, CFB, and Golf. MLB and College Baseball were absent from the sports list, so their `LIVE_*_ENABLED` env vars had no effect at deploy time — only `refresh_data` (cron) would pick them up. Added both to the list, matching the `refresh_data` config (MLB includes pitcher stats).

@@ -40,6 +40,118 @@ class MLBSmokeTests(TestCase):
         self.assertTrue(apps.is_installed('apps.mlb'))
 
 
+class MLBPitcherStatsWinLossTests(TestCase):
+    """Verify the pitcher_stats provider parses + persists W/L."""
+
+    def test_normalize_extracts_wins_and_losses(self):
+        from apps.datahub.providers.mlb.pitcher_stats_provider import (
+            MLBPitcherStatsProvider,
+        )
+        provider = MLBPitcherStatsProvider.__new__(MLBPitcherStatsProvider)
+        raw = [{
+            'id': 99999,
+            'pitchHand': {'code': 'R'},
+            'stats': [{
+                'group': {'displayName': 'pitching'},
+                'splits': [{'stat': {
+                    'era': '2.15', 'whip': '0.92',
+                    'strikeoutsPer9Inn': '11.4',
+                    'inningsPitched': '25.0',
+                    'wins': 3, 'losses': 1,
+                }}],
+            }],
+        }]
+        records = provider.normalize(raw)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['wins'], 3)
+        self.assertEqual(records[0]['losses'], 1)
+
+    def test_persist_writes_wins_and_losses_to_pitcher(self):
+        from apps.datahub.providers.mlb.pitcher_stats_provider import (
+            MLBPitcherStatsProvider,
+        )
+        provider = MLBPitcherStatsProvider.__new__(MLBPitcherStatsProvider)
+        team = _mk_team('Dodgers', 55.0, '119')
+        StartingPitcher.objects.create(
+            team=team, name='Shohei Ohtani', source='mlb_stats_api',
+            external_id='660271',
+        )
+        provider.persist([{
+            'external_id': '660271',
+            'throws': 'L',
+            'era': 2.15, 'whip': 0.92, 'k_per_9': 11.4,
+            'innings_pitched': 25.0,
+            'wins': 3, 'losses': 1,
+        }])
+        p = StartingPitcher.objects.get(external_id='660271')
+        self.assertEqual(p.wins, 3)
+        self.assertEqual(p.losses, 1)
+
+    def test_normalize_handles_missing_wins_losses(self):
+        from apps.datahub.providers.mlb.pitcher_stats_provider import (
+            MLBPitcherStatsProvider,
+        )
+        provider = MLBPitcherStatsProvider.__new__(MLBPitcherStatsProvider)
+        raw = [{
+            'id': 12345,
+            'pitchHand': {'code': 'L'},
+            'stats': [{
+                'group': {'displayName': 'pitching'},
+                'splits': [{'stat': {
+                    'era': '3.00', 'whip': '1.10',
+                    'strikeoutsPer9Inn': '9.0',
+                    'inningsPitched': '10.0',
+                    # No wins / losses keys
+                }}],
+            }],
+        }]
+        records = provider.normalize(raw)
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0]['wins'])
+        self.assertIsNone(records[0]['losses'])
+
+
+class MLBTeamRecordProviderTests(TestCase):
+    """Verify the team_record provider parses /v1/standings and upserts."""
+
+    def test_normalize_extracts_records_per_team(self):
+        from apps.datahub.providers.mlb.team_record_provider import (
+            MLBTeamRecordProvider,
+        )
+        provider = MLBTeamRecordProvider.__new__(MLBTeamRecordProvider)
+        raw = [{
+            'teamRecords': [
+                {'team': {'id': 119}, 'wins': 14, 'losses': 7},
+                {'team': {'id': 109}, 'wins': 9, 'losses': 12},
+            ],
+        }]
+        records = provider.normalize(raw)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]['external_id'], '119')
+        self.assertEqual(records[0]['wins'], 14)
+        self.assertEqual(records[0]['losses'], 7)
+
+    def test_persist_upserts_wins_and_losses_to_team(self):
+        from apps.datahub.providers.mlb.team_record_provider import (
+            MLBTeamRecordProvider,
+        )
+        provider = MLBTeamRecordProvider.__new__(MLBTeamRecordProvider)
+        team = _mk_team('Dodgers', 55.0, '119')
+        provider.persist([{'external_id': '119', 'wins': 14, 'losses': 7}])
+        team.refresh_from_db()
+        self.assertEqual(team.wins, 14)
+        self.assertEqual(team.losses, 7)
+
+    def test_persist_skips_unknown_team(self):
+        from apps.datahub.providers.mlb.team_record_provider import (
+            MLBTeamRecordProvider,
+        )
+        provider = MLBTeamRecordProvider.__new__(MLBTeamRecordProvider)
+        result = provider.persist([{'external_id': '9999', 'wins': 1, 'losses': 1}])
+        self.assertEqual(result['updated'], 0)
+        self.assertEqual(result['skipped'], 1)
+
+
 class MLBPredictionModelTests(TestCase):
     def test_equal_teams_equal_pitchers_neutral_site_is_5050(self):
         home = _mk_team('Home', 50.0, '1')

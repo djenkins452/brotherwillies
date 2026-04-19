@@ -41,6 +41,8 @@ class Team(models.Model):
     abbreviation = models.CharField(max_length=5, blank=True, default='')
     external_id = models.CharField(max_length=50, blank=True, default='')
     source = models.CharField(max_length=30, choices=SOURCE_CHOICES, blank=True, default='')
+    wins = models.IntegerField(null=True, blank=True)
+    losses = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']

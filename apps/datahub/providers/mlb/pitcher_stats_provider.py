@@ -114,6 +114,7 @@ class MLBPitcherStatsProvider(AbstractProvider):
             throws_code = (person.get('pitchHand') or {}).get('code', '') or ''
 
             era = whip = k_per_9 = ip = None
+            wins = losses = None
             stats_blocks = person.get('stats') or []
             for block in stats_blocks:
                 if block.get('group', {}).get('displayName') != 'pitching':
@@ -140,6 +141,14 @@ class MLBPitcherStatsProvider(AbstractProvider):
                         ip = float(ip_val) if ip_val not in (None, '') else ip
                     except (ValueError, TypeError):
                         pass
+                    try:
+                        wins = int(s['wins']) if s.get('wins') not in (None, '') else wins
+                    except (ValueError, TypeError):
+                        pass
+                    try:
+                        losses = int(s['losses']) if s.get('losses') not in (None, '') else losses
+                    except (ValueError, TypeError):
+                        pass
 
             records.append({
                 'external_id': ext_id,
@@ -148,6 +157,8 @@ class MLBPitcherStatsProvider(AbstractProvider):
                 'whip': whip,
                 'k_per_9': k_per_9,
                 'innings_pitched': ip,
+                'wins': wins,
+                'losses': losses,
             })
         return records
 
@@ -169,6 +180,8 @@ class MLBPitcherStatsProvider(AbstractProvider):
             pitcher.whip = item['whip']
             pitcher.k_per_9 = item['k_per_9']
             pitcher.innings_pitched = item['innings_pitched']
+            pitcher.wins = item['wins']
+            pitcher.losses = item['losses']
             rating = compute_pitcher_rating(item['era'], item['whip'], item['k_per_9'])
             if rating is not None:
                 pitcher.rating = rating

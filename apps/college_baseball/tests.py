@@ -18,6 +18,79 @@ class CollegeBaseballSmokeTests(TestCase):
         self.assertTrue(apps.is_installed('apps.college_baseball'))
 
 
+class CollegeBaseballTeamRecordParsingTests(TestCase):
+    """The ESPN schedule provider should parse team W/L from the records array."""
+
+    def test_parse_record_summary_splits_valid(self):
+        from apps.datahub.providers.college_baseball.schedule_provider import (
+            _parse_record_summary,
+        )
+        self.assertEqual(_parse_record_summary('14-7'), (14, 7))
+        self.assertEqual(_parse_record_summary('0-0'), (0, 0))
+
+    def test_parse_record_summary_rejects_garbage(self):
+        from apps.datahub.providers.college_baseball.schedule_provider import (
+            _parse_record_summary,
+        )
+        self.assertEqual(_parse_record_summary(''), (None, None))
+        self.assertEqual(_parse_record_summary('TBD'), (None, None))
+        self.assertEqual(_parse_record_summary(None), (None, None))
+
+    def test_extract_overall_record_prefers_named_overall(self):
+        from apps.datahub.providers.college_baseball.schedule_provider import (
+            _extract_overall_record,
+        )
+        competitor = {
+            'records': [
+                {'name': 'Home', 'summary': '8-2'},
+                {'name': 'overall', 'summary': '14-7'},
+                {'name': 'vs. Conf', 'summary': '5-3'},
+            ],
+        }
+        self.assertEqual(_extract_overall_record(competitor), (14, 7))
+
+    def test_extract_overall_record_falls_back_to_first(self):
+        from apps.datahub.providers.college_baseball.schedule_provider import (
+            _extract_overall_record,
+        )
+        competitor = {'records': [{'summary': '3-1'}]}
+        self.assertEqual(_extract_overall_record(competitor), (3, 1))
+
+    def test_normalize_propagates_team_records(self):
+        """A full scoreboard event with records should surface W/L per side."""
+        from apps.datahub.providers.college_baseball.schedule_provider import (
+            CollegeBaseballScheduleProvider,
+        )
+        provider = CollegeBaseballScheduleProvider.__new__(CollegeBaseballScheduleProvider)
+        raw_event = [{
+            'id': '401ABC',
+            'date': '2026-04-19T18:00Z',
+            'status': {'type': {'state': 'pre'}},
+            'competitions': [{
+                'neutralSite': False,
+                'competitors': [
+                    {
+                        'homeAway': 'home',
+                        'score': '0',
+                        'team': {'id': '123', 'displayName': 'LSU', 'abbreviation': 'LSU'},
+                        'records': [{'name': 'overall', 'summary': '30-10'}],
+                    },
+                    {
+                        'homeAway': 'away',
+                        'score': '0',
+                        'team': {'id': '456', 'displayName': 'Texas', 'abbreviation': 'TEX'},
+                        'records': [{'name': 'overall', 'summary': '25-12'}],
+                    },
+                ],
+            }],
+        }]
+        normalized = provider.normalize(raw_event)
+        self.assertEqual(len(normalized), 1)
+        item = normalized[0]
+        self.assertEqual((item['home_wins'], item['home_losses']), (30, 10))
+        self.assertEqual((item['away_wins'], item['away_losses']), (25, 12))
+
+
 class CollegeBaseballPredictionModelTests(TestCase):
     def _mk_game(self, home_rating=50.0, away_rating=50.0, neutral=False):
         conf, _ = Conference.objects.get_or_create(slug='sec', defaults={'name': 'SEC'})

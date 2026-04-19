@@ -6,10 +6,12 @@
 <div class="card mb-2">
     <div class="teams" style="font-size:1.25rem;font-weight:700;">
         <span class="team-name">{{ game.away_team.name }}</span>
+        {% if game.away_team.wins is not None and game.away_team.losses is not None %}<span class="text-sm text-muted">({{ game.away_team.wins }}-{{ game.away_team.losses }})</span>{% endif %}
         {% if data.latest_odds.spread is not None %}<span class="spread-tag">{{ data.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
         {% if game.away_score is not None %}<span class="game-score">{{ game.away_score }}</span>{% endif %}
         <span class="vs">@</span>
         <span class="team-name">{{ game.home_team.name }}</span>
+        {% if game.home_team.wins is not None and game.home_team.losses is not None %}<span class="text-sm text-muted">({{ game.home_team.wins }}-{{ game.home_team.losses }})</span>{% endif %}
         {% if data.latest_odds.spread is not None %}<span class="spread-tag">{{ data.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
         {% if game.home_score is not None %}<span class="game-score">{{ game.home_score }}</span>{% endif %}
     </div>

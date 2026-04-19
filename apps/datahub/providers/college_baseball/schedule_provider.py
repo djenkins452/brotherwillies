@@ -43,7 +43,37 @@ def _upsert_conference(name):
     return conference
 
 
-def _upsert_team(team_payload, conference):
+def _parse_record_summary(summary):
+    """Parse an ESPN overall-record summary string like "14-7" -> (14, 7)."""
+    if not summary or not isinstance(summary, str):
+        return None, None
+    parts = summary.split('-')
+    if len(parts) < 2:
+        return None, None
+    try:
+        wins = int(parts[0].strip())
+        losses = int(parts[1].strip())
+    except (ValueError, TypeError):
+        return None, None
+    return wins, losses
+
+
+def _extract_overall_record(competitor):
+    """Pull wins/losses from a competitor's `records` array."""
+    for rec in competitor.get('records') or []:
+        # ESPN variants: name='overall', type='total', abbreviation='Total'
+        name = (rec.get('name') or '').lower()
+        rtype = (rec.get('type') or '').lower()
+        if name == 'overall' or rtype in ('total', 'overall'):
+            return _parse_record_summary(rec.get('summary'))
+    # Fall back to first record if the naming isn't explicit
+    recs = competitor.get('records') or []
+    if recs:
+        return _parse_record_summary(recs[0].get('summary'))
+    return None, None
+
+
+def _upsert_team(team_payload, conference, wins=None, losses=None):
     """team_payload is ESPN competitor.team dict."""
     ext_id = str(team_payload.get('id', '') or '')
     name = (
@@ -58,15 +88,22 @@ def _upsert_team(team_payload, conference):
 
     slug = slugify(name)
     color = get_team_color(slug, 'college_baseball') or ''
+    defaults = {
+        'name': name,
+        'slug': slug,
+        'conference': conference,
+        'abbreviation': abbr,
+        'primary_color': color,
+    }
+    # Only overwrite W/L when the payload provided values — avoids stomping
+    # a fresher record with a None from a game that didn't include records.
+    if wins is not None:
+        defaults['wins'] = wins
+    if losses is not None:
+        defaults['losses'] = losses
     team, _ = Team.objects.update_or_create(
         source=SOURCE, external_id=ext_id,
-        defaults={
-            'name': name,
-            'slug': slug,
-            'conference': conference,
-            'abbreviation': abbr,
-            'primary_color': color,
-        },
+        defaults=defaults,
     )
     return team
 
@@ -111,6 +148,7 @@ class CollegeBaseballScheduleProvider(AbstractProvider):
             home_payload = away_payload = None
             home_conf = away_conf = ''
             home_score = away_score = None
+            home_wins = home_losses = away_wins = away_losses = None
             for competitor in comp.get('competitors') or []:
                 team = competitor.get('team') or {}
                 score_raw = competitor.get('score')
@@ -119,14 +157,17 @@ class CollegeBaseballScheduleProvider(AbstractProvider):
                 conf_name = ''
                 if isinstance(groups, dict):
                     conf_name = groups.get('shortName') or groups.get('name') or ''
+                wins, losses = _extract_overall_record(competitor)
                 if competitor.get('homeAway') == 'home':
                     home_payload = team
                     home_score = score
                     home_conf = conf_name
+                    home_wins, home_losses = wins, losses
                 else:
                     away_payload = team
                     away_score = score
                     away_conf = conf_name
+                    away_wins, away_losses = wins, losses
 
             if not home_payload or not away_payload:
                 continue
@@ -151,6 +192,10 @@ class CollegeBaseballScheduleProvider(AbstractProvider):
                 'away_conf': away_conf,
                 'home_score': home_score,
                 'away_score': away_score,
+                'home_wins': home_wins,
+                'home_losses': home_losses,
+                'away_wins': away_wins,
+                'away_losses': away_losses,
             })
         return normalized
 
@@ -163,8 +208,14 @@ class CollegeBaseballScheduleProvider(AbstractProvider):
 
             home_conf = _upsert_conference(item['home_conf'])
             away_conf = _upsert_conference(item['away_conf'])
-            home = _upsert_team(item['home_payload'], home_conf)
-            away = _upsert_team(item['away_payload'], away_conf)
+            home = _upsert_team(
+                item['home_payload'], home_conf,
+                wins=item.get('home_wins'), losses=item.get('home_losses'),
+            )
+            away = _upsert_team(
+                item['away_payload'], away_conf,
+                wins=item.get('away_wins'), losses=item.get('away_losses'),
+            )
             if not home or not away:
                 skipped += 1
                 continue
