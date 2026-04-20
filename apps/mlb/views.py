@@ -7,7 +7,7 @@ from django.utils import timezone
 from apps.mockbets.services.prefill import prefill_from_signals
 
 from .models import Game, Team
-from .services.prioritization import prioritize, sort_live, sort_today
+from .services.prioritization import mark_top_opportunities, prioritize, sort_live, sort_today
 
 
 def _attach_prefill(signals_list, *, authenticated: bool):
@@ -43,6 +43,11 @@ def mlb_hub(request):
     authed = request.user.is_authenticated
     live_tiles = _attach_prefill(sort_live(prioritize(live_qs, user=request.user)), authenticated=authed)
     today_tiles = _attach_prefill(sort_today(prioritize(today_upcoming, user=request.user)), authenticated=authed)
+
+    # Scarcity: only the single highest-conviction Best Bet across the whole
+    # page (live + today) is tagged `is_top_opportunity`. mark_* mutates in
+    # place and reads `settings.MLB_MAX_TOP_OPPORTUNITIES` (default 1).
+    mark_top_opportunities(live_tiles + today_tiles)
 
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,

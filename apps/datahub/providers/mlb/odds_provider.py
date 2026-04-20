@@ -107,13 +107,26 @@ class MLBOddsProvider(AbstractProvider):
         return normalized
 
     def persist(self, normalized):
+        """Persist normalized odds rows. Skips (with structured reason log)
+        when team/game match fails or moneyline is absent. Returns
+        `status='empty'` when nothing was created — upstream fail-fast
+        code relies on this to distinguish "ran but got nothing" from "ran
+        successfully".
+        """
         created = skipped = 0
+        skip_reasons: dict[str, int] = {}
         now = timezone.now()
         for item in normalized:
             home = _find_team(item['home_team'])
             away = _find_team(item['away_team'])
             if not home or not away:
                 skipped += 1
+                reason = 'no_team_match'
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                logger.info(
+                    f"mlb_odds_persist_skip reason={reason} "
+                    f"home={item['home_team']!r} away={item['away_team']!r}"
+                )
                 continue
 
             commence = parse_datetime(item.get('commence_time') or '')
@@ -129,11 +142,23 @@ class MLBOddsProvider(AbstractProvider):
             game = qs.order_by('first_pitch').first()
             if not game:
                 skipped += 1
+                reason = 'no_game_match'
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                logger.info(
+                    f"mlb_odds_persist_skip reason={reason} "
+                    f"home={home.name} away={away.name} commence={commence}"
+                )
                 continue
 
             home_prob = american_to_prob(item.get('moneyline_home'))
             if home_prob is None:
                 skipped += 1
+                reason = 'no_moneyline_home'
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                logger.info(
+                    f"mlb_odds_persist_skip reason={reason} "
+                    f"game={game.id} sportsbook={item['sportsbook']!r}"
+                )
                 continue
 
             OddsSnapshot.objects.create(
@@ -147,4 +172,15 @@ class MLBOddsProvider(AbstractProvider):
                 moneyline_away=item.get('moneyline_away'),
             )
             created += 1
-        return {'status': 'ok', 'created': created, 'skipped': skipped}
+
+        status = 'ok' if created > 0 else 'empty'
+        logger.info(
+            f"mlb_odds_persist_summary created={created} skipped={skipped} "
+            f"skip_reasons={skip_reasons} status={status}"
+        )
+        return {
+            'status': status,
+            'created': created,
+            'skipped': skipped,
+            'skip_reasons': skip_reasons,
+        }

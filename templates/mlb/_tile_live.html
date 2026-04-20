@@ -1,4 +1,4 @@
-{% load tz_extras %}
+{% load tz_extras mlb_reasons %}
 <a href="{% url 'mlb:game' s.game.id %}"
    class="mlb-tile mlb-tile--live mlb-tile--priority-{{ s.priority }}{% if s.has_user_bet %} mlb-tile--has-bet{% endif %}"
    aria-label="Live: {{ s.game.away_team.name }} at {{ s.game.home_team.name }}">
@@ -56,7 +56,7 @@
   {% endif %}
 
   {% if s.reasons %}
-    <footer class="mlb-tile__why">{{ s.reasons.0 }}</footer>
+    <footer class="mlb-tile__why">{{ s.reasons.0|reason_label }}</footer>
   {% endif %}
   {% include "mlb/_tile_actions.html" with s=s %}
 </a>

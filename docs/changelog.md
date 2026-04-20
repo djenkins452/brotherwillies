@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-04-19 - Odds integrity + structured signals + guided choice
+
+**Summary:** Harden the odds ingestion pipeline against silent failure, restructure the signals layer so UI text never leaks upstream, add a real edge signal (line-value discrepancy), and introduce scarcity-constrained "Top Opportunity" highlighting.
+
+### Odds integrity (ships first)
+- **APIClient guardrail** ([apps/datahub/providers/client.py](apps/datahub/providers/client.py)) — every response is now validated before `.json()`. New `NonJSONResponseError` is raised on non-JSON `Content-Type` or on bodies starting with `<html`/`<!doctype`/`<?xml`. The first 200 chars of the body plus URL + status are included in the message. Not retried — an HTML landing page rarely fixes itself within seconds.
+- **Fail-fast on zero creates** ([apps/datahub/management/commands/ingest_odds.py](apps/datahub/management/commands/ingest_odds.py)) — after `provider.run()`, if `created == 0` we raise `RuntimeError` in `DEBUG` and log a `logger.error(...)` high-severity event in prod (fires alerting). Post-ingestion sanity check also counts today's OddsSnapshot rows and logs `{sport}_odds_empty_after_ingest` when the user-visible window is empty even if some rows were written.
+- **MLB persist diagnostics** — structured skip-reason logs (`no_team_match`, `no_game_match`, `no_moneyline_home`) counted and summarized at the end of every run. Return payload now includes `skip_reasons` dict and a `status` of `'empty'` when nothing was created (previously always reported `'ok'`).
+
+### Structured signals
+- **`reasons` are structured keys, not UI strings** — e.g. `'tight_spread'`, `'ace_matchup'`, `'line_value'`. A new template filter [apps/mlb/templatetags/mlb_reasons.py](apps/mlb/templatetags/mlb_reasons.py) (`{{ key|reason_label }}`) maps keys to human-readable labels at render time. Unknown keys fall back to title case so a newly-added key is never a stacktrace.
+- **Actions are structured dicts** — `{'type', 'strength', 'reason'}`. Exactly one primary per game. Primary gets a filled pill; secondary is outlined.
+- **`ACTION_KEYS`, `ACTION_STRENGTHS`, `REASON_KEYS`** exported for static checks.
+
+### New signals
+- **`line_value_discrepancy`** — `|house_prob - market_prob|` computed from [apps/mlb/services/model_service.py](apps/mlb/services/model_service.py) + the latest odds snapshot. Populates `signals.line_value_discrepancy` (always when both probs known), emits `'line_value'` reason + score contribution when ≥ `LINE_VALUE_MIN` (0.06).
+- **`late_game` proxy** — elapsed-time approximation until inning state is ingested: `progression = clamp((now - first_pitch) / 3h)`; `late` when ≥ 0.60. Contributes a small score boost and a `'late_game'` reason for live games in the back half.
+
+### Action quality (Objective 6)
+- **Best Bet** now requires: odds present AND starters known AND not blowout AND at least one strong edge signal (`tight_spread` OR `line_value`). Reason attaches the strongest available signal (`line_value` preferred over `tight_spread`).
+- **Watch Now** priority: close-live > late-game > ace matchup (when not a blowout).
+- **Empty actions is a valid state.** Templates render nothing — no placeholder chips, no clutter.
+
+### Top Opportunity scarcity (Objective 4)
+- New `mark_top_opportunities(signals, n=None)` in the signals layer. Default `n=1` (configurable via `settings.MLB_MAX_TOP_OPPORTUNITIES`). Deterministic tie-breakers: priority_score desc, line_value_discrepancy desc, first_pitch asc, game.id asc.
+- Only one "Top Opportunity" tag appears across the whole page by default — too many dilutes the meaning.
+
+### UI
+- Primary Best Bet: filled green pill with reason text. Secondary Watch Now: outlined red pill.
+- Top Opportunity: gold gradient pill with ★. Used sparingly (n=1 default).
+- Tile `_tile_actions.html` renders the new dict shape with `{type|action_label}` and `{reason|reason_label}` through the template tag library.
+
+### Tests: 58/58 MLB green (14 new)
+- Line value: no odds / equal probs / large discrepancy emits signal
+- Late-game proxy: fresh / two-hour-old / scheduled game behavior
+- Top Opportunity: one by default, configurable n, zero best-bets → zero top, empty-action clean state
+- APIClient: HTML body rejected, non-JSON Content-Type rejected, valid JSON passes
+- ingest_odds fail-fast: zero-created raises RuntimeError in DEBUG
+- Action resolver: Best Bet primary when both fire, Watch Now becomes secondary
+
+### Architecture preserved
+- Signals: service layer (no view coupling, no template logic)
+- View: orchestrates prioritize → sort → mark_top_opportunities → attach prefill
+- Templates: render only, no decisions
+
+---
+
 ## 2026-04-19 - MLB tiles: richer context + dynamic bet selection + pending-bet indicator
 
 **Summary:** Three enhancements to the MLB hub driven by real decision-making feedback.

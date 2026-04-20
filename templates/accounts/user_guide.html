@@ -327,6 +327,21 @@
         logic lives in <code>apps/mlb/services/prioritization.py</code> — templates only render.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Guided choice: Primary vs Secondary</strong> — Action tags carry a strength. When
+        both 💰 Best Bet and 🔥 Watch Now fire on the same game, Best Bet becomes the <em>Primary</em>
+        action (filled pill) and Watch Now becomes <em>Secondary</em> (outlined). Exactly one Primary
+        per game. Nothing is hidden &mdash; the hierarchy makes the best spot obvious. A gold ★
+        <em>Top Opportunity</em> tag appears on only one game per page by default: the single
+        highest-confidence Best Bet across live + today. Configurable via
+        <code>settings.MLB_MAX_TOP_OPPORTUNITIES</code>.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Line-value signal</strong> &mdash; <code>line_value_discrepancy = |house_prob &minus; market_prob|</code>.
+        When the gap is ≥ 6%, the game gets a <em>Model edge vs. market</em> reason and Best Bet
+        attaches that reason in preference to a tight-spread trigger. This is a real "we see
+        something the market doesn't" signal, not just a thin-line bet.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Action tags &amp; one-click mock bets</strong> — MLB tiles carry up to two action tags.
         🔥 <em>Watch Now</em> marks close live games or ace pitching matchups. 💰 <em>Best Bet</em>
         marks games where the market spread is tight (≤1.5) and both starters are known — a TBD pitcher

@@ -8,6 +8,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 MAX_RETRIES = 3
 BACKOFF_BASE = 2  # seconds
+BODY_SNIPPET_LEN = 200  # chars of body to include in non-JSON error messages
+
+
+class NonJSONResponseError(ValueError):
+    """Raised when an upstream API returned a non-JSON body (e.g., HTML
+    landing page for rate limits, auth redirects, or upstream incidents).
+
+    Treated as a hard error: a non-JSON response is almost never a valid
+    state for our ingestion pipeline and silently .json()-ing would either
+    raise an opaque JSONDecodeError or, worse, succeed on junk and poison
+    the DB.
+    """
 
 
 class APIClient:
@@ -24,8 +36,34 @@ class APIClient:
         if elapsed < self.rate_limit_delay:
             time.sleep(self.rate_limit_delay - elapsed)
 
+    @staticmethod
+    def _validate_json_response(resp, url):
+        """Guardrail against HTML/error-page responses served with 2xx.
+
+        Many providers return a 200 HTML page for rate limits, expired keys,
+        WAF challenges, etc. Our pipelines MUST fail loudly in that case
+        rather than poison the DB or silently skip.
+        """
+        ct = resp.headers.get('Content-Type', '')
+        body_head = (resp.text or '').lstrip()[:BODY_SNIPPET_LEN]
+        if 'json' not in ct.lower():
+            raise NonJSONResponseError(
+                f"Non-JSON response from {url} "
+                f"(status {resp.status_code}, Content-Type {ct!r}): {body_head!r}"
+            )
+        if body_head[:10].lower().startswith(('<html', '<!doctype', '<?xml')):
+            raise NonJSONResponseError(
+                f"HTML body from {url} (status {resp.status_code}): {body_head!r}"
+            )
+
     def get(self, path, params=None):
-        """GET request with retries and rate limiting. Returns parsed JSON."""
+        """GET request with retries and rate limiting. Returns parsed JSON.
+
+        Raises NonJSONResponseError if the server returns a non-JSON body
+        (including HTML pages served with 2xx). Raises for HTTP errors after
+        exhausting retries. Does NOT retry NonJSONResponseError — an HTML
+        landing page rarely fixes itself within seconds.
+        """
         url = f"{self.base_url}/{path.lstrip('/')}" if path else self.base_url
         for attempt in range(1, MAX_RETRIES + 1):
             self._wait_for_rate_limit()
@@ -44,6 +82,7 @@ class APIClient:
                     f" (attempt {attempt})"
                 )
                 resp.raise_for_status()
+                self._validate_json_response(resp, url)
                 return resp.json()
             except requests.exceptions.HTTPError as e:
                 if resp.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:

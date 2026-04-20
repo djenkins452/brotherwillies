@@ -320,8 +320,8 @@ class MLBPrioritizationTests(TestCase):
         self._add_injury(g, g.home_team, 'high')
         s = build_signals(g)
         self.assertEqual(s.priority, 'high')
-        self.assertTrue(any('Tight spread' in r for r in s.reasons))
-        self.assertTrue(any('injury' in r.lower() for r in s.reasons))
+        self.assertIn('tight_spread', s.reasons)
+        self.assertIn('high_injury', s.reasons)
 
     def test_blowout_live_demotes(self):
         from apps.mlb.services.prioritization import build_signals
@@ -336,7 +336,7 @@ class MLBPrioritizationTests(TestCase):
         self._add_odds(g, spread=1.5)
         s = build_signals(g)
         self.assertEqual(s.priority, 'high')
-        self.assertTrue(any('Close game' in r for r in s.reasons))
+        self.assertIn('close_game_live', s.reasons)
 
     def test_tbd_pitcher_demotes_and_no_ace_flag(self):
         from apps.mlb.services.prioritization import build_signals
@@ -351,7 +351,7 @@ class MLBPrioritizationTests(TestCase):
         g = self._game(hp_rating=80.0, ap_rating=72.0, ext='ace1')
         s = build_signals(g)
         self.assertTrue(s.ace_matchup)
-        self.assertTrue(any('Ace' in r for r in s.reasons))
+        self.assertIn('ace_matchup', s.reasons)
 
     def test_sort_today_priority_then_time(self):
         from apps.mlb.services.prioritization import build_signals, sort_today
@@ -424,31 +424,34 @@ class MLBActionResolverTests(TestCase):
             moneyline_home=ml_home, moneyline_away=ml_away,
         )
 
+    def _types(self, actions):
+        return [a['type'] for a in actions]
+
     def test_close_live_game_gets_watch_now(self):
         from apps.mlb.services.prioritization import build_signals
         g = self._game(status='live', home_score=3, away_score=2, ext='cl')
         s = build_signals(g)
-        self.assertIn('watch_now', s.actions)
+        self.assertIn('watch_now', self._types(s.actions))
 
     def test_ace_matchup_upcoming_gets_watch_now(self):
         from apps.mlb.services.prioritization import build_signals
         g = self._game(hp_rating=80.0, ap_rating=72.0, ext='ace')
         s = build_signals(g)
-        self.assertIn('watch_now', s.actions)
+        self.assertIn('watch_now', self._types(s.actions))
 
     def test_tight_spread_with_both_pitchers_gets_best_bet(self):
         from apps.mlb.services.prioritization import build_signals
         g = self._game(ext='tb')
         self._add_odds(g, spread=1.0)
         s = build_signals(g)
-        self.assertIn('best_bet', s.actions)
+        self.assertIn('best_bet', self._types(s.actions))
 
     def test_tbd_pitcher_never_gets_best_bet(self):
         from apps.mlb.services.prioritization import build_signals
         g = self._game(pitchers=False, ext='tbd')
         self._add_odds(g, spread=1.0)
         s = build_signals(g)
-        self.assertNotIn('best_bet', s.actions)
+        self.assertNotIn('best_bet', self._types(s.actions))
         self.assertTrue(s.tbd_pitcher)
 
     def test_blowout_gets_no_actions(self):
@@ -459,16 +462,22 @@ class MLBActionResolverTests(TestCase):
         self.assertEqual(s.actions, [])
         self.assertTrue(s.is_blowout)
 
-    def test_max_two_actions(self):
+    def test_best_bet_is_primary_when_both_fire(self):
         from apps.mlb.services.prioritization import build_signals
-        # Close live + ace matchup + tight spread — should still cap at 2
+        # Ace live game + tight spread — both should fire, Best Bet primary.
         g = self._game(
             status='live', home_score=2, away_score=1,
-            hp_rating=80.0, ap_rating=72.0, ext='max',
+            hp_rating=80.0, ap_rating=72.0, ext='bbprim',
         )
         self._add_odds(g, spread=1.0)
         s = build_signals(g)
-        self.assertLessEqual(len(s.actions), 2)
+        primaries = [a for a in s.actions if a['strength'] == 'primary']
+        self.assertEqual(len(primaries), 1)
+        self.assertEqual(primaries[0]['type'], 'best_bet')
+        # Secondary Watch Now follows.
+        secondaries = [a for a in s.actions if a['strength'] == 'secondary']
+        self.assertEqual(len(secondaries), 1)
+        self.assertEqual(secondaries[0]['type'], 'watch_now')
 
 
 class MLBPrefillTests(TestCase):
@@ -662,3 +671,212 @@ class MLBUserBetIndicatorTests(TestCase):
         )
         signals = prioritize([g], user=AnonymousUser())
         self.assertFalse(signals[0].has_user_bet)
+
+
+class MLBLineValueTests(TestCase):
+    """line_value_discrepancy signal — model vs market probability delta."""
+
+    def _game(self, ext):
+        home = _mk_team('VH' + ext, 50.0, 'vh' + ext)
+        away = _mk_team('VA' + ext, 50.0, 'va' + ext)
+        hp = _mk_pitcher(home, 'HP', 50.0, 'vhp' + ext)
+        ap = _mk_pitcher(away, 'AP', 50.0, 'vap' + ext)
+        return Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            neutral_site=True,
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id=ext,
+        )
+
+    def test_no_odds_no_line_value(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('lv1')
+        s = build_signals(g)
+        self.assertIsNone(s.line_value_discrepancy)
+        self.assertNotIn('line_value', s.reasons)
+
+    def test_market_equal_to_model_no_signal(self):
+        from apps.mlb.models import OddsSnapshot
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('lv2')
+        # Equal-strength teams + equal pitchers + neutral site -> house prob = 0.5.
+        # Market prob = 0.5 -> discrepancy = 0 -> no signal.
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5,
+        )
+        s = build_signals(g)
+        self.assertIsNotNone(s.line_value_discrepancy)
+        self.assertLess(s.line_value_discrepancy, 0.06)
+        self.assertNotIn('line_value', s.reasons)
+
+    def test_large_discrepancy_emits_line_value(self):
+        from apps.mlb.models import OddsSnapshot
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('lv3')
+        # Model says 0.5 (equal teams, neutral site), market says 0.3 -> delta 0.2.
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.3,
+        )
+        s = build_signals(g)
+        self.assertGreaterEqual(s.line_value_discrepancy, 0.06)
+        self.assertIn('line_value', s.reasons)
+
+
+class MLBLateGameProxyTests(TestCase):
+    def test_fresh_live_game_is_not_late(self):
+        from apps.mlb.services.prioritization import build_signals
+        home = _mk_team('LH', 50.0, 'lh')
+        away = _mk_team('LA', 50.0, 'la')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() - timedelta(minutes=15),
+            status='live', home_score=1, away_score=0,
+            source='mlb_stats_api', external_id='lg1',
+        )
+        s = build_signals(g)
+        self.assertFalse(s.late_game)
+
+    def test_two_hour_old_live_game_is_late(self):
+        from apps.mlb.services.prioritization import build_signals
+        home = _mk_team('LH2', 50.0, 'lh2')
+        away = _mk_team('LA2', 50.0, 'la2')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() - timedelta(hours=2),
+            status='live', home_score=4, away_score=3,
+            source='mlb_stats_api', external_id='lg2',
+        )
+        s = build_signals(g)
+        self.assertTrue(s.late_game)
+        self.assertIn('late_game', s.reasons)
+
+    def test_scheduled_game_never_late(self):
+        from apps.mlb.services.prioritization import build_signals
+        home = _mk_team('LH3', 50.0, 'lh3')
+        away = _mk_team('LA3', 50.0, 'la3')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() - timedelta(hours=10),  # would be "late" time-wise
+            status='scheduled',
+            source='mlb_stats_api', external_id='lg3',
+        )
+        s = build_signals(g)
+        self.assertFalse(s.late_game)
+
+
+class MLBTopOpportunityTests(TestCase):
+    def _make_best_bet_game(self, ext, spread=1.0, hp_rating=60.0):
+        home = _mk_team('TH' + ext, 50.0, 'th' + ext)
+        away = _mk_team('TA' + ext, 50.0, 'ta' + ext)
+        hp = _mk_pitcher(home, 'HP', hp_rating, 'thp' + ext)
+        ap = _mk_pitcher(away, 'AP', 50.0, 'tap' + ext)
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id='top' + ext,
+        )
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=spread,
+        )
+        return g
+
+    def test_only_one_top_opportunity_by_default(self):
+        from apps.mlb.services.prioritization import prioritize, mark_top_opportunities
+        g1 = self._make_best_bet_game('A')
+        g2 = self._make_best_bet_game('B')
+        signals = prioritize([g1, g2])
+        mark_top_opportunities(signals)
+        flagged = [s for s in signals if s.is_top_opportunity]
+        self.assertEqual(len(flagged), 1)
+
+    def test_n_is_configurable(self):
+        from apps.mlb.services.prioritization import prioritize, mark_top_opportunities
+        g1 = self._make_best_bet_game('C')
+        g2 = self._make_best_bet_game('D')
+        signals = prioritize([g1, g2])
+        mark_top_opportunities(signals, n=2)
+        flagged = [s for s in signals if s.is_top_opportunity]
+        self.assertEqual(len(flagged), 2)
+
+    def test_zero_best_bets_means_zero_top(self):
+        from apps.mlb.services.prioritization import prioritize, mark_top_opportunities
+        # Game without odds — no best_bet action can be primary.
+        home = _mk_team('EH', 50.0, 'eh')
+        away = _mk_team('EA', 50.0, 'ea')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            source='mlb_stats_api', external_id='notop',
+        )
+        signals = prioritize([g])
+        mark_top_opportunities(signals)
+        self.assertFalse(signals[0].is_top_opportunity)
+
+    def test_empty_actions_is_valid_clean_state(self):
+        """A game with no actions renders nothing in the action bar — a
+        blowout with TBD pitchers and no odds has nothing to say."""
+        from apps.mlb.services.prioritization import build_signals
+        home = _mk_team('QH', 50.0, 'qh')
+        away = _mk_team('QA', 50.0, 'qa')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=None, away_pitcher=None,
+            source='mlb_stats_api', external_id='cleanstate',
+        )
+        s = build_signals(g)
+        self.assertEqual(s.actions, [])
+
+
+class APIClientValidationTests(TestCase):
+    """Hard guardrails against HTML / non-JSON responses served with 2xx."""
+
+    def _make_response(self, *, content_type='application/json', text='{"ok": true}', status=200):
+        import requests
+        resp = requests.Response()
+        resp.status_code = status
+        resp.headers['Content-Type'] = content_type
+        resp._content = text.encode('utf-8')
+        return resp
+
+    def test_html_body_rejected(self):
+        from apps.datahub.providers.client import APIClient, NonJSONResponseError
+        resp = self._make_response(content_type='text/html; charset=utf-8',
+                                    text='<!doctype html><html><body>Rate limited</body></html>')
+        with self.assertRaises(NonJSONResponseError) as ctx:
+            APIClient._validate_json_response(resp, 'https://example.com/api')
+        self.assertIn('Non-JSON', str(ctx.exception))
+
+    def test_non_json_content_type_rejected(self):
+        from apps.datahub.providers.client import APIClient, NonJSONResponseError
+        resp = self._make_response(content_type='text/plain', text='quota exceeded')
+        with self.assertRaises(NonJSONResponseError):
+            APIClient._validate_json_response(resp, 'https://example.com/api')
+
+    def test_valid_json_passes(self):
+        from apps.datahub.providers.client import APIClient
+        resp = self._make_response()
+        # No raise expected
+        APIClient._validate_json_response(resp, 'https://example.com/api')
+
+
+class IngestOddsFailFastTests(TestCase):
+    """ingest_odds raises in DEBUG when ingestion produces zero records."""
+
+    def test_zero_created_raises_in_debug(self):
+        from unittest.mock import patch
+        from django.core.management import call_command
+        from django.test.utils import override_settings
+        with patch('apps.datahub.providers.registry.get_provider') as mk:
+            fake = mk.return_value
+            fake.run.return_value = {'status': 'empty', 'created': 0, 'skipped': 5}
+            with override_settings(DEBUG=True):
+                with self.assertRaises(RuntimeError) as ctx:
+                    call_command('ingest_odds', sport='mlb', force=True)
+                self.assertIn('zero records', str(ctx.exception))
