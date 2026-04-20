@@ -538,3 +538,127 @@ class MLBPrefillTests(TestCase):
         json.dumps(data)  # would raise if anything non-serializable
         self.assertEqual(data['sport'], 'mlb')
         self.assertEqual(data['game_id'], str(g.id))
+
+    def test_selections_by_type_always_has_moneyline(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup()
+        data = prefill_from_signals(build_signals(g))
+        ml = data['selections_by_type']['moneyline']
+        labels = [o['label'] for o in ml]
+        self.assertEqual(sorted(labels), ['Royals', 'Yankees'])
+
+    def test_selections_include_spread_and_total_when_market_has_them(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        # home -1.5, total 8.5
+        from apps.mlb.models import OddsSnapshot
+        g = self._setup()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55, spread=-1.5, total=8.5,
+        )
+        data = prefill_from_signals(build_signals(g))
+        spreads = [o['label'] for o in data['selections_by_type']['spread']]
+        totals = [o['label'] for o in data['selections_by_type']['total']]
+        self.assertTrue(any('Yankees -1.5' in s for s in spreads))
+        self.assertTrue(any('Royals +1.5' in s for s in spreads))
+        self.assertIn('Over 8.5', totals)
+        self.assertIn('Under 8.5', totals)
+
+
+class MLBStreakTests(TestCase):
+    """compute_streaks — recent W/L streak computation across teams."""
+
+    def _final(self, home_team, away_team, home_score, away_score, days_ago=0):
+        return Game.objects.create(
+            home_team=home_team, away_team=away_team,
+            first_pitch=timezone.now() - timedelta(days=days_ago),
+            status='final', home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=f'f{home_team.slug}{away_team.slug}{days_ago}',
+        )
+
+    def test_three_game_win_streak(self):
+        from apps.mlb.services.streaks import compute_streaks
+        a = _mk_team('A', 50.0, 'sa')
+        b = _mk_team('B', 50.0, 'sb')
+        # Team A wins 3 most recent games
+        self._final(a, b, 5, 1, days_ago=1)
+        self._final(a, b, 6, 2, days_ago=2)
+        self._final(a, b, 4, 3, days_ago=3)
+        self._final(a, b, 1, 7, days_ago=4)  # loss — ends the streak
+        result = compute_streaks({a.id, b.id})
+        self.assertEqual(result[a.id]['kind'], 'W')
+        self.assertEqual(result[a.id]['count'], 3)
+        self.assertEqual(result[a.id]['label'], 'W3')
+        self.assertEqual(result[b.id]['kind'], 'L')
+        self.assertEqual(result[b.id]['count'], 3)
+
+    def test_single_game_returns_none_below_min(self):
+        from apps.mlb.services.streaks import compute_streaks
+        a = _mk_team('A1', 50.0, 'sa1')
+        b = _mk_team('B1', 50.0, 'sb1')
+        self._final(a, b, 5, 1, days_ago=1)
+        self._final(b, a, 5, 1, days_ago=2)  # A lost previous — W1 streak
+        result = compute_streaks({a.id})
+        # W1 is filtered out — below MIN_STREAK=2
+        self.assertIsNone(result[a.id])
+
+    def test_no_games_returns_none(self):
+        from apps.mlb.services.streaks import compute_streaks
+        a = _mk_team('Lonely', 50.0, 'lone')
+        result = compute_streaks({a.id})
+        self.assertIsNone(result[a.id])
+
+    def test_empty_team_set_returns_empty(self):
+        from apps.mlb.services.streaks import compute_streaks
+        self.assertEqual(compute_streaks(set()), {})
+
+    def test_format_record_handles_null(self):
+        from apps.mlb.services.streaks import format_record
+        a = _mk_team('R1', 50.0, 'r1')
+        self.assertIsNone(format_record(a))  # wins/losses default None
+        a.wins, a.losses = 12, 8
+        a.save()
+        self.assertEqual(format_record(a), '12-8')
+        self.assertIsNone(format_record(None))
+
+
+class MLBUserBetIndicatorTests(TestCase):
+    """has_user_bet is True when the user has a pending MockBet on the game."""
+
+    def test_pending_bet_surfaces(self):
+        from django.contrib.auth import get_user_model
+        from apps.mlb.services.prioritization import prioritize
+        from apps.mockbets.models import MockBet
+        User = get_user_model()
+        u = User.objects.create_user(username='betuser', password='x')
+
+        home = _mk_team('H', 50.0, 'bh')
+        away = _mk_team('A', 50.0, 'ba')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            source='mlb_stats_api', external_id='betgame',
+        )
+        MockBet.objects.create(
+            user=u, sport='mlb', mlb_game=g,
+            bet_type='moneyline', selection='H',
+            odds_american=-120, implied_probability=0.545,
+            stake_amount=100, result='pending',
+        )
+        signals = prioritize([g], user=u)
+        self.assertTrue(signals[0].has_user_bet)
+
+    def test_anonymous_never_flagged(self):
+        from django.contrib.auth.models import AnonymousUser
+        from apps.mlb.services.prioritization import prioritize
+        home = _mk_team('H2', 50.0, 'bh2')
+        away = _mk_team('A2', 50.0, 'ba2')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            source='mlb_stats_api', external_id='anonbet',
+        )
+        signals = prioritize([g], user=AnonymousUser())
+        self.assertFalse(signals[0].has_user_bet)

@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-mlb-context">Apr 19, 2026 &mdash; MLB Tile Context &amp; Bet Dropdown</a> <span class="text-sm text-muted">&bull; Records, streaks, pitcher W/L, dynamic selection dropdown, 🎯 bet indicator</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-actions">Apr 19, 2026 &mdash; MLB Action Layer</a> <span class="text-sm text-muted">&bull; 🔥 Watch Now / 💰 Best Bet tags, one-click mock bets</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-tiles">Apr 19, 2026 &mdash; MLB Tile Priority Layer</a> <span class="text-sm text-muted">&bull; Priority-ranked tiles for live &amp; today's games</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-baseball">Apr 19, 2026 &mdash; Baseball Expansion</a> <span class="text-sm text-muted">&bull; MLB + College Baseball live, pitcher-weighted model, mock bets</span></li>
@@ -23,6 +24,35 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 MLB Tile Context + Bet Dropdown + Pending Indicator            #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-mlb-context">
+    <p class="card-title">Apr 19, 2026 &mdash; MLB Tile Context, Bet Dropdown &amp; Pending Indicator</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Denser tiles, smarter mock-bet flow, and a clear visual signal for bets already in play.</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Everything that matters, on one tile</p>
+        <p class="text-sm">
+            MLB tiles now show each team's season record (e.g. 12-8), a colored streak chip for runs of 2+ games ("W3" green / "L2" red), and each starting pitcher's W-L record next to their name. Live tiles gained the pitcher matchup row too. The numbers come from existing data — no new API calls — and the recent-form streaks are computed from final games in a single batched query per page render.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Selection is a dropdown, not a text field</p>
+        <p class="text-sm">
+            Mock Bet's <em>Selection</em> is now a two-option dropdown driven by the game context. Moneyline lists both teams. Spread lists both sides of the run line with signs attached. Total lists Over/Under with the snapshot's total. Changing the bet type re-populates the dropdown. Type-to-edit still works for sports that don't pass selection options.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🎯 Pending bet indicator</p>
+        <p class="text-sm">
+            If you have a pending mock bet on a game, its tile carries a target icon in the header and a thin green rail down the right edge. One batched query on hub render, skipped entirely for anonymous viewers.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

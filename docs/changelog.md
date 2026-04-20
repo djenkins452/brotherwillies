@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-04-19 - MLB tiles: richer context + dynamic bet selection + pending-bet indicator
+
+**Summary:** Three enhancements to the MLB hub driven by real decision-making feedback.
+
+### What's new
+- **Team records + recent streak on every tile.** The MLB `Team` model already carries `wins`/`losses`; we now render "12-8" inline under each team's name. A new `apps/mlb/services/streaks.py` computes per-team recent form (consecutive W or L from the most recent final, min 2 games) in a single batched query across all teams on the page. Streaks surface as colored chips ("W3" green, "L2" red).
+- **Pitcher records next to names.** Pitchers already ingest W/L; the tile now shows "(2-0)" after each starter's name on both live and upcoming tiles. Live tiles now also show the pitcher matchup row (previously upcoming-only).
+- **Dynamic selection dropdown.** The Mock Bet modal's free-text selection input is replaced with a two-option `<select>` when the caller passes `selections_by_type`. MLB populates it with the two teams for moneyline, the signed spreads for spread bets, and Over/Under for totals (when a total is in the latest odds snapshot). The dropdown re-populates automatically when the user changes bet type. Other sports that don't pass options continue to use the free-text input — the modal contract is backwards-compatible.
+- **Pending-bet indicator.** Logged-in users see a 🎯 icon in the tile header and a thin green rail on the right edge of any game they have a pending mock bet on. Implemented via a single batched query (`MockBet.filter(user=u, result='pending', mlb_game_id__in=[...])`) in `prioritize()`.
+
+### Architecture
+- All three features honor the hub's data-pipeline rule: business logic in services, views orchestrate, templates render. `GameSignals` gained six new display fields (home/away record, streak, pitcher record) plus `has_user_bet`; all are computed once per hub render in batched queries, not per-tile.
+- Streak computation: one query over `Game.objects.filter(status='final', first_pitch__gte=45d_ago)` with an IN on the page's team IDs, walked in-memory to count consecutive matching outcomes.
+- Pending-bet batch: one query for authenticated users; skipped entirely for anonymous.
+
+### Tests (9 new, 44/44 green)
+- Streak computation (3-game streak detection, single-game noise filter, no-games case, empty-input edge, `format_record` null safety).
+- Pending-bet indicator surfaces for the bet's owner; never for anonymous users.
+- Selection dropdown options: moneyline always present, spread/total only when the market exposes them; labels correct for home-POV spreads.
+
+---
+
 ## 2026-04-19 - MLB Action Layer: Watch Now / Best Bet + one-click mock bet
 
 **Summary:** MLB tiles now carry action tags (🔥 Watch Now, 💰 Best Bet) and a Mock Bet button that opens the existing modal with smart-default selection, bet type, and odds already filled in. All logic lives in the signals/service layer; templates stay render-only.

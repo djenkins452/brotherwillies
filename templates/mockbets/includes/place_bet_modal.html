@@ -34,6 +34,7 @@
 
                 <div class="form-group">
                     <label for="mb-selection">Selection</label>
+                    <select id="mb-selection-select" class="form-control" style="display:none;"></select>
                     <input type="text" id="mb-selection" class="form-control" placeholder="e.g., Alabama -7.5">
                 </div>
 
@@ -98,6 +99,34 @@ var GOLF_BET_TYPES = [
     ['matchup', 'Head-to-Head Matchup']
 ];
 
+// Per-open cache of {bet_type: [{value,label}, ...]}. Cleared when no
+// selections_by_type is provided (i.e. current-modal uses free-text input).
+var MB_SELECTIONS_BY_TYPE = null;
+
+function applySelectionsForCurrentType() {
+    // Swap between the <select> dropdown and the free-text <input> based on
+    // whether MB_SELECTIONS_BY_TYPE has options for the active bet type.
+    var input = document.getElementById('mb-selection');
+    var select = document.getElementById('mb-selection-select');
+    var currentType = document.getElementById('mb-bet-type').value;
+    var opts = (MB_SELECTIONS_BY_TYPE && MB_SELECTIONS_BY_TYPE[currentType]) || null;
+    if (!opts || !opts.length) {
+        select.style.display = 'none';
+        select.innerHTML = '';
+        input.style.display = '';
+        return;
+    }
+    select.innerHTML = '';
+    opts.forEach(function(o) {
+        var optEl = document.createElement('option');
+        optEl.value = o.value;
+        optEl.textContent = o.label;
+        select.appendChild(optEl);
+    });
+    select.style.display = '';
+    input.style.display = 'none';
+}
+
 function openMockBetModal(opts) {
     opts = opts || {};
     document.getElementById('mb-sport').value = opts.sport || '';
@@ -123,6 +152,23 @@ function openMockBetModal(opts) {
     if (opts.bet_type) document.getElementById('mb-bet-type').value = opts.bet_type;
     if (opts.edge) document.getElementById('mb-edge').value = opts.edge;
     else document.getElementById('mb-edge').value = '';
+
+    // Dynamic selection dropdown — populated when the caller passes a
+    // `selections_by_type` map. For sports that don't pass options, the
+    // free-text input remains visible (existing behavior).
+    MB_SELECTIONS_BY_TYPE = opts.selections_by_type || null;
+    applySelectionsForCurrentType();
+    // Pre-select the opts.selection on the dropdown when it's one of the
+    // available options (otherwise the select falls back to its first option).
+    if (MB_SELECTIONS_BY_TYPE && opts.selection) {
+        var selectEl = document.getElementById('mb-selection-select');
+        for (var i = 0; i < selectEl.options.length; i++) {
+            if (selectEl.options[i].value === opts.selection) {
+                selectEl.selectedIndex = i;
+                break;
+            }
+        }
+    }
 
     // Golf golfer search: show when sport is golf, reset state
     var searchGroup = document.getElementById('mb-golfer-search-group');
@@ -158,6 +204,7 @@ function closeMockBetModal() {
 }
 
 document.getElementById('mb-odds').addEventListener('input', updateImplied);
+document.getElementById('mb-bet-type').addEventListener('change', applySelectionsForCurrentType);
 
 function updateImplied() {
     var odds = parseInt(document.getElementById('mb-odds').value);
@@ -173,10 +220,16 @@ function submitMockBet() {
     var err = document.getElementById('mb-error');
     err.style.display = 'none';
 
+    // Read selection from whichever element is visible (dropdown when the
+    // caller supplied options, free-text input otherwise).
+    var selectEl = document.getElementById('mb-selection-select');
+    var inputEl = document.getElementById('mb-selection');
+    var selectionValue = (selectEl.style.display !== 'none') ? selectEl.value : inputEl.value;
+
     var body = {
         sport: document.getElementById('mb-sport').value,
         bet_type: document.getElementById('mb-bet-type').value,
-        selection: document.getElementById('mb-selection').value,
+        selection: selectionValue,
         odds_american: document.getElementById('mb-odds').value,
         stake_amount: document.getElementById('mb-stake').value,
         confidence_level: document.getElementById('mb-confidence').value,

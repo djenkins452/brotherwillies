@@ -1,6 +1,6 @@
 {% load tz_extras %}
 <a href="{% url 'mlb:game' s.game.id %}"
-   class="mlb-tile mlb-tile--live mlb-tile--priority-{{ s.priority }}"
+   class="mlb-tile mlb-tile--live mlb-tile--priority-{{ s.priority }}{% if s.has_user_bet %} mlb-tile--has-bet{% endif %}"
    aria-label="Live: {{ s.game.away_team.name }} at {{ s.game.home_team.name }}">
   <span class="mlb-tile__accent-away" style="background: {{ s.game.away_team.primary_color|default:'#6b7280' }};"></span>
   <span class="mlb-tile__accent-home" style="background: {{ s.game.home_team.primary_color|default:'#6b7280' }};"></span>
@@ -8,6 +8,9 @@
   <header class="mlb-tile__header">
     <span class="mlb-live-dot" aria-hidden="true"></span>
     <span class="mlb-tile__status">LIVE</span>
+    {% if s.has_user_bet %}
+      <span class="mlb-bet-indicator" title="You have a pending mock bet on this game" aria-label="Pending mock bet">🎯</span>
+    {% endif %}
     {% if s.priority == 'high' %}
       <span class="mlb-chip mlb-chip--high">Priority</span>
     {% elif s.priority == 'medium' %}
@@ -19,14 +22,38 @@
     <div class="mlb-tile__team">
       <span class="mlb-tile__abbr">{{ s.game.away_team.abbreviation|default:s.game.away_team.slug|upper }}</span>
       <span class="mlb-tile__name">{{ s.game.away_team.name }}</span>
+      {% if s.away_record or s.away_streak %}
+        <span class="mlb-tile__meta">
+          {% if s.away_record %}<span class="mlb-record">{{ s.away_record }}</span>{% endif %}
+          {% if s.away_streak %}<span class="mlb-streak mlb-streak--{{ s.away_streak.kind|lower }}">{{ s.away_streak.label }}</span>{% endif %}
+        </span>
+      {% endif %}
       <span class="mlb-tile__score">{{ s.game.away_score|default_if_none:"0" }}</span>
     </div>
     <div class="mlb-tile__team">
       <span class="mlb-tile__abbr">{{ s.game.home_team.abbreviation|default:s.game.home_team.slug|upper }}</span>
       <span class="mlb-tile__name">{{ s.game.home_team.name }}</span>
+      {% if s.home_record or s.home_streak %}
+        <span class="mlb-tile__meta">
+          {% if s.home_record %}<span class="mlb-record">{{ s.home_record }}</span>{% endif %}
+          {% if s.home_streak %}<span class="mlb-streak mlb-streak--{{ s.home_streak.kind|lower }}">{{ s.home_streak.label }}</span>{% endif %}
+        </span>
+      {% endif %}
       <span class="mlb-tile__score">{{ s.game.home_score|default_if_none:"0" }}</span>
     </div>
   </div>
+
+  {% if s.game.away_pitcher or s.game.home_pitcher %}
+    <div class="mlb-tile__pitchers mlb-tile__pitchers--live">
+      <span class="mlb-pitcher">
+        {{ s.game.away_pitcher.name|default:"TBD" }}{% if s.away_pitcher_record %} <span class="mlb-pitcher-record">({{ s.away_pitcher_record }})</span>{% endif %}
+      </span>
+      <span class="mlb-tile__pitcher-sep">vs</span>
+      <span class="mlb-pitcher">
+        {{ s.game.home_pitcher.name|default:"TBD" }}{% if s.home_pitcher_record %} <span class="mlb-pitcher-record">({{ s.home_pitcher_record }})</span>{% endif %}
+      </span>
+    </div>
+  {% endif %}
 
   {% if s.reasons %}
     <footer class="mlb-tile__why">{{ s.reasons.0 }}</footer>

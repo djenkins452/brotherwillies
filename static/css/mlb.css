@@ -215,9 +215,14 @@
 }
 .mlb-tile--live .mlb-tile__team {
     display: grid;
-    grid-template-columns: 44px 1fr auto;
+    grid-template-columns: 44px 1fr auto auto;
     align-items: center;
     gap: 10px;
+}
+.mlb-tile--live .mlb-tile__meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 .mlb-tile__abbr {
     font-size: 13px;
@@ -253,6 +258,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    gap: 2px;
 }
 .mlb-tile--upcoming .mlb-tile__abbr {
     font-size: 16px;
@@ -260,6 +266,75 @@
 .mlb-tile--upcoming .mlb-tile__name {
     font-size: 11px;
     color: var(--text-muted);
+}
+.mlb-tile--upcoming .mlb-tile__meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+/* Record + streak chips (shared by live + upcoming) */
+.mlb-record {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.mlb-streak {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    line-height: 1.3;
+}
+.mlb-streak--w {
+    background: rgba(34,197,94,0.14);
+    color: #86efac;
+}
+.mlb-streak--l {
+    background: rgba(239,68,68,0.12);
+    color: #fca5a5;
+}
+
+/* Pitcher records — small parenthetical next to pitcher name */
+.mlb-pitcher {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mlb-pitcher-record {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+/* Pitchers row on live tile — slightly more compact than upcoming */
+.mlb-tile__pitchers--live {
+    padding-top: 6px;
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+/* Mock bet indicator — small target icon pinned in the tile header
+   when the logged-in user already has a pending bet on this game. */
+.mlb-bet-indicator {
+    font-size: 13px;
+    line-height: 1;
+    filter: drop-shadow(0 0 4px rgba(34,197,94,0.45));
+}
+
+/* Tile receives a subtle green rail when the user has a pending bet on it,
+   so the scanning eye picks it up without needing to read the icon. */
+.mlb-tile--has-bet {
+    border-right: 2px solid rgba(34,197,94,0.5);
 }
 .mlb-tile__vs {
     font-size: 11px;

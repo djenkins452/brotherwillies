@@ -73,6 +73,15 @@ class GameSignals:
     tbd_pitcher: bool = False       # one or both starters unknown
     actions: list[str] = field(default_factory=list)  # subset of ACTION_KEYS, max 2
 
+    # --- display context ---------------------------------------------------
+    home_record: str | None = None            # "12-8" or None
+    away_record: str | None = None
+    home_streak: dict | None = None           # {'kind': 'W'|'L', 'count': int, 'label': 'W3'}
+    away_streak: dict | None = None
+    home_pitcher_record: str | None = None    # "2-0" or None
+    away_pitcher_record: str | None = None
+    has_user_bet: bool = False                # user has a pending mock bet on this game
+
 
 # Action keys rendered by templates. Keep in sync with tile partials + CSS.
 ACTION_KEYS = ('watch_now', 'best_bet')
@@ -212,8 +221,12 @@ def _bucket(score: float) -> str:
 
 # --- public API --------------------------------------------------------------
 
-def build_signals(game, *, user=None) -> GameSignals:
-    """Compute signals for a single game. Pure function — no DB writes."""
+def build_signals(game, *, user=None, streaks=None, user_bet_game_ids=None) -> GameSignals:
+    """Compute signals for a single game. Pure function — no DB writes.
+
+    `streaks` and `user_bet_game_ids` are optional pre-computed batches
+    from `prioritize()`. Callers that work on a single game may omit both.
+    """
     latest_odds = game.odds_snapshots.order_by('-captured_at').first()
     # Load injuries with .game set for the FK lookup below. Callers that
     # prefetch injuries pay no extra query here.
@@ -257,6 +270,11 @@ def build_signals(game, *, user=None) -> GameSignals:
         is_close = margin <= 2
         is_blowout = margin >= 6
 
+    # --- display context (records, streaks, pitcher W/L, user bet state) ---
+    from .streaks import format_record, format_pitcher_record
+    streaks = streaks or {}
+    user_bet_game_ids = user_bet_game_ids or set()
+
     signals = GameSignals(
         game=game,
         priority=_bucket(score),
@@ -270,14 +288,47 @@ def build_signals(game, *, user=None) -> GameSignals:
         is_blowout=is_blowout,
         late_game=False,          # TODO: populate once inning state is ingested
         tbd_pitcher=not known,
+        home_record=format_record(game.home_team),
+        away_record=format_record(game.away_team),
+        home_streak=streaks.get(game.home_team_id),
+        away_streak=streaks.get(game.away_team_id),
+        home_pitcher_record=format_pitcher_record(game.home_pitcher),
+        away_pitcher_record=format_pitcher_record(game.away_pitcher),
+        has_user_bet=(game.id in user_bet_game_ids),
     )
     signals.actions = resolve_actions(signals)
     return signals
 
 
 def prioritize(games: Iterable, *, user=None) -> list[GameSignals]:
-    """Enrich a list of games with signals. Order is preserved — caller sorts."""
-    return [build_signals(g, user=user) for g in games]
+    """Enrich a list of games with signals. Order is preserved — caller sorts.
+
+    Batches the two DB-touching helpers (streaks + user's pending mock bets)
+    across all games on the page so they cost O(1) queries per hub render
+    instead of O(N).
+    """
+    from .streaks import compute_streaks
+    games = list(games)
+
+    team_ids = set()
+    for g in games:
+        team_ids.add(g.home_team_id)
+        team_ids.add(g.away_team_id)
+    streaks = compute_streaks(team_ids)
+
+    user_bet_game_ids: set = set()
+    if user is not None and getattr(user, 'is_authenticated', False) and games:
+        from apps.mockbets.models import MockBet
+        user_bet_game_ids = set(
+            MockBet.objects
+            .filter(user=user, result='pending', mlb_game_id__in=[g.id for g in games])
+            .values_list('mlb_game_id', flat=True)
+        )
+
+    return [
+        build_signals(g, user=user, streaks=streaks, user_bet_game_ids=user_bet_game_ids)
+        for g in games
+    ]
 
 
 def sort_live(signals: list[GameSignals]) -> list[GameSignals]:

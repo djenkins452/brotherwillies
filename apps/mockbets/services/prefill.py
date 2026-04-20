@@ -43,11 +43,53 @@ def _spread_selection(game, side: str, spread_home_pov: float) -> str:
     return f"{_team_label(game, side)} {sign}{abs(n):g}"
 
 
+def _build_selections(game, odds) -> dict[str, list[dict]]:
+    """Per-bet-type selection options for the modal dropdown.
+
+    Shape: {bet_type: [{'value': str, 'label': str}, ...]}.
+    Only bet types with meaningful options are included — if the market
+    doesn't expose a spread, the 'spread' key is omitted and the modal
+    falls back to the free-text input for that bet type.
+    """
+    home_label = game.home_team.name
+    away_label = game.away_team.name
+
+    out: dict[str, list[dict]] = {
+        'moneyline': [
+            {'value': away_label, 'label': away_label},
+            {'value': home_label, 'label': home_label},
+        ],
+    }
+
+    if odds is not None and odds.spread is not None:
+        # OddsSnapshot.spread is home-POV (negative = home favored).
+        home_num = odds.spread
+        away_num = -odds.spread
+        home_sign = '-' if home_num < 0 else '+'
+        away_sign = '-' if away_num < 0 else '+'
+        home_sel = f"{home_label} {home_sign}{abs(home_num):g}"
+        away_sel = f"{away_label} {away_sign}{abs(away_num):g}"
+        out['spread'] = [
+            {'value': away_sel, 'label': away_sel},
+            {'value': home_sel, 'label': home_sel},
+        ]
+
+    if odds is not None and odds.total is not None:
+        total = odds.total
+        out['total'] = [
+            {'value': f"Over {total:g}", 'label': f"Over {total:g}"},
+            {'value': f"Under {total:g}", 'label': f"Under {total:g}"},
+        ]
+
+    return out
+
+
 def prefill_from_signals(signals) -> dict[str, Any]:
     """Return a JSON-serializable dict for `openMockBetModal(opts)`.
 
     The returned shape is keyed to match the modal's existing contract
-    (sport, game_id, bet_type, selection, odds).
+    (sport, game_id, bet_type, selection, odds) plus `selections_by_type`
+    for the dynamic dropdown.
     """
     game = signals.game
     odds = signals.latest_odds
@@ -72,6 +114,7 @@ def prefill_from_signals(signals) -> dict[str, Any]:
         'game_id': str(game.id),
         'bet_type': bet_type,
         'selection': selection,
+        'selections_by_type': _build_selections(game, odds),
     }
     if odds_american is not None:
         result['odds'] = odds_american

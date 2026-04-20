@@ -332,7 +332,15 @@
         marks games where the market spread is tight (≤1.5) and both starters are known — a TBD pitcher
         always suppresses Best Bet because our model has less information. Logged-in users also see a
         <em>Mock Bet</em> button on each tile that opens the bet modal with the smart-default selection,
-        bet type, and odds already filled in. Override anything before submitting.
+        bet type, and odds already filled in. The <em>Selection</em> field is a two-option dropdown
+        keyed to the current bet type (both teams for moneyline, both signed spreads for spread,
+        Over/Under for total). Override anything before submitting.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Tile context</strong> — Each tile shows both teams' season records, a streak chip when
+        a team is on a run of 2+ W or L games, and each starting pitcher's season W-L record next to
+        their name. If you're logged in and already have a pending mock bet on the game, a 🎯 icon
+        appears in the tile header and a thin green rail lights the right edge.
     </p>
 </div>
 
