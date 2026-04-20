@@ -1074,6 +1074,143 @@ class IngestOddsFailFastTests(TestCase):
                 self.assertIn('zero records', str(ctx.exception))
 
 
+class MLBInjuriesProviderTests(TestCase):
+    """ESPN MLB injury provider — status→impact mapping + aggregation."""
+
+    def test_status_mapping_pitcher_is_high_on_10day(self):
+        from apps.datahub.providers.mlb.injuries_provider import _impact_from_status
+        self.assertEqual(_impact_from_status('10-Day IL', 'SP'), 'high')
+        self.assertEqual(_impact_from_status('15-Day IL', 'SP'), 'high')
+        self.assertEqual(_impact_from_status('60-Day IL', 'P'), 'high')
+
+    def test_status_mapping_position_player(self):
+        from apps.datahub.providers.mlb.injuries_provider import _impact_from_status
+        self.assertEqual(_impact_from_status('Day-To-Day', '1B'), 'low')
+        self.assertEqual(_impact_from_status('10-Day IL', '1B'), 'med')
+        self.assertEqual(_impact_from_status('15-Day IL', '1B'), 'high')
+        self.assertEqual(_impact_from_status('60-Day IL', 'CF'), 'high')
+
+    def test_unknown_status_returns_none(self):
+        from apps.datahub.providers.mlb.injuries_provider import _impact_from_status
+        self.assertIsNone(_impact_from_status('Active', 'SP'))
+        self.assertIsNone(_impact_from_status('', 'SP'))
+        self.assertIsNone(_impact_from_status(None, 'SP'))
+
+    def test_normalize_aggregates_to_worst(self):
+        """A team with both a DTD bat and a 15-day-IL starter is `high`,
+        not `low`. notes carry the top-N most severe in priority order."""
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.injuries_provider import MLBEspnInjuriesProvider
+        raw = [{
+            'team_id': 1,
+            'team_name': 'X',
+            'injuries': [
+                {'athlete': {'fullName': 'Bench Bat', 'position': {'abbreviation': '1B'}},
+                 'status': 'Day-To-Day'},
+                {'athlete': {'fullName': 'Spencer Strider', 'position': {'abbreviation': 'SP'}},
+                 'status': '15-Day IL', 'details': {'returnDate': '2026-05-01'}},
+            ],
+        }]
+        with patch.object(MLBEspnInjuriesProvider, '__init__', return_value=None):
+            p = MLBEspnInjuriesProvider()
+            out = p.normalize(raw)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]['impact_level'], 'high')
+        # Most severe listed first in notes.
+        self.assertTrue(out[0]['notes'].startswith('SP Spencer Strider'))
+
+    def test_normalize_skips_team_with_no_impact(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.injuries_provider import MLBEspnInjuriesProvider
+        raw = [{
+            'team_id': 1, 'team_name': 'X',
+            'injuries': [
+                # Unrecognized status → ignored
+                {'athlete': {'fullName': 'X', 'position': {'abbreviation': '1B'}},
+                 'status': 'Probable'},
+            ],
+        }]
+        with patch.object(MLBEspnInjuriesProvider, '__init__', return_value=None):
+            p = MLBEspnInjuriesProvider()
+            out = p.normalize(raw)
+        self.assertEqual(out, [])
+
+    def test_persist_creates_one_per_upcoming_game(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.injuries_provider import MLBEspnInjuriesProvider
+        from apps.mlb.models import InjuryImpact
+        conf, _ = Conference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        home = Team.objects.create(name='Atlanta Braves', slug='atl', conference=conf)
+        away = Team.objects.create(name='Philadelphia Phillies', slug='phi', conference=conf)
+        g1 = Game.objects.create(home_team=home, away_team=away,
+                                 first_pitch=timezone.now() + timedelta(hours=2),
+                                 source='mlb_stats_api', external_id='ij1')
+        g2 = Game.objects.create(home_team=home, away_team=away,
+                                 first_pitch=timezone.now() + timedelta(days=2),
+                                 source='mlb_stats_api', external_id='ij2')
+        normalized = [{
+            'team_id': home.id,
+            'team_name': home.name,
+            'impact_level': 'high',
+            'notes': 'SP Strider (15-Day IL, return 2026-05-01)',
+            'player_count': 1,
+        }]
+        with patch.object(MLBEspnInjuriesProvider, '__init__', return_value=None):
+            p = MLBEspnInjuriesProvider()
+            result = p.persist(normalized)
+        self.assertEqual(result['created'], 2)
+        self.assertEqual(InjuryImpact.objects.count(), 2)
+        self.assertTrue(all(i.impact_level == 'high' for i in InjuryImpact.objects.all()))
+
+    def test_persist_is_idempotent(self):
+        """Second run with the same normalized data updates, does not duplicate."""
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.injuries_provider import MLBEspnInjuriesProvider
+        from apps.mlb.models import InjuryImpact
+        conf, _ = Conference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        home = Team.objects.create(name='Atlanta Braves', slug='atl2', conference=conf)
+        away = Team.objects.create(name='Philadelphia Phillies', slug='phi2', conference=conf)
+        Game.objects.create(home_team=home, away_team=away,
+                            first_pitch=timezone.now() + timedelta(hours=2),
+                            source='mlb_stats_api', external_id='ij3')
+        normalized = [{'team_id': home.id, 'team_name': home.name,
+                       'impact_level': 'med', 'notes': 'initial', 'player_count': 1}]
+        with patch.object(MLBEspnInjuriesProvider, '__init__', return_value=None):
+            p = MLBEspnInjuriesProvider()
+            p.persist(normalized)
+            normalized[0]['impact_level'] = 'high'
+            normalized[0]['notes'] = 'escalated'
+            r2 = p.persist(normalized)
+        self.assertEqual(r2['updated'], 1)
+        self.assertEqual(r2['created'], 0)
+        self.assertEqual(InjuryImpact.objects.count(), 1)
+        self.assertEqual(InjuryImpact.objects.first().impact_level, 'high')
+        self.assertEqual(InjuryImpact.objects.first().notes, 'escalated')
+
+
+class MLBInjurySignalNotesTests(TestCase):
+    """GameSignals.injury_summary carries per-side notes for tile display."""
+
+    def test_notes_propagate_from_injury_impact(self):
+        from apps.mlb.models import InjuryImpact
+        from apps.mlb.services.prioritization import build_signals
+        conf, _ = Conference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        home = Team.objects.create(name='H', slug='inote-h', conference=conf)
+        away = Team.objects.create(name='A', slug='inote-a', conference=conf)
+        g = Game.objects.create(home_team=home, away_team=away,
+                                first_pitch=timezone.now() + timedelta(hours=1),
+                                source='mlb_stats_api', external_id='inote')
+        InjuryImpact.objects.create(
+            game=g, team=home, impact_level='high',
+            notes='SP Strider (15-Day IL, return 2026-05-01)\nRP Iglesias (Day-To-Day)',
+        )
+        s = build_signals(g)
+        self.assertEqual(s.injury_summary['home'], 'high')
+        # Tile surfaces only the first (worst) line.
+        self.assertIn('SP Strider', s.injury_summary['home_notes'])
+        self.assertEqual(s.injury_summary.get('away_notes', ''), '')
+
+
 class ESPNOddsProviderTests(TestCase):
     """Hermetic tests for the ESPN MLB odds provider — no network."""
 

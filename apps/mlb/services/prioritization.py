@@ -141,7 +141,13 @@ def _live_score_signal(game) -> tuple[float, Optional[str]]:
 
 
 def _injury_signal(injuries) -> tuple[float, Optional[str], dict]:
-    summary = {'home': None, 'away': None}
+    """Aggregate per-team injury impact for a game.
+
+    Returns (score_contrib, reason_key, summary_dict) where summary_dict
+    carries both the impact level and the top player notes per side so
+    the tile can surface *who* is out.
+    """
+    summary = {'home': None, 'away': None, 'home_notes': '', 'away_notes': ''}
     for inj in injuries:
         team_side = 'home' if inj.team_id == inj.game.home_team_id else 'away'
         current = summary[team_side]
@@ -151,9 +157,12 @@ def _injury_signal(injuries) -> tuple[float, Optional[str], dict]:
             summary[team_side] = 'med'
         elif inj.impact_level == 'low' and current is None:
             summary[team_side] = 'low'
-    if 'high' in summary.values():
+        # Surface player notes (first line = most severe) for tile display.
+        if inj.notes and not summary[f'{team_side}_notes']:
+            summary[f'{team_side}_notes'] = inj.notes.split('\n', 1)[0]
+    if 'high' in (summary.get('home'), summary.get('away')):
         return WEIGHTS['high_injury'], 'high_injury', summary
-    if 'med' in summary.values():
+    if 'med' in (summary.get('home'), summary.get('away')):
         return WEIGHTS['med_injury'], 'med_injury', summary
     return 0.0, None, summary
 

@@ -653,6 +653,46 @@
     border-left-color: var(--border);
 }
 
+/* Injury row — renders below the team rows when a team has a meaningful
+   injury. Compact red-tinted lines so the info is scannable but doesn't
+   dominate the tile. Most severe player listed per side. */
+.mlb-tile__injuries {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(239,68,68,0.25);
+    font-size: 11px;
+}
+.mlb-injury {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    color: #fca5a5;
+    min-width: 0;
+}
+.mlb-injury__abbr {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #fecaca;
+    flex: 0 0 auto;
+}
+.mlb-injury__note {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    opacity: 0.9;
+}
+.mlb-injury::before {
+    content: "⚕";
+    color: rgba(239,68,68,0.7);
+    flex: 0 0 auto;
+    font-size: 11px;
+    line-height: 1;
+}
+
 /* ---------- Future games list ---------- */
 .mlb-section--future {
     margin-top: 32px;

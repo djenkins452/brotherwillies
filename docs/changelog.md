@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-04-19 - MLB injury ingestion (ESPN) + tile display
+
+**Summary:** MLB was the only team sport without injury ingestion. ESPN exposes a clean per-team injuries endpoint; we now consume it, aggregate per team, attach to every upcoming game within a 7-day window, and surface the most-severe player on each tile.
+
+### What's new
+- **MLBEspnInjuriesProvider** ([apps/datahub/providers/mlb/injuries_provider.py](apps/datahub/providers/mlb/injuries_provider.py)) — calls `site.api.espn.com/apis/site/v2/sports/baseball/mlb/teams/{teamId}/injuries` for each MLB team (rate-limited). Maps ESPN status strings to our `InjuryImpact` severity:
+  - **Day-To-Day / 7-Day IL** → low (medium for SP)
+  - **10-Day IL** → med (high for SP — losing a starter changes the forecast)
+  - **15-Day IL / 60-Day IL** → high
+  Unknown statuses are ignored (safer than guessing).
+- **Aggregation** — one `InjuryImpact` per (team, game) with impact = most severe among the team's listed injuries. `notes` field carries the top-5 most severe players for the tile, newline-separated. Idempotent via `update_or_create` (no duplicate rows on re-ingest).
+- **Deploy wiring** — `has_injuries` flipped to `True` for MLB in both `ensure_seed.py` and `refresh_data.py` sports configs. Auto-runs on every Railway deploy; also on the cron-driven refresh path.
+- **Registry entry** — `('mlb', 'injuries'): MLBEspnInjuriesProvider`.
+- **Tile surface** — the most severe injury per side is rendered below the team rows on live and upcoming tiles. Red-tinted, dashed top border, ⚕ glyph. Example: `ATL  ⚕ SP Spencer Strider (15-Day IL, return 2026-05-01)`.
+- **Signal-layer integration** — `_injury_signal` continues to feed the priority + confidence calculation via `high_injury` / `med_injury` reasons (existing behavior), but the `injury_summary` dict now also carries `home_notes` / `away_notes` so templates don't need to re-query.
+
+### Tests: 81/81 MLB green (+8 new)
+- Status→impact mapping for SP (10-Day → high) and position players (15-Day → high, 10-Day → med)
+- Unknown / empty status returns None
+- Normalize aggregates a team to its worst impact; notes carry most-severe first
+- Team with no recognized status is dropped entirely
+- `persist` creates one row per (team, upcoming game) in the 7-day window
+- `persist` is idempotent — re-running with escalated severity updates in place
+
+### Architecture preserved
+- Provider is a pure `AbstractProvider` subclass (fetch → normalize → persist).
+- Signals layer reads `InjuryImpact` rows the same way it always has.
+- No view-level changes; no template-level logic — just two new `mlb-injury` spans per tile.
+
+---
+
 ## 2026-04-19 - Confidence, Focus Engine, user state + ESPN odds fallback
 
 ### Odds pipeline (hardened + ESPN fallback)

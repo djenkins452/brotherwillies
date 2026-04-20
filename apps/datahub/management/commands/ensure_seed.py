@@ -35,7 +35,7 @@ class Command(BaseCommand):
             ('cbb',              'LIVE_CBB_ENABLED',              True,  False, False),
             ('cfb',              'LIVE_CFB_ENABLED',              True,  False, False),
             ('golf',             'LIVE_GOLF_ENABLED',             False, False, False),
-            ('mlb',              'LIVE_MLB_ENABLED',              False, True,  True),
+            ('mlb',              'LIVE_MLB_ENABLED',              True,  True,  True),
             ('college_baseball', 'LIVE_COLLEGE_BASEBALL_ENABLED', False, False, False),
         ]
 

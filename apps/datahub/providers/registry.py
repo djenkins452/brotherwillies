@@ -10,6 +10,7 @@ from apps.datahub.providers.mlb.schedule_provider import MLBScheduleProvider
 from apps.datahub.providers.mlb.pitcher_stats_provider import MLBPitcherStatsProvider
 from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
 from apps.datahub.providers.mlb.team_record_provider import MLBTeamRecordProvider
+from apps.datahub.providers.mlb.injuries_provider import MLBEspnInjuriesProvider
 from apps.datahub.providers.college_baseball.schedule_provider import (
     CollegeBaseballScheduleProvider,
 )
@@ -30,6 +31,7 @@ _PROVIDERS = {
     ('mlb', 'pitcher_stats'): MLBPitcherStatsProvider,
     ('mlb', 'odds'): MLBOddsProvider,
     ('mlb', 'team_record'): MLBTeamRecordProvider,
+    ('mlb', 'injuries'): MLBEspnInjuriesProvider,
     ('college_baseball', 'schedule'): CollegeBaseballScheduleProvider,
     ('college_baseball', 'odds'): CollegeBaseballOddsProvider,
 }

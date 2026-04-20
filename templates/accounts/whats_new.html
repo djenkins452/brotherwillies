@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-mlb-injuries">Apr 19, 2026 &mdash; MLB Injury Ingestion</a> <span class="text-sm text-muted">&bull; Per-team injury data from ESPN, surfaced on every tile</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-focus">Apr 19, 2026 &mdash; Confidence, Focus Engine, ESPN odds</a> <span class="text-sm text-muted">&bull; 0–100% confidence, 🔥 Focus banner, 🎯 Bet Placed, ESPN DraftKings fallback</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-guided-choice">Apr 19, 2026 &mdash; Guided Choice + Odds Integrity</a> <span class="text-sm text-muted">&bull; Primary/Secondary actions, ★ Top Opportunity, line-value signal, fail-fast odds pipeline</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-context">Apr 19, 2026 &mdash; MLB Tile Context &amp; Bet Dropdown</a> <span class="text-sm text-muted">&bull; Records, streaks, pitcher W/L, dynamic selection dropdown, 🎯 bet indicator</span></li>
@@ -26,6 +27,35 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 MLB Injury Ingestion                                           #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-mlb-injuries">
+    <p class="card-title">Apr 19, 2026 &mdash; MLB Injury Ingestion</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Superstar on the IL? We should know. MLB now ingests injury data per team from ESPN and surfaces the most-severe player per side on every tile — plus boosts the signal layer accordingly.</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">⚕ On every tile</p>
+        <p class="text-sm">
+            Live and upcoming MLB tiles now show the most-severe current injury per team, e.g. <code>ATL ⚕ SP Spencer Strider (15-Day IL, return 2026-05-01)</code>. Red-tinted, compact, scannable. Only rendered when a team actually has a meaningful injury.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Smart severity mapping</p>
+        <p class="text-sm">
+            Starting pitchers get boosted — a 10-Day IL for an SP is high impact because losing a starter changes the game-level forecast. Position players on short ILs get lower weights. 15-Day and 60-Day ILs are always high. Unknown statuses (Probable, etc.) are ignored rather than mis-classified.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Feeds the confidence engine</p>
+        <p class="text-sm">
+            Injury impact already fed our priority scoring; it now also propagates into the confidence number and can trigger the <em>Key injury</em> reason on tiles. High-impact injuries can demote a Best Bet candidate.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

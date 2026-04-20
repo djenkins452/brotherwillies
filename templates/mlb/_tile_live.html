@@ -55,6 +55,23 @@
     </div>
   {% endif %}
 
+  {% if s.injury_summary.home_notes or s.injury_summary.away_notes %}
+    <div class="mlb-tile__injuries">
+      {% if s.injury_summary.away_notes %}
+        <span class="mlb-injury">
+          <span class="mlb-injury__abbr">{{ s.game.away_team.abbreviation|default:s.game.away_team.slug|upper }}</span>
+          <span class="mlb-injury__note">{{ s.injury_summary.away_notes }}</span>
+        </span>
+      {% endif %}
+      {% if s.injury_summary.home_notes %}
+        <span class="mlb-injury">
+          <span class="mlb-injury__abbr">{{ s.game.home_team.abbreviation|default:s.game.home_team.slug|upper }}</span>
+          <span class="mlb-injury__note">{{ s.injury_summary.home_notes }}</span>
+        </span>
+      {% endif %}
+    </div>
+  {% endif %}
+
   {% if s.reasons %}
     <footer class="mlb-tile__why">{{ s.reasons.0|reason_label }}</footer>
   {% endif %}
