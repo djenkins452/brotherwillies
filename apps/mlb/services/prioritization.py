@@ -66,6 +66,16 @@ class GameSignals:
     injury_summary: dict = field(default_factory=dict)  # {'home': 'high'|None, 'away': ...}
     ace_matchup: bool = False
     pitchers_known: bool = True
+    # --- action-layer flags (Part 1) --------------------------------------
+    is_close_game: bool = False     # live + margin <= 2
+    is_blowout: bool = False        # live + margin >= 6
+    late_game: bool = False         # placeholder — needs inning ingestion
+    tbd_pitcher: bool = False       # one or both starters unknown
+    actions: list[str] = field(default_factory=list)  # subset of ACTION_KEYS, max 2
+
+
+# Action keys rendered by templates. Keep in sync with tile partials + CSS.
+ACTION_KEYS = ('watch_now', 'best_bet')
 
 
 # --- individual signals ------------------------------------------------------
@@ -156,6 +166,42 @@ def _game_importance_signal(game) -> tuple[float, Optional[str]]:
 
 # --- bucketing ---------------------------------------------------------------
 
+def resolve_actions(signals: 'GameSignals') -> list[str]:
+    """Map a GameSignals object to at most two action tags.
+
+    Rules:
+      'watch_now' — live + close score, OR ace matchup that isn't a blowout.
+      'best_bet'  — tight market spread (<=1.5) AND both starters known.
+
+    Deliberate exclusions:
+      - TBD pitcher never yields 'best_bet'. Our model has *less* information
+        when a starter is unknown; pushing a bet in that state would be bad
+        UX. We already demote priority for TBD; skipping the action chip
+        keeps that honest.
+      - 'late_game' is not consulted yet — inning state isn't ingested.
+    """
+    actions: list[str] = []
+
+    # Watch Now: primary = a live game that is actually close.
+    if signals.is_close_game:
+        actions.append('watch_now')
+    elif signals.ace_matchup and not signals.is_blowout:
+        actions.append('watch_now')
+
+    # Best Bet: market spread is tight and we have full pitcher info.
+    odds = signals.latest_odds
+    if (
+        odds is not None
+        and odds.spread is not None
+        and abs(odds.spread) <= 1.5
+        and signals.pitchers_known
+        and not signals.is_blowout
+    ):
+        actions.append('best_bet')
+
+    return actions[:2]
+
+
 def _bucket(score: float) -> str:
     if score >= HIGH_CUTOFF:
         return 'high'
@@ -204,7 +250,14 @@ def build_signals(game, *, user=None) -> GameSignals:
     score += _odds_movement_signal(game)[0]
     score += _game_importance_signal(game)[0]
 
-    return GameSignals(
+    # --- boolean flags for the action layer ------------------------------
+    is_close = is_blowout = False
+    if game.status == 'live' and game.home_score is not None and game.away_score is not None:
+        margin = abs(game.home_score - game.away_score)
+        is_close = margin <= 2
+        is_blowout = margin >= 6
+
+    signals = GameSignals(
         game=game,
         priority=_bucket(score),
         priority_score=round(score, 3),
@@ -213,7 +266,13 @@ def build_signals(game, *, user=None) -> GameSignals:
         injury_summary=injury_summary,
         ace_matchup=ace,
         pitchers_known=known,
+        is_close_game=is_close,
+        is_blowout=is_blowout,
+        late_game=False,          # TODO: populate once inning state is ingested
+        tbd_pitcher=not known,
     )
+    signals.actions = resolve_actions(signals)
+    return signals
 
 
 def prioritize(games: Iterable, *, user=None) -> list[GameSignals]:

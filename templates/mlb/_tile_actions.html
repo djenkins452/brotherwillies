@@ -1,0 +1,19 @@
+{# Action chips + Place Mock Bet button for an MLB tile. `s` = GameSignals. #}
+{% if s.actions or user.is_authenticated %}
+<div class="mlb-tile__actions">
+  {% if 'watch_now' in s.actions %}
+    <span class="mlb-action mlb-action--watch" title="Happening now and worth watching">Watch Now</span>
+  {% endif %}
+  {% if 'best_bet' in s.actions %}
+    <span class="mlb-action mlb-action--bet" title="Signals suggest a betting spot">Best Bet</span>
+  {% endif %}
+  {% if user.is_authenticated and s.prefill_json %}
+    <button type="button"
+            class="mlb-bet-btn"
+            data-mlb-prefill='{{ s.prefill_json }}'
+            onclick="event.preventDefault(); event.stopPropagation(); openMLBBet(this);">
+      Mock Bet
+    </button>
+  {% endif %}
+</div>
+{% endif %}

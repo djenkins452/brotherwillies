@@ -1,9 +1,28 @@
 """MLB views."""
+import json
+
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 
+from apps.mockbets.services.prefill import prefill_from_signals
+
 from .models import Game, Team
 from .services.prioritization import prioritize, sort_live, sort_today
+
+
+def _attach_prefill(signals_list, *, authenticated: bool):
+    """Attach a JSON-encoded prefill payload to each signal for the tile button.
+
+    Only attached for authenticated users — anonymous viewers won't see the
+    Place Mock Bet button, so we skip the work entirely.
+    """
+    if not authenticated:
+        for s in signals_list:
+            s.prefill_json = ''
+        return signals_list
+    for s in signals_list:
+        s.prefill_json = json.dumps(prefill_from_signals(s))
+    return signals_list
 
 
 def mlb_hub(request):
@@ -21,8 +40,9 @@ def mlb_hub(request):
     today_upcoming = [g for g in upcoming_qs if timezone.localtime(g.first_pitch).date() == today_local]
     future_upcoming = [g for g in upcoming_qs if timezone.localtime(g.first_pitch).date() != today_local][:30]
 
-    live_tiles = sort_live(prioritize(live_qs, user=request.user))
-    today_tiles = sort_today(prioritize(today_upcoming, user=request.user))
+    authed = request.user.is_authenticated
+    live_tiles = _attach_prefill(sort_live(prioritize(live_qs, user=request.user)), authenticated=authed)
+    today_tiles = _attach_prefill(sort_today(prioritize(today_upcoming, user=request.user)), authenticated=authed)
 
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,

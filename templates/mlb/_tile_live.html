@@ -31,4 +31,5 @@
   {% if s.reasons %}
     <footer class="mlb-tile__why">{{ s.reasons.0 }}</footer>
   {% endif %}
+  {% include "mlb/_tile_actions.html" with s=s %}
 </a>

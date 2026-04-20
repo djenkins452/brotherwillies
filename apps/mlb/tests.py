@@ -392,3 +392,149 @@ class MLBHubViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         for key in ['live_tiles', 'today_tiles', 'future_games']:
             self.assertIn(key, resp.context, f'missing context key: {key}')
+
+
+class MLBActionResolverTests(TestCase):
+    """Part 1: resolve_actions — map signals to 🔥 Watch Now / 💰 Best Bet."""
+
+    def _game(self, **kwargs):
+        defaults = dict(home_rating=50.0, away_rating=50.0,
+                        hp_rating=50.0, ap_rating=50.0,
+                        status='scheduled', home_score=None, away_score=None,
+                        pitchers=True, ext='ga')
+        defaults.update(kwargs)
+        home = _mk_team('H' + defaults['ext'], defaults['home_rating'], 'h' + defaults['ext'])
+        away = _mk_team('A' + defaults['ext'], defaults['away_rating'], 'a' + defaults['ext'])
+        hp = _mk_pitcher(home, 'HP', defaults['hp_rating'], 'hp' + defaults['ext']) if defaults['pitchers'] else None
+        ap = _mk_pitcher(away, 'AP', defaults['ap_rating'], 'ap' + defaults['ext']) if defaults['pitchers'] else None
+        return Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status=defaults['status'],
+            home_score=defaults['home_score'], away_score=defaults['away_score'],
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id=defaults['ext'],
+        )
+
+    def _add_odds(self, game, spread=None, ml_home=None, ml_away=None):
+        from apps.mlb.models import OddsSnapshot
+        return OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=spread,
+            moneyline_home=ml_home, moneyline_away=ml_away,
+        )
+
+    def test_close_live_game_gets_watch_now(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(status='live', home_score=3, away_score=2, ext='cl')
+        s = build_signals(g)
+        self.assertIn('watch_now', s.actions)
+
+    def test_ace_matchup_upcoming_gets_watch_now(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(hp_rating=80.0, ap_rating=72.0, ext='ace')
+        s = build_signals(g)
+        self.assertIn('watch_now', s.actions)
+
+    def test_tight_spread_with_both_pitchers_gets_best_bet(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(ext='tb')
+        self._add_odds(g, spread=1.0)
+        s = build_signals(g)
+        self.assertIn('best_bet', s.actions)
+
+    def test_tbd_pitcher_never_gets_best_bet(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(pitchers=False, ext='tbd')
+        self._add_odds(g, spread=1.0)
+        s = build_signals(g)
+        self.assertNotIn('best_bet', s.actions)
+        self.assertTrue(s.tbd_pitcher)
+
+    def test_blowout_gets_no_actions(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(status='live', home_score=10, away_score=2, ext='bo')
+        self._add_odds(g, spread=1.0)  # even with tight spread
+        s = build_signals(g)
+        self.assertEqual(s.actions, [])
+        self.assertTrue(s.is_blowout)
+
+    def test_max_two_actions(self):
+        from apps.mlb.services.prioritization import build_signals
+        # Close live + ace matchup + tight spread — should still cap at 2
+        g = self._game(
+            status='live', home_score=2, away_score=1,
+            hp_rating=80.0, ap_rating=72.0, ext='max',
+        )
+        self._add_odds(g, spread=1.0)
+        s = build_signals(g)
+        self.assertLessEqual(len(s.actions), 2)
+
+
+class MLBPrefillTests(TestCase):
+    """Part 3: prefill_from_signals — intelligent defaults for the modal."""
+
+    def _setup(self, *, hp_rating=60.0, ap_rating=50.0, spread=None, ml_home=None, ml_away=None, pitchers=True):
+        home = _mk_team('Yankees', 60.0, 'ph')
+        away = _mk_team('Royals', 40.0, 'pa')
+        hp = _mk_pitcher(home, 'Ace', hp_rating, 'php') if pitchers else None
+        ap = _mk_pitcher(away, 'Arm', ap_rating, 'pap') if pitchers else None
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id='pf',
+        )
+        if spread is not None or ml_home is not None or ml_away is not None:
+            from apps.mlb.models import OddsSnapshot
+            OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5, spread=spread,
+                moneyline_home=ml_home, moneyline_away=ml_away,
+            )
+        return g
+
+    def test_default_selects_better_pitcher_team(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        # Away pitcher much better — prefill should pick the Royals.
+        g = self._setup(hp_rating=45.0, ap_rating=70.0)
+        data = prefill_from_signals(build_signals(g))
+        self.assertEqual(data['selection'], 'Royals')
+
+    def test_defaults_to_home_when_pitchers_tied(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(hp_rating=60.0, ap_rating=60.0)
+        data = prefill_from_signals(build_signals(g))
+        self.assertEqual(data['selection'], 'Yankees')
+        self.assertEqual(data['bet_type'], 'moneyline')
+
+    def test_tight_spread_switches_to_spread_bet(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(spread=-1.5)  # home favored by 1.5
+        data = prefill_from_signals(build_signals(g))
+        self.assertEqual(data['bet_type'], 'spread')
+        # Home-POV spread -1.5 for home side → "Yankees -1.5"
+        self.assertIn('Yankees', data['selection'])
+        self.assertIn('-1.5', data['selection'])
+
+    def test_moneyline_propagates_from_snapshot(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(ml_home=-140, ml_away=120)
+        data = prefill_from_signals(build_signals(g))
+        self.assertEqual(data['bet_type'], 'moneyline')
+        self.assertEqual(data['selection'], 'Yankees')
+        self.assertEqual(data['odds'], -140)
+
+    def test_shape_is_json_serializable(self):
+        import json
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(ml_home=-140, ml_away=120)
+        data = prefill_from_signals(build_signals(g))
+        json.dumps(data)  # would raise if anything non-serializable
+        self.assertEqual(data['sport'], 'mlb')
+        self.assertEqual(data['game_id'], str(g.id))

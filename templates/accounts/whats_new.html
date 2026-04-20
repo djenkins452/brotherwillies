@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-mlb-actions">Apr 19, 2026 &mdash; MLB Action Layer</a> <span class="text-sm text-muted">&bull; 🔥 Watch Now / 💰 Best Bet tags, one-click mock bets</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-tiles">Apr 19, 2026 &mdash; MLB Tile Priority Layer</a> <span class="text-sm text-muted">&bull; Priority-ranked tiles for live &amp; today's games</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-baseball">Apr 19, 2026 &mdash; Baseball Expansion</a> <span class="text-sm text-muted">&bull; MLB + College Baseball live, pitcher-weighted model, mock bets</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-golf">Feb 8, 2026 &mdash; Golf Mock Bets</a> <span class="text-sm text-muted">&bull; Event detail pages, golfer odds, mock bet placement</span></li>
@@ -22,6 +23,35 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 MLB Action Layer                                               #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-mlb-actions">
+    <p class="card-title">Apr 19, 2026 &mdash; MLB Action Layer</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Turn insight into action &mdash; action tags tell you what to do, and one click places a mock bet with everything pre-filled.</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🔥 Watch Now &nbsp; 💰 Best Bet</p>
+        <p class="text-sm">
+            Tiles on the <a href="/mlb/">MLB Hub</a> now carry up to two action tags. <strong>Watch Now</strong> lights up for live games that are close or for ace pitching matchups that haven't turned into blowouts. <strong>Best Bet</strong> lights up when the market spread is tight <em>and</em> both starters are known &mdash; we deliberately suppress it when a pitcher is TBD, because the model has less to work with.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">One-click mock bet</p>
+        <p class="text-sm">
+            Every tile (for logged-in users) has a <em>Mock Bet</em> button. Clicking it opens the bet modal with the selection, bet type, and odds already populated: the team with the higher-rated starter is pre-selected, the bet type flips to <em>spread</em> when the market is within ±1.5, and moneyline odds carry over from the latest snapshot. You can still override anything before submitting.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Architecture</p>
+        <p class="text-sm">
+            All decisions (which action to show, which team to default to) live in a pure service function &mdash; not the template. Templates render what they're handed. No new endpoints; the existing mock-bet AJAX flow is reused.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

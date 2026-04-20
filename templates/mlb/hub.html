@@ -59,6 +59,10 @@
 
   {% endif %}
 </div>
+
+{% if user.is_authenticated %}
+  {% include "mockbets/includes/place_bet_modal.html" %}
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

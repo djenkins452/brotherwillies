@@ -326,6 +326,14 @@
         TBD-pitcher games get demoted. Games beyond today stay in a chronological list. All priority
         logic lives in <code>apps/mlb/services/prioritization.py</code> — templates only render.
     </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Action tags &amp; one-click mock bets</strong> — MLB tiles carry up to two action tags.
+        🔥 <em>Watch Now</em> marks close live games or ace pitching matchups. 💰 <em>Best Bet</em>
+        marks games where the market spread is tight (≤1.5) and both starters are known — a TBD pitcher
+        always suppresses Best Bet because our model has less information. Logged-in users also see a
+        <em>Mock Bet</em> button on each tile that opens the bet modal with the smart-default selection,
+        bet type, and odds already filled in. Override anything before submitting.
+    </p>
 </div>
 
 {# ── 10. Mock Bets ──────────────────────────────────────────────────── #}

@@ -41,4 +41,14 @@
         rail.addEventListener('keydown', onKeydown);
         rail.addEventListener('wheel', onWheel, { passive: false });
     });
+
+    // Mock-bet entry — tile buttons carry a data-mlb-prefill JSON blob.
+    // Defers to the existing openMockBetModal() from place_bet_modal.html.
+    window.openMLBBet = function (btn) {
+        var raw = btn && btn.getAttribute('data-mlb-prefill');
+        if (!raw || typeof window.openMockBetModal !== 'function') return;
+        try {
+            window.openMockBetModal(JSON.parse(raw));
+        } catch (err) { /* malformed payload — ignore */ }
+    };
 })();

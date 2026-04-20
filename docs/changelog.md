@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-04-19 - MLB Action Layer: Watch Now / Best Bet + one-click mock bet
+
+**Summary:** MLB tiles now carry action tags (🔥 Watch Now, 💰 Best Bet) and a Mock Bet button that opens the existing modal with smart-default selection, bet type, and odds already filled in. All logic lives in the signals/service layer; templates stay render-only.
+
+### What's new
+- **Action resolver** — new `resolve_actions(GameSignals) -> list[str]` in `apps/mlb/services/prioritization.py`. Watch Now when a live game is close or an ace matchup isn't a blowout; Best Bet when the market spread is tight (≤1.5) AND both starters are known. Max 2 actions per tile.
+- **Deliberate rule**: TBD pitcher never yields Best Bet. The house model has *less* information when a starter is unknown — pushing a bet in that state would undermine the integrity of the signal. We already demote priority for TBD; this keeps the action layer consistent.
+- **Extended `GameSignals`** — new boolean flags `is_close_game`, `is_blowout`, `late_game` (placeholder until inning ingestion), `tbd_pitcher`, and `actions`. Flags are derived once in `build_signals`; `resolve_actions` consumes only those flags + odds snapshot.
+- **Pre-fill helper** — new `apps/mockbets/services/prefill.py::prefill_from_signals`. Picks the team with the higher-rated starter as the default selection (tie → home). Switches bet type to `spread` when the market shows a tight spread; otherwise moneyline with `moneyline_home/away` propagated from the latest snapshot. Never fabricates odds.
+- **Authenticated-only button** — the Mock Bet button is hidden for anonymous users. The hub only renders the place-bet modal when `user.is_authenticated`, saving the markup + JS cost entirely. View skips prefill serialization for anon too.
+- **One-click flow** — each tile carries `data-mlb-prefill='{...}'`. `static/js/mlb.js` wires `openMLBBet(btn)` → parses the JSON → delegates to the existing `openMockBetModal()` from `place_bet_modal.html`. No new endpoint, no duplicated logic.
+- **Tile UI** — new `_tile_actions.html` partial shared by live + upcoming tiles. Red pill = Watch Now, green pill = Best Bet, accent-outlined Mock Bet button pinned to the right. Button uses `stopPropagation` so it doesn't trigger the tile's outer link.
+- **Tests** — 11 new: 6 action-resolver cases (close live, ace, tight spread, TBD, blowout, max-2 cap) + 5 prefill cases (better-pitcher selection, tie → home, tight spread → spread bet, moneyline passthrough, JSON-serializable shape). MLB suite now 35/35 green.
+
+### Architecture guardrails preserved
+- All business decisions (actions, selection side, bet type) happen in services.
+- Templates only render what they're handed.
+- View orchestrates: prioritize → sort → attach prefill → render.
+- No changes to the `/mockbets/place/` endpoint contract — existing modal + AJAX continue to work identically.
+
+---
+
 ## 2026-04-19 - Pitcher + team W/L records (MLB & College Baseball)
 
 **Summary:** Baseball game detail pages now display W/L records — team records in the matchup header for both MLB and College Baseball, and pitcher W/L as a small badge next to the pitcher's name on MLB. Data comes from existing API endpoints (no new third-party dependencies); only extra call is one `/v1/standings` request per MLB refresh cycle.
