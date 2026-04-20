@@ -318,6 +318,14 @@
         come from The Odds API. If a provider is unreachable, the UI says "Data temporarily unavailable"
         rather than fabricating content.
     </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>MLB tile priority layer</strong> — The <a href="/mlb/">MLB Hub</a> ranks games before
+        rendering. Live and today's games appear as horizontal tiles with a priority chip
+        (<em>Priority</em> / <em>Watch</em>) and a short "why" line. Priority is computed from tight
+        spread, close live score, key injury impact, and ace pitching matchup; blowout live games and
+        TBD-pitcher games get demoted. Games beyond today stay in a chronological list. All priority
+        logic lives in <code>apps/mlb/services/prioritization.py</code> — templates only render.
+    </p>
 </div>
 
 {# ── 10. Mock Bets ──────────────────────────────────────────────────── #}

@@ -1,0 +1,34 @@
+{% load tz_extras %}
+<a href="{% url 'mlb:game' s.game.id %}"
+   class="mlb-tile mlb-tile--live mlb-tile--priority-{{ s.priority }}"
+   aria-label="Live: {{ s.game.away_team.name }} at {{ s.game.home_team.name }}">
+  <span class="mlb-tile__accent-away" style="background: {{ s.game.away_team.primary_color|default:'#6b7280' }};"></span>
+  <span class="mlb-tile__accent-home" style="background: {{ s.game.home_team.primary_color|default:'#6b7280' }};"></span>
+
+  <header class="mlb-tile__header">
+    <span class="mlb-live-dot" aria-hidden="true"></span>
+    <span class="mlb-tile__status">LIVE</span>
+    {% if s.priority == 'high' %}
+      <span class="mlb-chip mlb-chip--high">Priority</span>
+    {% elif s.priority == 'medium' %}
+      <span class="mlb-chip mlb-chip--medium">Watch</span>
+    {% endif %}
+  </header>
+
+  <div class="mlb-tile__teams">
+    <div class="mlb-tile__team">
+      <span class="mlb-tile__abbr">{{ s.game.away_team.abbreviation|default:s.game.away_team.slug|upper }}</span>
+      <span class="mlb-tile__name">{{ s.game.away_team.name }}</span>
+      <span class="mlb-tile__score">{{ s.game.away_score|default_if_none:"0" }}</span>
+    </div>
+    <div class="mlb-tile__team">
+      <span class="mlb-tile__abbr">{{ s.game.home_team.abbreviation|default:s.game.home_team.slug|upper }}</span>
+      <span class="mlb-tile__name">{{ s.game.home_team.name }}</span>
+      <span class="mlb-tile__score">{{ s.game.home_score|default_if_none:"0" }}</span>
+    </div>
+  </div>
+
+  {% if s.reasons %}
+    <footer class="mlb-tile__why">{{ s.reasons.0 }}</footer>
+  {% endif %}
+</a>

@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-mlb-tiles">Apr 19, 2026 &mdash; MLB Tile Priority Layer</a> <span class="text-sm text-muted">&bull; Priority-ranked tiles for live &amp; today's games</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-baseball">Apr 19, 2026 &mdash; Baseball Expansion</a> <span class="text-sm text-muted">&bull; MLB + College Baseball live, pitcher-weighted model, mock bets</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-golf">Feb 8, 2026 &mdash; Golf Mock Bets</a> <span class="text-sm text-muted">&bull; Event detail pages, golfer odds, mock bet placement</span></li>
         <li style="padding:4px 0;"><a href="#feb-8-rebrand">Feb 8, 2026 &mdash; Rebrand</a> <span class="text-sm text-muted">&bull; New logo, penny gold color scheme, parchment textures</span></li>
@@ -21,6 +22,35 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 MLB Tile Priority Layer                                        #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-mlb-tiles">
+    <p class="card-title">Apr 19, 2026 &mdash; MLB Hub: Tile Priority Layer</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A priority-driven command center for real MLB games &mdash; built to answer "what should I care about right now?" at a glance.</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Tiles for what matters now, list for later</p>
+        <p class="text-sm">
+            The <a href="/mlb/">MLB Hub</a> now shows <strong>Live</strong> and <strong>Today's</strong> games as horizontally-scrolling tiles at the top, sorted by a new priority score. Games beyond today stay in a chronological list below &mdash; so the contrast between "now" and "later" is visual, not buried in a scroll.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Priority chips tell you why</p>
+        <p class="text-sm">
+            Tiles can surface an amber <em>Priority</em> chip or a grey <em>Watch</em> chip. A short "why" line on each tile calls out the trigger: close spread, tight live score, key injury, ace pitching matchup. Blowout live games and TBD-pitcher games get demoted automatically.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Designed to extend</p>
+        <p class="text-sm">
+            The signals layer lives in a dedicated service with a single weight table. User favorites, odds movement, and playoff-importance signals are already wired as seams &mdash; they'll switch on as the underlying data lands without a page-wide rewrite. Inning-based live sort is queued for when the ingestion pipeline captures inning state.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

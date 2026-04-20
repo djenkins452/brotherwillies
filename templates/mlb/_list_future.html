@@ -1,0 +1,19 @@
+{% load tz_extras %}
+<ul class="mlb-future-list">
+  {% for g in future_games %}
+    <li class="mlb-future-row">
+      <a href="{% url 'mlb:game' g.id %}" class="mlb-future-link">
+        <span class="mlb-future-date">{{ g.first_pitch|date:"D M j" }}</span>
+        <span class="mlb-future-time">{{ g.first_pitch|date:"g:i A" }} <span class="mlb-tz">{% tz_abbr %}</span></span>
+        <span class="mlb-future-matchup">
+          <span class="mlb-future-team">{{ g.away_team.name }}</span>
+          <span class="mlb-future-at">@</span>
+          <span class="mlb-future-team">{{ g.home_team.name }}</span>
+        </span>
+        <span class="mlb-future-pitchers">
+          {{ g.away_pitcher.name|default:"TBD" }} <span class="mlb-tile__pitcher-sep">vs</span> {{ g.home_pitcher.name|default:"TBD" }}
+        </span>
+      </a>
+    </li>
+  {% endfor %}
+</ul>

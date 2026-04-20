@@ -281,3 +281,114 @@ class MLBPitcherRatingTests(TestCase):
         self.assertIsNone(compute_pitcher_rating(era=None, whip=1.0, k_per_9=8.0))
         self.assertIsNone(compute_pitcher_rating(era=3.0, whip=None, k_per_9=8.0))
         self.assertIsNone(compute_pitcher_rating(era=3.0, whip=1.0, k_per_9=None))
+
+
+class MLBPrioritizationTests(TestCase):
+    """Signals layer: GameSignals bucketing, sorting, and reason text."""
+
+    def _game(self, home_rating=50.0, away_rating=50.0,
+              hp_rating=50.0, ap_rating=50.0,
+              status='scheduled', home_score=None, away_score=None,
+              pitchers=True, ext='g1'):
+        home = _mk_team('Home' + ext, home_rating, 'h' + ext)
+        away = _mk_team('Away' + ext, away_rating, 'a' + ext)
+        hp = _mk_pitcher(home, 'HP', hp_rating, 'hp' + ext) if pitchers else None
+        ap = _mk_pitcher(away, 'AP', ap_rating, 'ap' + ext) if pitchers else None
+        return Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status=status, home_score=home_score, away_score=away_score,
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id=ext,
+        )
+
+    def _add_odds(self, game, spread):
+        from apps.mlb.models import OddsSnapshot
+        return OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=spread,
+        )
+
+    def _add_injury(self, game, team, level='high'):
+        from apps.mlb.models import InjuryImpact
+        return InjuryImpact.objects.create(game=game, team=team, impact_level=level)
+
+    def test_tight_spread_plus_injury_is_high(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(ext='ts1')
+        self._add_odds(g, spread=1.0)
+        self._add_injury(g, g.home_team, 'high')
+        s = build_signals(g)
+        self.assertEqual(s.priority, 'high')
+        self.assertTrue(any('Tight spread' in r for r in s.reasons))
+        self.assertTrue(any('injury' in r.lower() for r in s.reasons))
+
+    def test_blowout_live_demotes(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(status='live', home_score=10, away_score=2, ext='bo1')
+        s = build_signals(g)
+        self.assertEqual(s.priority, 'low')
+        self.assertLess(s.priority_score, 0)
+
+    def test_close_live_game_is_high(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(status='live', home_score=3, away_score=2, ext='cl1')
+        self._add_odds(g, spread=1.5)
+        s = build_signals(g)
+        self.assertEqual(s.priority, 'high')
+        self.assertTrue(any('Close game' in r for r in s.reasons))
+
+    def test_tbd_pitcher_demotes_and_no_ace_flag(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(pitchers=False, ext='tbd1')
+        s = build_signals(g)
+        self.assertFalse(s.pitchers_known)
+        self.assertFalse(s.ace_matchup)
+        self.assertLess(s.priority_score, 0)
+
+    def test_ace_matchup_flagged(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(hp_rating=80.0, ap_rating=72.0, ext='ace1')
+        s = build_signals(g)
+        self.assertTrue(s.ace_matchup)
+        self.assertTrue(any('Ace' in r for r in s.reasons))
+
+    def test_sort_today_priority_then_time(self):
+        from apps.mlb.services.prioritization import build_signals, sort_today
+        early = self._game(ext='early')
+        early.first_pitch = timezone.now() + timedelta(hours=1)
+        early.save()
+        late = self._game(ext='late')
+        late.first_pitch = timezone.now() + timedelta(hours=4)
+        late.save()
+        # Elevate `late` to high via tight spread + injury
+        self._add_odds(late, spread=1.0)
+        self._add_injury(late, late.home_team, 'high')
+        signals = [build_signals(early), build_signals(late)]
+        ordered = sort_today(signals)
+        # late should come first despite later start time — priority wins
+        self.assertEqual(ordered[0].game.external_id, 'late')
+        self.assertEqual(ordered[1].game.external_id, 'early')
+
+    def test_sort_live_priority_only(self):
+        from apps.mlb.services.prioritization import build_signals, sort_live
+        close = self._game(status='live', home_score=2, away_score=1, ext='liveA')
+        blow = self._game(status='live', home_score=10, away_score=0, ext='liveB')
+        signals = [build_signals(blow), build_signals(close)]
+        ordered = sort_live(signals)
+        self.assertEqual(ordered[0].game.external_id, 'liveA')
+
+
+from django.test import override_settings
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MLBHubViewTests(TestCase):
+    def test_hub_context_has_three_buckets(self):
+        resp = self.client.get('/mlb/')
+        self.assertEqual(resp.status_code, 200)
+        for key in ['live_tiles', 'today_tiles', 'future_games']:
+            self.assertIn(key, resp.context, f'missing context key: {key}')

@@ -1,47 +1,66 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}MLB | Brother Willies{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/mlb.css' %}">
+{% endblock %}
+
 {% block content %}
-<div class="container">
-  <h1>MLB</h1>
-  {% if not live_games and not upcoming_games %}
+<div class="mlb-hub">
+  <header class="mlb-hub__header">
+    <h1 class="mlb-hub__title">MLB</h1>
+    <p class="mlb-hub__subtitle">What matters right now</p>
+  </header>
+
+  {% if not live_tiles and not today_tiles and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
     </div>
   {% else %}
-    {% if live_games %}
-      <section>
-        <h2>Live Now</h2>
-        <ul class="game-list">
-          {% for g in live_games %}
-            <li>
-              <a href="{% url 'mlb:game' g.id %}">
-                {{ g.away_team.name }} @ {{ g.home_team.name }}
-                {% if g.away_score is not None %}({{ g.away_score }}–{{ g.home_score }}){% endif %}
-              </a>
-            </li>
+
+    {% if live_tiles %}
+      <section class="mlb-section">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title"><span class="mlb-live-dot" aria-hidden="true"></span> Live Now</h2>
+          <span class="mlb-section__count">{{ live_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail" data-mlb-rail role="list">
+          {% for s in live_tiles %}
+            <div role="listitem">{% include "mlb/_tile_live.html" with s=s %}</div>
           {% endfor %}
-        </ul>
+        </div>
       </section>
     {% endif %}
-    {% if upcoming_games %}
-      <section>
-        <h2>Upcoming</h2>
-        <ul class="game-list">
-          {% for g in upcoming_games %}
-            <li>
-              <a href="{% url 'mlb:game' g.id %}">
-                {{ g.away_team.name }} @ {{ g.home_team.name }} — {{ g.first_pitch|date:"M j, g:i A" }}
-                {% if g.home_pitcher or g.away_pitcher %}
-                  <small>
-                    {{ g.away_pitcher.name|default:"TBD" }} vs {{ g.home_pitcher.name|default:"TBD" }}
-                  </small>
-                {% endif %}
-              </a>
-            </li>
+
+    {% if today_tiles %}
+      <section class="mlb-section">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Today</h2>
+          <span class="mlb-section__count">{{ today_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail" data-mlb-rail role="list">
+          {% for s in today_tiles %}
+            <div role="listitem">{% include "mlb/_tile_upcoming.html" with s=s %}</div>
           {% endfor %}
-        </ul>
+        </div>
       </section>
     {% endif %}
+
+    {% if future_games %}
+      <section class="mlb-section mlb-section--future">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Upcoming</h2>
+          <span class="mlb-section__count">{{ future_games|length }}</span>
+        </div>
+        {% include "mlb/_list_future.html" with future_games=future_games %}
+      </section>
+    {% endif %}
+
   {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/mlb.js' %}" defer></script>
 {% endblock %}

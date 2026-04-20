@@ -70,6 +70,24 @@
 
 ---
 
+## 2026-04-19 - MLB Hub: Tile Priority Layer
+
+**Summary:** Redesigned the MLB hub into a priority-driven command center. Live and today's games are rendered as horizontally-scrolling tiles sorted by a new signals layer; remaining upcoming games stay in a polished list.
+
+### What's new
+- **Signals layer** — new `apps/mlb/services/prioritization.py` computes a `GameSignals` object per game (priority bucket, numeric score, reasons, injury summary, ace-matchup flag). Weights are extensible via a single `WEIGHTS` table and include seams for user favorites / odds movement / game importance.
+- **Three-bucket view** — `mlb_hub` now returns `live_tiles` (priority desc), `today_tiles` (priority desc, then start time), and `future_games` (chronological list, capped at 30). "Today" respects the viewer's timezone via `UserTimezoneMiddleware`.
+- **Tile components** — new partials `templates/mlb/_tile_live.html`, `_tile_upcoming.html`, `_list_future.html`. Live tiles feature a pulsing live dot, score-prominent layout, and priority chips (amber/slate). Upcoming tiles show the pitcher matchup and the top "why" reason.
+- **Scoped CSS** — new `static/css/mlb.css` (loaded via `extra_css` on the hub only; does not bloat the global stylesheet). Uses existing design tokens; respects `prefers-reduced-motion`; responsive at 375px.
+- **Keyboard rail nav** — new `static/js/mlb.js` binds arrow-left/right to scroll within a focused rail and translates vertical wheel to horizontal when a rail overflows.
+- **Tests** — 9 new tests covering bucket thresholds, blowout demotion, TBD-pitcher penalty, ace-matchup detection, and both sort functions. Full MLB suite: 18/18 green.
+
+### Non-goals (today)
+- Inning / progression-based live sort — deferred until inning state is ingested. Live sort is priority-only for now.
+- Favorite team, odds-movement, and playoff-importance signals are wired as no-op seams; they contribute 0 to the score until the upstream data exists.
+
+---
+
 ## 2026-04-19 - Baseball Expansion Phase 11: Final sweep + self-review
 
 **Summary:** Final checks before closing out the expansion. All system checks clean, no pending migrations, every route returns its expected status.

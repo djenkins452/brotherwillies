@@ -90,7 +90,9 @@
             {% elif help_key == 'mlb_hub' %}
                 <h4>MLB Hub</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> Your gateway to real MLB games — today, upcoming, and live. Each game card shows the two teams and first pitch time.</li>
+                    <li><strong>What is this page?</strong> A priority-driven command center for real MLB games. Live games and today's schedule are shown as horizontally-scrolling tiles; everything after today is a chronological list below.</li>
+                    <li><strong>Priority chips</strong> — An amber <em>Priority</em> chip or grey <em>Watch</em> chip means our signals layer has flagged this game as worth your attention. A short "why" line on each tile tells you what triggered it (close spread, tight live score, key injury, ace pitching matchup).</li>
+                    <li><strong>How tiles are ordered</strong> — Live rail is sorted by priority. Today's rail is sorted by priority, then earliest first pitch. The list below is chronological.</li>
                     <li><strong>Starting pitchers</strong> — The matchup between the two starting pitchers is the dominant driver of our win-probability model. Tap any game to see ERA, WHIP, K/9, and a derived rating for each starter.</li>
                     <li><strong>Probable pitcher TBD</strong> — When a starter hasn't been announced yet, we say so explicitly. We never fabricate a pitcher name or stats.</li>
                     <li><strong>Data source</strong> — Schedule, teams, probable pitchers, live status and scores all come from the official MLB Stats API (<code>statsapi.mlb.com</code>). Odds come from <strong>The Odds API</strong>. No demo data, no simulated results — if a provider is down, the page says "Data temporarily unavailable."</li>
