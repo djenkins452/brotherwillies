@@ -1,0 +1,32 @@
+{% load mlb_reasons %}
+{# Focus banner — single "what should I do right now" surface.
+   Rendered at the top of the hub when get_focus_game() returns non-None. #}
+{% with primary=focus.actions.0 %}
+<a href="{% url 'mlb:game' focus.game.id %}" class="mlb-focus" aria-label="Focus game">
+  <div class="mlb-focus__accent" style="background: {{ focus.game.home_team.primary_color|default:'#eab308' }};"></div>
+  <div class="mlb-focus__body">
+    <div class="mlb-focus__kicker">
+      <span class="mlb-focus__flame" aria-hidden="true">🔥</span>
+      <span class="mlb-focus__kicker-text">Focus Right Now</span>
+    </div>
+    <div class="mlb-focus__matchup">
+      <span class="mlb-focus__team">{{ focus.game.away_team.name }}</span>
+      <span class="mlb-focus__at">@</span>
+      <span class="mlb-focus__team">{{ focus.game.home_team.name }}</span>
+    </div>
+    <div class="mlb-focus__meta">
+      <span class="mlb-focus__action mlb-focus__action--{{ primary.type|cut:'_' }}">
+        {% if primary.type == 'best_bet' %}💰{% elif primary.type == 'watch_now' %}🔥{% endif %}
+        {{ primary.type|action_label }}
+      </span>
+      <span class="mlb-focus__reason">{{ primary.reason|reason_label }}</span>
+      <span class="mlb-focus__confidence" title="Confidence {{ focus.confidence }}">
+        <span class="mlb-focus__conf-bar">
+          <span class="mlb-focus__conf-fill" style="width: {{ focus.confidence_pct }}%"></span>
+        </span>
+        <span class="mlb-focus__conf-num">{{ focus.confidence_pct }}%</span>
+      </span>
+    </div>
+  </div>
+</a>
+{% endwith %}

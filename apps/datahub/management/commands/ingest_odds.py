@@ -81,12 +81,52 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write(f"Ingesting {sport} odds...")
+        stats: dict = {}
         try:
             provider = get_provider(sport, 'odds')
             stats = provider.run()
             self.stdout.write(self.style.SUCCESS(f"Done: {stats}"))
         except ValueError as e:
-            raise CommandError(str(e))
+            # For MLB we'll try the ESPN fallback below before failing.
+            if sport == 'mlb':
+                logger.warning(f"mlb_odds_primary_init_failed err={e}")
+                self.stdout.write(self.style.WARNING(
+                    f"Primary odds source unavailable ({e}). Will try ESPN fallback."
+                ))
+                stats = {'created': 0, 'skipped': 0}
+            else:
+                raise CommandError(str(e))
+        except Exception as e:
+            if sport == 'mlb':
+                logger.warning(f"mlb_odds_primary_run_failed err={e}")
+                self.stdout.write(self.style.WARNING(
+                    f"Primary odds source errored ({e}). Will try ESPN fallback."
+                ))
+                stats = {'created': 0, 'skipped': 0}
+            else:
+                raise
+
+        # --- ESPN fallback for MLB ---------------------------------------
+        # When the primary provider (The Odds API) gets zero rows we try the
+        # ESPN scoreboard feed, which embeds DraftKings odds and needs no
+        # API key. Any coverage > 0 is better than silently empty.
+        if sport == 'mlb' and (stats or {}).get('created', 0) == 0:
+            try:
+                from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+                self.stdout.write("Primary odds source returned zero — trying ESPN fallback...")
+                fallback_stats = MLBEspnOddsProvider().run()
+                self.stdout.write(self.style.SUCCESS(f"ESPN fallback: {fallback_stats}"))
+                # Merge the fallback stats into `stats` so the fail-fast
+                # check below uses the combined create count.
+                stats = {
+                    'status': fallback_stats.get('status', 'empty'),
+                    'created': fallback_stats.get('created', 0),
+                    'skipped': (stats or {}).get('skipped', 0) + fallback_stats.get('skipped', 0),
+                    'source': 'espn_fallback',
+                }
+            except Exception as e:
+                logger.error(f"mlb_odds_espn_fallback_failed err={e}")
+                self.stdout.write(self.style.WARNING(f"ESPN fallback failed: {e}"))
 
         # --- fail-fast integrity checks ----------------------------------
         created = (stats or {}).get('created', 0)

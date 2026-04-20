@@ -1,15 +1,27 @@
-{# Action chips + Place Mock Bet button for an MLB tile. `s` = GameSignals. #}
+{# Action chips + CTA for an MLB tile. `s` = GameSignals. #}
 {% load mlb_reasons %}
 {% if s.actions or user.is_authenticated %}
 <div class="mlb-tile__actions">
   {% for a in s.actions %}
-    <span class="mlb-action mlb-action--{{ a.type|cut:'_' }} mlb-action--{{ a.strength }}"
-          title="{{ a.reason|reason_label }}"
-          aria-label="{{ a.type|action_label }} — {{ a.reason|reason_label }}">
-      {% if a.type == 'best_bet' %}💰{% elif a.type == 'watch_now' %}🔥{% endif %}
-      <span class="mlb-action__label">{{ a.type|action_label }}</span>
-      <span class="mlb-action__reason">{{ a.reason|reason_label }}</span>
-    </span>
+    {% if a.type == 'bet_placed' %}
+      <span class="mlb-action mlb-action--betplaced mlb-action--{{ a.strength }}"
+            title="You have a pending mock bet on this game">
+        🎯 <span class="mlb-action__label">Bet Placed</span>
+      </span>
+    {% else %}
+      <span class="mlb-action mlb-action--{{ a.type|cut:'_' }} mlb-action--{{ a.strength }}"
+            title="{{ a.reason|reason_label }} · Confidence {{ s.confidence_pct }}%"
+            aria-label="{{ a.type|action_label }} — {{ a.reason|reason_label }}">
+        {% if a.type == 'best_bet' %}💰{% elif a.type == 'watch_now' %}🔥{% endif %}
+        <span class="mlb-action__label">{{ a.type|action_label }}</span>
+        <span class="mlb-action__reason">{{ a.reason|reason_label }}</span>
+        {% if a.strength == 'primary' %}
+          <span class="mlb-action__conf" aria-hidden="true">
+            <span class="mlb-action__conf-fill" style="width: {{ s.confidence_pct }}%"></span>
+          </span>
+        {% endif %}
+      </span>
+    {% endif %}
   {% endfor %}
   {% if s.is_top_opportunity %}
     <span class="mlb-top-opp" title="Highest-confidence spot on the board">
@@ -17,13 +29,21 @@
       Top Opportunity
     </span>
   {% endif %}
-  {% if user.is_authenticated and s.prefill_json %}
-    <button type="button"
-            class="mlb-bet-btn"
-            data-mlb-prefill='{{ s.prefill_json }}'
-            onclick="event.preventDefault(); event.stopPropagation(); openMLBBet(this);">
-      Mock Bet
-    </button>
+  {% if user.is_authenticated %}
+    {% if s.user_bet_id %}
+      <a href="{% url 'mockbets:bet_detail' s.user_bet_id %}"
+         class="mlb-bet-btn mlb-bet-btn--view"
+         onclick="event.stopPropagation();">
+        View Bet
+      </a>
+    {% elif s.prefill_json %}
+      <button type="button"
+              class="mlb-bet-btn"
+              data-mlb-prefill='{{ s.prefill_json }}'
+              onclick="event.preventDefault(); event.stopPropagation(); openMLBBet(this);">
+        Mock Bet
+      </button>
+    {% endif %}
   {% endif %}
 </div>
 {% endif %}

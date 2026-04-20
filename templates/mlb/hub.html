@@ -13,6 +13,10 @@
     <p class="mlb-hub__subtitle">What matters right now</p>
   </header>
 
+  {% if focus %}
+    {% include "mlb/_focus_banner.html" with focus=focus %}
+  {% endif %}
+
   {% if not live_tiles and not today_tiles and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>

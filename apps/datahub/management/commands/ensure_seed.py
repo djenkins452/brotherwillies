@@ -59,3 +59,39 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(
                     f'{sport} ingestion failed: {e} — continuing'
                 ))
+
+        # --- post-run diagnostic block ---------------------------------------
+        # Prints a summary of odds coverage for each sport in the deploy log
+        # so operators can see at a glance whether ingestion worked. Without
+        # this, silent zero-odds states were invisible until users complained.
+        self._print_odds_diagnostic()
+
+    def _print_odds_diagnostic(self):
+        """Emit a per-sport odds health summary to the deploy log."""
+        from django.utils import timezone
+        today = timezone.localdate()
+        self.stdout.write('--- odds health summary ---')
+        try:
+            from apps.mlb.models import OddsSnapshot as MLBOdds, Game as MLBGame
+            total = MLBOdds.objects.count()
+            today_count = MLBOdds.objects.filter(game__first_pitch__date=today).count()
+            games_today = MLBGame.objects.filter(first_pitch__date=today).count()
+            games_today_with_odds = MLBGame.objects.filter(
+                first_pitch__date=today, odds_snapshots__isnull=False
+            ).distinct().count()
+            self.stdout.write(
+                f'MLB odds: total={total} today_snapshots={today_count} '
+                f'today_games={games_today} today_games_with_odds={games_today_with_odds}'
+            )
+        except Exception as e:
+            self.stdout.write(f'MLB odds diagnostic failed: {e}')
+        try:
+            from apps.cbb.models import OddsSnapshot as CBBOdds
+            self.stdout.write(f'CBB odds: total={CBBOdds.objects.count()}')
+        except Exception as e:
+            self.stdout.write(f'CBB odds diagnostic failed: {e}')
+        try:
+            from apps.cfb.models import OddsSnapshot as CFBOdds
+            self.stdout.write(f'CFB odds: total={CFBOdds.objects.count()}')
+        except Exception as e:
+            self.stdout.write(f'CFB odds diagnostic failed: {e}')

@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-04-19 - Confidence, Focus Engine, user state + ESPN odds fallback
+
+### Odds pipeline (hardened + ESPN fallback)
+- **ESPN DraftKings feed as fallback** — new `MLBEspnOddsProvider` fetches the public `site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard` JSON, extracts each event's DraftKings odds (spread, total, home/away ML), and persists through the same `OddsSnapshot` model. No API key, no quota overlap with The Odds API. Triggered automatically by `ingest_odds mlb` when the primary produces 0 rows or raises.
+- **Widened matching** — primary window bumped from ±1 day (`__date` lookup prone to TIME_ZONE mismatch) to ±36 hours direct datetime compare. Two fallbacks: (1) no-commence → nearest upcoming same-teams game within 7 days; (2) windowed miss → ±4 day widen, pick nearest-by-delta in Python. Portable across SQLite + Postgres.
+- **Sample payload + structured skip logs** — first normalized record sampled at INFO; every persist-skip emits `reason=no_team_match|no_game_match|no_moneyline_home`; end-of-run summary includes a `skip_reasons` counter dict.
+- **Deploy-log diagnostic** — `ensure_seed` ends with a per-sport odds health summary (total, today-window snapshots, games with coverage). No more guessing from deploy logs whether ingestion worked.
+- **`diagnose_odds` management command** — on-demand dump of latest snapshot + per-day coverage for the next N days. Surfaces `ZERO coverage` warnings when any day has games but no odds.
+
+### Confidence scoring (new)
+- `compute_confidence(signals) -> [0, 1]` — deterministic pure function blending:
+  - line_value_strength (40%) — line value discrepancy mapped linearly 0.06 → 0.15
+  - is_close_game (15%), ace_matchup (10%), late_game (5%), tight_spread (10%)
+  - data completeness: odds_present (10%), pitchers_known (10%)
+  - Blowout clamps the ceiling at 0.4 — the game's decided.
+- `GameSignals.confidence` + `confidence_pct` (int) attached before actions are resolved so primary action dicts carry it.
+
+### Focus Engine (new)
+- `get_focus_game(signals) -> GameSignals | None` — single "do this right now" pick.
+  - Requires a PRIMARY action (best_bet or watch_now; bet_placed excluded — focus surfaces new opportunities, not restates the user's own action).
+  - Prefers Best Bet over Watch Now; higher confidence wins; live tiebreaks.
+  - Returns `None` when no game qualifies — the hub banner is simply omitted, never faked.
+- New `templates/mlb/_focus_banner.html` renders at the hub top: flame kicker, teams matchup, action + reason, confidence mini-bar with percentage label. Gold-tinted card, accent from the home team's primary color.
+
+### User state awareness (new)
+- When the user has a pending MockBet on an MLB game, the signals layer inserts a **Bet Placed** primary action — the original Best Bet / Watch Now actions are demoted to secondary (context preserved, not hidden).
+- Tile CTA swaps from "Mock Bet" to "View Bet" linking to `/mockbets/<bet_id>/`. The signals layer now carries `user_bet_id` (UUID string), batched in `prioritize()` with the existing pending-bet query.
+
+### UI
+- Primary action chips now show a thin confidence bar along the bottom edge (subtle, colored by the chip). Secondary chips stay subdued (no bar).
+- `bet_placed` action: gold-family filled pill matching the pending-bet indicator.
+- "View Bet" CTA: gold-outlined button replacing "Mock Bet" when the user already has a pending bet.
+
+### Tests: 73/73 MLB green (15 new)
+- Confidence: low floor without data, TBD caps ceiling, blowout clamps at 0.4, large line-value saturates, confidence_pct matches confidence * 100, primary actions carry confidence.
+- Focus engine: returns None when no primary exists, picks highest-confidence best_bet, Best Bet preferred over Watch Now, bet_placed is excluded from focus.
+- Bet Placed override: pending bet → primary `bet_placed`, existing actions demoted to secondary, `user_bet_id` = MockBet UUID.
+- ESPN provider: normalize shape, DraftKings preference, empty-odds skip, end-to-end persist creates an OddsSnapshot when teams + game match.
+- Existing test `IngestOddsFailFastTests` now mocks the ESPN fallback to stay hermetic.
+
+### Architecture preserved
+- Signals layer owns decisions (confidence, focus, bet_placed override).
+- Views orchestrate (attach focus to context, run mark_top_opportunities).
+- Templates render only (no dict-keyed conditionals, no string comparisons that hide logic).
+
+---
+
 ## 2026-04-19 - Odds integrity + structured signals + guided choice
 
 **Summary:** Harden the odds ingestion pipeline against silent failure, restructure the signals layer so UI text never leaks upstream, add a real edge signal (line-value discrepancy), and introduce scarcity-constrained "Top Opportunity" highlighting.

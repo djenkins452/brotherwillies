@@ -87,6 +87,11 @@ class GameSignals:
     house_prob: float | None = None
     market_prob: float | None = None
     line_value_discrepancy: float | None = None
+    confidence: float = 0.0                 # normalized 0..1
+    confidence_pct: int = 0                 # confidence * 100 (int) for UI width/label
+
+    # User state
+    user_bet_id: str | None = None          # mockbet uuid when user has pending bet
 
     # Display context
     home_record: str | None = None
@@ -217,22 +222,81 @@ def _bucket(score: float) -> str:
     return 'low'
 
 
+# --- confidence scoring ------------------------------------------------------
+
+def compute_confidence(s: 'GameSignals') -> float:
+    """Normalize a handful of signal strengths + data-completeness flags into
+    a single [0, 1] confidence score.
+
+    The contract:
+        - Pure function — deterministic.
+        - Never relies on UI / template state.
+        - Weighted so that line-value (real model edge) dominates.
+        - Data completeness matters: missing odds or TBD pitcher caps the
+          ceiling (we literally know less about the game).
+
+    Components (each ∈ [0, 1], weighted):
+        line_value_strength  0.40   (discrepancy mapped linearly 0.06 → 0.15)
+        close_game_live      0.15   (is_close_game true)
+        ace_matchup          0.10   (ace_matchup true)
+        late_game            0.05   (late_game true)
+        tight_spread         0.10   (1.0 when tight, 0.5 when moderate)
+        odds_present         0.10   (latest_odds not None)
+        pitchers_known       0.10   (no TBD)
+    Blowout clamps to max 0.4 (the game's decided).
+    """
+    components: list[tuple[float, float]] = []  # (component_value, weight)
+
+    # Line-value: the strongest single signal.
+    if s.line_value_discrepancy is not None:
+        # Map 0.06 (min threshold) → 0.4; 0.15+ → 1.0.
+        lv = max(0.0, s.line_value_discrepancy - LINE_VALUE_MIN)
+        lv_scaled = min(1.0, lv / (0.15 - LINE_VALUE_MIN)) if lv > 0 else 0.0
+        components.append((lv_scaled, 0.40))
+    else:
+        components.append((0.0, 0.40))
+
+    components.append((1.0 if s.is_close_game else 0.0, 0.15))
+    components.append((1.0 if s.ace_matchup else 0.0, 0.10))
+    components.append((1.0 if s.late_game else 0.0, 0.05))
+
+    # Spread strength: tight → 1.0; moderate → 0.5; else 0
+    spread_val = 0.0
+    if s.latest_odds is not None and s.latest_odds.spread is not None:
+        mag = abs(s.latest_odds.spread)
+        if mag <= 1.5:
+            spread_val = 1.0
+        elif mag <= 2.5:
+            spread_val = 0.5
+    components.append((spread_val, 0.10))
+
+    components.append((1.0 if s.latest_odds is not None else 0.0, 0.10))
+    components.append((1.0 if s.pitchers_known else 0.0, 0.10))
+
+    raw = sum(v * w for v, w in components)
+    if s.is_blowout:
+        raw = min(raw, 0.4)
+    return round(max(0.0, min(1.0, raw)), 3)
+
+
 # --- action resolver --------------------------------------------------------
 
 def resolve_actions(s: 'GameSignals') -> list[dict]:
     """Map a GameSignals object to a list of action dicts.
 
     Shape:
-        [{'type': 'best_bet', 'strength': 'primary', 'reason': 'line_value'},
-         {'type': 'watch_now', 'strength': 'secondary', 'reason': 'close_game_live'}]
+        [{'type': 'best_bet', 'strength': 'primary', 'reason': 'line_value',
+          'confidence': 0.78}]
 
     Rules:
+        - When the user already has a pending bet on this game, the primary
+          action is `bet_placed` (CTA becomes View/Edit). The other actions
+          are preserved as secondary — users still benefit from context.
         - Best Bet requires: odds present, starters known (no TBD), not blowout,
-          AND at least one "strong" edge signal (tight_spread OR line_value).
-        - Watch Now prioritizes close live games, then late-game proxy, then
-          ace matchup (if not a blowout).
-        - When both actions fire, Best Bet is primary and Watch Now is secondary.
-        - When only one fires, it's primary.
+          AND at least one strong edge signal (tight_spread OR line_value).
+        - Watch Now priority: close live > late > ace matchup (if not a blowout).
+        - When both fire (without a pending bet), Best Bet is primary and
+          Watch Now is secondary.
         - Exactly one primary per game. Empty list is a valid, clean state.
     """
     actions: list[dict] = []
@@ -245,14 +309,12 @@ def resolve_actions(s: 'GameSignals') -> list[dict]:
         and s.pitchers_known
         and not s.is_blowout
     ):
-        # line_value is the stronger of the two edge signals — prefer it as
-        # the attached reason when both are present.
         if 'line_value' in s.reasons:
             bb_reason = 'line_value'
         elif 'tight_spread' in s.reasons:
             bb_reason = 'tight_spread'
 
-    # Watch Now selection — priority order: close live > late > ace
+    # Watch Now
     wn_reason = None
     if s.is_close_game:
         wn_reason = 'close_game_live'
@@ -261,23 +323,60 @@ def resolve_actions(s: 'GameSignals') -> list[dict]:
     elif s.ace_matchup and not s.is_blowout:
         wn_reason = 'ace_matchup'
 
-    if bb_reason is not None:
-        actions.append({'type': 'best_bet', 'strength': 'primary', 'reason': bb_reason})
+    # User-state override: pending mock bet on this game.
+    # The recommendations below still exist for context, but they drop to
+    # secondary — the user's own bet is what's most relevant to them now.
+    if s.user_bet_id:
+        actions.append({
+            'type': 'bet_placed',
+            'strength': 'primary',
+            'reason': 'has_pending_bet',
+            'confidence': s.confidence,
+        })
+        if bb_reason is not None:
+            actions.append({
+                'type': 'best_bet',
+                'strength': 'secondary',
+                'reason': bb_reason,
+                'confidence': s.confidence,
+            })
         if wn_reason is not None:
-            actions.append({'type': 'watch_now', 'strength': 'secondary', 'reason': wn_reason})
+            actions.append({
+                'type': 'watch_now',
+                'strength': 'secondary',
+                'reason': wn_reason,
+                'confidence': s.confidence,
+            })
+        return actions
+
+    if bb_reason is not None:
+        actions.append({
+            'type': 'best_bet', 'strength': 'primary',
+            'reason': bb_reason, 'confidence': s.confidence,
+        })
+        if wn_reason is not None:
+            actions.append({
+                'type': 'watch_now', 'strength': 'secondary',
+                'reason': wn_reason, 'confidence': s.confidence,
+            })
     elif wn_reason is not None:
-        actions.append({'type': 'watch_now', 'strength': 'primary', 'reason': wn_reason})
+        actions.append({
+            'type': 'watch_now', 'strength': 'primary',
+            'reason': wn_reason, 'confidence': s.confidence,
+        })
 
     return actions
 
 
 # --- public API -------------------------------------------------------------
 
-def build_signals(game, *, user=None, streaks=None, user_bet_game_ids=None) -> GameSignals:
+def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> GameSignals:
     """Compute signals for a single game. Pure function — no DB writes.
 
-    `streaks` and `user_bet_game_ids` are optional pre-computed batches from
+    `streaks` and `user_bet_by_game` are optional pre-computed batches from
     `prioritize()`. Callers that work on a single game may omit both.
+
+    `user_bet_by_game` is a dict mapping game.id -> pending mockbet.id (str).
     """
     latest_odds = game.odds_snapshots.order_by('-captured_at').first()
     injuries = list(game.injuries.all())
@@ -338,7 +437,8 @@ def build_signals(game, *, user=None, streaks=None, user_bet_game_ids=None) -> G
 
     from .streaks import format_record, format_pitcher_record
     streaks = streaks or {}
-    user_bet_game_ids = user_bet_game_ids or set()
+    user_bet_by_game = user_bet_by_game or {}
+    bet_id = user_bet_by_game.get(game.id)
 
     signals = GameSignals(
         game=game,
@@ -362,8 +462,13 @@ def build_signals(game, *, user=None, streaks=None, user_bet_game_ids=None) -> G
         away_streak=streaks.get(game.away_team_id),
         home_pitcher_record=format_pitcher_record(game.home_pitcher),
         away_pitcher_record=format_pitcher_record(game.away_pitcher),
-        has_user_bet=(game.id in user_bet_game_ids),
+        has_user_bet=bet_id is not None,
+        user_bet_id=str(bet_id) if bet_id else None,
     )
+    # Confidence must be computed *before* resolve_actions so action dicts
+    # can carry it. compute_confidence uses only immutable signal fields.
+    signals.confidence = compute_confidence(signals)
+    signals.confidence_pct = int(round(signals.confidence * 100))
     signals.actions = resolve_actions(signals)
     return signals
 
@@ -382,17 +487,20 @@ def prioritize(games: Iterable, *, user=None) -> list[GameSignals]:
         team_ids.add(g.away_team_id)
     streaks = compute_streaks(team_ids)
 
-    user_bet_game_ids: set = set()
+    user_bet_by_game: dict = {}
     if user is not None and getattr(user, 'is_authenticated', False) and games:
         from apps.mockbets.models import MockBet
-        user_bet_game_ids = set(
+        for bet in (
             MockBet.objects
             .filter(user=user, result='pending', mlb_game_id__in=[g.id for g in games])
-            .values_list('mlb_game_id', flat=True)
-        )
+            .only('id', 'mlb_game_id')
+        ):
+            # If the user has multiple pending bets on the same game (legit
+            # for different bet types), surface the most recent one's id.
+            user_bet_by_game[bet.mlb_game_id] = bet.id
 
     return [
-        build_signals(g, user=user, streaks=streaks, user_bet_game_ids=user_bet_game_ids)
+        build_signals(g, user=user, streaks=streaks, user_bet_by_game=user_bet_by_game)
         for g in games
     ]
 
@@ -429,6 +537,49 @@ def mark_top_opportunities(signals_list: list[GameSignals], *, n: int | None = N
     for s in eligible[:max(0, n)]:
         s.is_top_opportunity = True
     return signals_list
+
+
+def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
+    """Pick the single game most worth the user's attention right now.
+
+    Selection rule:
+        1. Must have a PRIMARY action (best_bet, watch_now, or bet_placed).
+        2. Prefer Best Bet over Watch Now. bet_placed is user-owned and is
+           handled by the user-state layer, not the global focus.
+        3. Higher confidence wins.
+        4. Live games tiebreak over upcoming when confidence is close.
+
+    Returns None when no game qualifies — the hub banner is simply omitted.
+    Never fabricates a focus from a weak field.
+    """
+    candidates = []
+    for s in signals_list:
+        primary = next((a for a in s.actions if a['strength'] == 'primary'), None)
+        if primary is None:
+            continue
+        if primary['type'] == 'bet_placed':
+            # The user already has a bet here; focus should surface a *new*
+            # opportunity, not a restatement of their own action.
+            continue
+        candidates.append((s, primary))
+    if not candidates:
+        return None
+
+    # Action-type preference: best_bet beats watch_now.
+    type_rank = {'best_bet': 0, 'watch_now': 1}
+    # Live games get a small confidence bump when it's close.
+    def _key(pair):
+        s, primary = pair
+        is_live = getattr(s.game, 'status', '') == 'live'
+        return (
+            type_rank.get(primary['type'], 9),
+            -s.confidence,
+            -0.0001 if is_live else 0.0,
+            s.game.first_pitch,
+            str(s.game.id),
+        )
+    candidates.sort(key=_key)
+    return candidates[0][0]
 
 
 def sort_live(signals: list[GameSignals]) -> list[GameSignals]:

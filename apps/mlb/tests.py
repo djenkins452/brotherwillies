@@ -866,6 +866,197 @@ class APIClientValidationTests(TestCase):
         APIClient._validate_json_response(resp, 'https://example.com/api')
 
 
+class MLBConfidenceTests(TestCase):
+    """compute_confidence — normalized [0, 1] from signals + data completeness."""
+
+    def _game(self, ext, *, pitchers=True, hp=50.0, ap=50.0,
+              status='scheduled', home_score=None, away_score=None):
+        home = _mk_team('CH' + ext, 50.0, 'ch' + ext)
+        away = _mk_team('CA' + ext, 50.0, 'ca' + ext)
+        hpp = _mk_pitcher(home, 'HP', hp, 'chp' + ext) if pitchers else None
+        app = _mk_pitcher(away, 'AP', ap, 'cap' + ext) if pitchers else None
+        return Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status=status, home_score=home_score, away_score=away_score,
+            home_pitcher=hpp, away_pitcher=app,
+            source='mlb_stats_api', external_id=ext,
+        )
+
+    def test_no_odds_no_tbd_has_low_but_nonzero(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c1')
+        s = build_signals(g)
+        self.assertLess(s.confidence, 0.5)
+        self.assertGreaterEqual(s.confidence, 0.0)
+
+    def test_tbd_pitcher_caps_confidence(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c2', pitchers=False)
+        s = build_signals(g)
+        # pitchers_known contributes 0.10 weight; TBD loses it entirely.
+        self.assertLess(s.confidence, 0.7)
+
+    def test_blowout_clamps_confidence(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c3', status='live', home_score=12, away_score=2)
+        s = build_signals(g)
+        self.assertLessEqual(s.confidence, 0.4)
+
+    def test_big_line_value_lifts_confidence(self):
+        from apps.mlb.models import OddsSnapshot
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c4')
+        # Model prob ~0.5 (equal ratings), market 0.25 → 0.25 delta, well past
+        # the LINE_VALUE_STRONG threshold.
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.25, spread=1.0,
+        )
+        s = build_signals(g)
+        self.assertGreaterEqual(s.confidence, 0.7)
+
+    def test_confidence_pct_matches_confidence(self):
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c5')
+        s = build_signals(g)
+        self.assertEqual(s.confidence_pct, int(round(s.confidence * 100)))
+
+    def test_primary_action_carries_confidence(self):
+        from apps.mlb.models import OddsSnapshot
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game('c6')
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=1.0,
+        )
+        s = build_signals(g)
+        primary = next(a for a in s.actions if a['strength'] == 'primary')
+        self.assertEqual(primary['confidence'], s.confidence)
+
+
+class MLBFocusEngineTests(TestCase):
+    def _bb_game(self, ext, *, home_win_prob=0.5, spread=1.0):
+        home = _mk_team('FH' + ext, 50.0, 'fh' + ext)
+        away = _mk_team('FA' + ext, 50.0, 'fa' + ext)
+        hp = _mk_pitcher(home, 'HP', 60.0, 'fhp' + ext)
+        ap = _mk_pitcher(away, 'AP', 50.0, 'fap' + ext)
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id=ext,
+        )
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=home_win_prob, spread=spread,
+        )
+        return g
+
+    def test_returns_none_when_no_primary_action(self):
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        # Game with no odds → no Best Bet; no injury/ace/live → no Watch Now.
+        home = _mk_team('NP', 50.0, 'np')
+        away = _mk_team('NA', 50.0, 'na')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=None, away_pitcher=None,
+            source='mlb_stats_api', external_id='nofocus',
+        )
+        signals = prioritize([g])
+        self.assertIsNone(get_focus_game(signals))
+
+    def test_picks_highest_confidence_best_bet(self):
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        # weak: tight spread but market near model prob → no line_value signal
+        weak = self._bb_game('weak', home_win_prob=0.62, spread=1.5)
+        # strong: tight spread + huge line-value delta → saturated confidence
+        strong = self._bb_game('strong', home_win_prob=0.20, spread=1.0)
+        signals = prioritize([weak, strong])
+        focus = get_focus_game(signals)
+        self.assertEqual(focus.game.external_id, 'strong')
+
+    def test_best_bet_preferred_over_watch_now(self):
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        bb = self._bb_game('bbf')  # gets Best Bet
+        # Watch Now only: close live with no odds.
+        home = _mk_team('WH', 50.0, 'wh')
+        away = _mk_team('WA', 50.0, 'wa')
+        hp = _mk_pitcher(home, 'HP', 60.0, 'whp')
+        ap = _mk_pitcher(away, 'AP', 50.0, 'wap')
+        wn = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() - timedelta(minutes=15),
+            status='live', home_score=2, away_score=1,
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id='wnf',
+        )
+        signals = prioritize([wn, bb])
+        focus = get_focus_game(signals)
+        self.assertEqual(focus.game.external_id, 'bbf')
+
+    def test_bet_placed_not_chosen_for_focus(self):
+        """The focus banner should surface NEW opportunities, not restate
+        the user's own pending bet."""
+        from django.contrib.auth import get_user_model
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        from apps.mockbets.models import MockBet
+        User = get_user_model()
+        u = User.objects.create_user(username='focus_user', password='x')
+        g = self._bb_game('withbet')
+        MockBet.objects.create(
+            user=u, sport='mlb', mlb_game=g,
+            bet_type='moneyline', selection='x',
+            odds_american=-110, implied_probability=0.52,
+            stake_amount=100, result='pending',
+        )
+        signals = prioritize([g], user=u)
+        # The primary action should be `bet_placed` now…
+        self.assertEqual(signals[0].actions[0]['type'], 'bet_placed')
+        # …and focus should return None because nothing else is in the field.
+        self.assertIsNone(get_focus_game(signals))
+
+
+class MLBBetPlacedActionTests(TestCase):
+    def test_pending_bet_makes_bet_placed_primary(self):
+        from django.contrib.auth import get_user_model
+        from apps.mlb.services.prioritization import prioritize
+        from apps.mlb.models import OddsSnapshot
+        from apps.mockbets.models import MockBet
+        User = get_user_model()
+        u = User.objects.create_user(username='bp_user', password='x')
+        home = _mk_team('BPH', 50.0, 'bph')
+        away = _mk_team('BPA', 50.0, 'bpa')
+        hp = _mk_pitcher(home, 'HP', 60.0, 'bphp')
+        ap = _mk_pitcher(away, 'AP', 50.0, 'bpap')
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            home_pitcher=hp, away_pitcher=ap,
+            source='mlb_stats_api', external_id='bpgame',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=1.0,
+        )
+        bet = MockBet.objects.create(
+            user=u, sport='mlb', mlb_game=g,
+            bet_type='moneyline', selection='BPH',
+            odds_american=-110, implied_probability=0.52,
+            stake_amount=100, result='pending',
+        )
+        signals = prioritize([g], user=u)
+        actions = signals[0].actions
+        self.assertEqual(actions[0]['type'], 'bet_placed')
+        self.assertEqual(actions[0]['strength'], 'primary')
+        # Best Bet preserved as secondary context.
+        self.assertTrue(any(a['type'] == 'best_bet' and a['strength'] == 'secondary' for a in actions))
+        # user_bet_id is the uuid of the bet (str).
+        self.assertEqual(signals[0].user_bet_id, str(bet.id))
+
+
 class IngestOddsFailFastTests(TestCase):
     """ingest_odds raises in DEBUG when ingestion produces zero records."""
 
@@ -873,10 +1064,108 @@ class IngestOddsFailFastTests(TestCase):
         from unittest.mock import patch
         from django.core.management import call_command
         from django.test.utils import override_settings
-        with patch('apps.datahub.providers.registry.get_provider') as mk:
-            fake = mk.return_value
-            fake.run.return_value = {'status': 'empty', 'created': 0, 'skipped': 5}
+        with patch('apps.datahub.providers.registry.get_provider') as mk, \
+             patch('apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider') as mk_espn:
+            mk.return_value.run.return_value = {'status': 'empty', 'created': 0, 'skipped': 5}
+            mk_espn.return_value.run.return_value = {'status': 'empty', 'created': 0, 'skipped': 0}
             with override_settings(DEBUG=True):
                 with self.assertRaises(RuntimeError) as ctx:
                     call_command('ingest_odds', sport='mlb', force=True)
                 self.assertIn('zero records', str(ctx.exception))
+
+
+class ESPNOddsProviderTests(TestCase):
+    """Hermetic tests for the ESPN MLB odds provider — no network."""
+
+    SAMPLE_EVENT = {
+        'date': '2026-04-20T23:10:00Z',
+        'competitions': [{
+            'competitors': [
+                {'homeAway': 'home', 'team': {'displayName': 'New York Yankees', 'abbreviation': 'NYY'}},
+                {'homeAway': 'away', 'team': {'displayName': 'Boston Red Sox', 'abbreviation': 'BOS'}},
+            ],
+            'odds': [
+                {
+                    'provider': {'name': 'DraftKings'},
+                    'details': 'NYY -1.5',
+                    'overUnder': 8.5,
+                    'spread': -1.5,
+                    'homeTeamOdds': {'moneyLine': -131, 'favorite': True},
+                    'awayTeamOdds': {'moneyLine': 113, 'favorite': False},
+                },
+            ],
+            'date': '2026-04-20T23:10:00Z',
+        }],
+    }
+
+    def test_normalize_extracts_odds(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        with patch.object(MLBEspnOddsProvider, '__init__', return_value=None):
+            p = MLBEspnOddsProvider()
+            out = p.normalize([self.SAMPLE_EVENT])
+        self.assertEqual(len(out), 1)
+        row = out[0]
+        self.assertEqual(row['home_team'], 'New York Yankees')
+        self.assertEqual(row['away_team'], 'Boston Red Sox')
+        self.assertEqual(row['sportsbook'], 'DraftKings')
+        self.assertEqual(row['moneyline_home'], -131)
+        self.assertEqual(row['moneyline_away'], 113)
+        self.assertEqual(row['spread'], -1.5)
+        self.assertEqual(row['total'], 8.5)
+
+    def test_normalize_prefers_draftkings(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        event = {
+            **self.SAMPLE_EVENT,
+            'competitions': [{
+                **self.SAMPLE_EVENT['competitions'][0],
+                'odds': [
+                    {'provider': {'name': 'BetMGM'}, 'homeTeamOdds': {'moneyLine': -125}, 'awayTeamOdds': {'moneyLine': 110}, 'spread': -1.5, 'overUnder': 9.0},
+                    {'provider': {'name': 'DraftKings'}, 'homeTeamOdds': {'moneyLine': -131}, 'awayTeamOdds': {'moneyLine': 113}, 'spread': -1.5, 'overUnder': 8.5},
+                ],
+            }],
+        }
+        with patch.object(MLBEspnOddsProvider, '__init__', return_value=None):
+            p = MLBEspnOddsProvider()
+            out = p.normalize([event])
+        self.assertEqual(out[0]['sportsbook'], 'DraftKings')
+        self.assertEqual(out[0]['moneyline_home'], -131)
+
+    def test_normalize_skips_event_without_odds(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        event = {**self.SAMPLE_EVENT, 'competitions': [{**self.SAMPLE_EVENT['competitions'][0], 'odds': []}]}
+        with patch.object(MLBEspnOddsProvider, '__init__', return_value=None):
+            p = MLBEspnOddsProvider()
+            out = p.normalize([event])
+        self.assertEqual(out, [])
+
+    def test_persist_creates_snapshot_when_teams_and_game_match(self):
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        from apps.mlb.models import OddsSnapshot
+        # Seed teams + game that ESPN can match against.
+        conf, _ = Conference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        home = Team.objects.create(name='New York Yankees', slug='yankees', conference=conf,
+                                   source='mlb_stats_api', external_id='147')
+        away = Team.objects.create(name='Boston Red Sox', slug='redsox', conference=conf,
+                                   source='mlb_stats_api', external_id='111')
+        game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            source='mlb_stats_api', external_id='espn_test_game',
+        )
+        # Use the event's commence_time close to now so window matches.
+        event = {**self.SAMPLE_EVENT, 'date': (timezone.now() + timedelta(hours=1)).isoformat()}
+        with patch.object(MLBEspnOddsProvider, '__init__', return_value=None):
+            p = MLBEspnOddsProvider()
+            normalized = p.normalize([event])
+            result = p.persist(normalized)
+        self.assertEqual(result['created'], 1)
+        self.assertEqual(OddsSnapshot.objects.filter(game=game).count(), 1)
+        snap = OddsSnapshot.objects.get(game=game)
+        self.assertEqual(snap.spread, -1.5)
+        self.assertEqual(snap.total, 8.5)
+        self.assertEqual(snap.sportsbook, 'DraftKings')

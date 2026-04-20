@@ -54,7 +54,7 @@ class MLBOddsProvider(AbstractProvider):
         self.client = APIClient(base_url=ODDS_API_BASE, rate_limit_delay=1.0)
 
     def fetch(self):
-        return self.client.get(
+        data = self.client.get(
             f'/v4/sports/{MLB_SPORT_KEY}/odds/',
             params={
                 'apiKey': self.api_key,
@@ -63,6 +63,18 @@ class MLBOddsProvider(AbstractProvider):
                 'oddsFormat': 'american',
             },
         )
+        # Log a sample so deploy logs can diagnose unexpected shapes.
+        if data:
+            first = data[0] if isinstance(data, list) else data
+            bm_count = len((first or {}).get('bookmakers') or [])
+            logger.info(
+                f"mlb_odds_fetch_sample events={len(data) if isinstance(data, list) else 1} "
+                f"first_home={first.get('home_team')!r} first_away={first.get('away_team')!r} "
+                f"first_commence={first.get('commence_time')!r} first_bookmaker_count={bm_count}"
+            )
+        else:
+            logger.warning("mlb_odds_fetch_empty payload")
+        return data
 
     def normalize(self, raw):
         normalized = []
@@ -133,13 +145,54 @@ class MLBOddsProvider(AbstractProvider):
             if commence and timezone.is_naive(commence):
                 commence = timezone.make_aware(commence)
 
-            qs = Game.objects.filter(home_team=home, away_team=away)
+            # Primary match: same teams, first_pitch within ±36h of commence.
+            # The wider window + direct datetime comparison avoids the
+            # timezone trap hit by `__date` lookups when TIME_ZONE != UTC
+            # (game saved as aware UTC; __date resolves in TIME_ZONE).
+            game = None
             if commence:
-                qs = qs.filter(
-                    first_pitch__date__gte=(commence - timedelta(days=1)).date(),
-                    first_pitch__date__lte=(commence + timedelta(days=1)).date(),
+                window_start = commence - timedelta(hours=36)
+                window_end = commence + timedelta(hours=36)
+                game = (
+                    Game.objects
+                    .filter(home_team=home, away_team=away,
+                            first_pitch__gte=window_start,
+                            first_pitch__lte=window_end)
+                    .order_by('first_pitch').first()
                 )
-            game = qs.order_by('first_pitch').first()
+
+            # Fallback 1: no commence time in the feed → take the nearest
+            # upcoming game within 7 days for this matchup.
+            if not game and not commence:
+                cutoff = timezone.now() + timedelta(days=7)
+                game = (
+                    Game.objects
+                    .filter(home_team=home, away_team=away,
+                            first_pitch__gte=timezone.now(),
+                            first_pitch__lte=cutoff)
+                    .order_by('first_pitch').first()
+                )
+
+            # Fallback 2: widen to ±4 days and pick the nearest-by-delta game
+            # in Python. Catches doubleheader ambiguity and any remaining
+            # TZ/formatting edge cases. Portable across SQLite and Postgres.
+            if not game and commence:
+                cutoff_start = commence - timedelta(days=4)
+                cutoff_end = commence + timedelta(days=4)
+                candidates = list(
+                    Game.objects
+                    .filter(home_team=home, away_team=away,
+                            first_pitch__gte=cutoff_start,
+                            first_pitch__lte=cutoff_end)
+                )
+                if candidates:
+                    candidates.sort(key=lambda g: abs((g.first_pitch - commence).total_seconds()))
+                    game = candidates[0]
+                    logger.info(
+                        f"mlb_odds_persist_match_fallback home={home.name} away={away.name} "
+                        f"commence={commence} matched_pitch={game.first_pitch}"
+                    )
+
             if not game:
                 skipped += 1
                 reason = 'no_game_match'

@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-19-mlb-focus">Apr 19, 2026 &mdash; Confidence, Focus Engine, ESPN odds</a> <span class="text-sm text-muted">&bull; 0–100% confidence, 🔥 Focus banner, 🎯 Bet Placed, ESPN DraftKings fallback</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-guided-choice">Apr 19, 2026 &mdash; Guided Choice + Odds Integrity</a> <span class="text-sm text-muted">&bull; Primary/Secondary actions, ★ Top Opportunity, line-value signal, fail-fast odds pipeline</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-context">Apr 19, 2026 &mdash; MLB Tile Context &amp; Bet Dropdown</a> <span class="text-sm text-muted">&bull; Records, streaks, pitcher W/L, dynamic selection dropdown, 🎯 bet indicator</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-actions">Apr 19, 2026 &mdash; MLB Action Layer</a> <span class="text-sm text-muted">&bull; 🔥 Watch Now / 💰 Best Bet tags, one-click mock bets</span></li>
@@ -25,6 +26,42 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 19 Confidence + Focus Engine + ESPN odds fallback                 #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-19-mlb-focus">
+    <p class="card-title">Apr 19, 2026 &mdash; Confidence, Focus Engine &amp; ESPN Odds Fallback</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Four layered improvements that take the MLB hub from "here are options" to "here's the single best spot, how strong it is, and what you've already acted on."</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">Confidence scoring (0–100%)</p>
+        <p class="text-sm">
+            Every game now carries a deterministic <code>confidence</code> number blended from line-value discrepancy (40% weight), live-game signals, and data completeness (odds present, starters known). Primary action chips visualize it with a thin bottom bar; the Focus banner shows the exact percentage. Blowouts clamp the ceiling to 40% — the game's already decided.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🔥 Focus Right Now banner</p>
+        <p class="text-sm">
+            A single card at the top of the MLB hub surfaces the one game most worth your attention: highest-confidence primary action, with reason and a confidence mini-bar. If nothing meets the bar, the banner is simply omitted — we never fake a focus.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🎯 Bet Placed (user state aware)</p>
+        <p class="text-sm">
+            When you already have a pending mock bet on a game, its primary action becomes <em>Bet Placed</em> and the Mock Bet button swaps to a <em>View Bet</em> link. The original Best Bet / Watch Now recommendations stay visible as secondary context — we never hide information.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">ESPN DraftKings odds fallback</p>
+        <p class="text-sm">
+            When The Odds API returns zero rows (quota exhausted, unavailable bookmakers, or just no coverage), we now fall back to ESPN's public scoreboard JSON which carries DraftKings lines. No API key, no quota overlap. Combined with widened ±36h team/game matching and a nearest-by-delta Python-side fallback, odds coverage is dramatically more reliable.
+        </p>
+    </div>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

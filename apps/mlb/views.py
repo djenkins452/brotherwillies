@@ -7,7 +7,9 @@ from django.utils import timezone
 from apps.mockbets.services.prefill import prefill_from_signals
 
 from .models import Game, Team
-from .services.prioritization import mark_top_opportunities, prioritize, sort_live, sort_today
+from .services.prioritization import (
+    get_focus_game, mark_top_opportunities, prioritize, sort_live, sort_today,
+)
 
 
 def _attach_prefill(signals_list, *, authenticated: bool):
@@ -47,12 +49,18 @@ def mlb_hub(request):
     # Scarcity: only the single highest-conviction Best Bet across the whole
     # page (live + today) is tagged `is_top_opportunity`. mark_* mutates in
     # place and reads `settings.MLB_MAX_TOP_OPPORTUNITIES` (default 1).
-    mark_top_opportunities(live_tiles + today_tiles)
+    all_tiles = live_tiles + today_tiles
+    mark_top_opportunities(all_tiles)
+
+    # Focus Engine: single "do this right now" surface. None when no game
+    # meets the bar — the banner is simply omitted rather than forced.
+    focus = get_focus_game(all_tiles)
 
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
         'today_tiles': today_tiles,
         'future_games': future_upcoming,
+        'focus': focus,
         'teams': Team.objects.select_related('conference').all(),
         'nav_active': 'mlb',
         'help_key': 'mlb_hub',
