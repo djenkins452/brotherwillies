@@ -44,6 +44,63 @@ def settle_pending_bets(sport='all'):
     return counts
 
 
+def settle_user_pending_bets(user):
+    """Settle any pending bets for this user whose games are final.
+
+    Belt-and-suspenders layer so a user's /mockbets/ page never shows a
+    stale 'pending' badge after their game has ended, even if the cron
+    is running late. Idempotent — selects only pending bets whose linked
+    game is already 'final' with both scores populated.
+    """
+    settled = 0
+    for key, fk in _TEAM_SPORT_FK.items():
+        filter_kwargs = {
+            'user': user,
+            'sport': key,
+            'result': 'pending',
+            f'{fk}__status': 'final',
+            f'{fk}__home_score__isnull': False,
+            f'{fk}__away_score__isnull': False,
+        }
+        bets = (
+            MockBet.objects.filter(**filter_kwargs)
+            .select_related(fk, f'{fk}__home_team', f'{fk}__away_team')
+        )
+        for bet in bets:
+            game = getattr(bet, fk)
+            if game is None:
+                continue
+            try:
+                result = _resolve_game_bet(
+                    bet,
+                    game.home_score, game.away_score,
+                    game.home_team.name, game.away_team.name,
+                    game,
+                )
+                _apply_settlement(bet, result['result'], result['reason'])
+                settled += 1
+            except Exception as e:
+                logger.error(f'Failed to settle user {user.id} {key} bet {bet.id}: {e}')
+
+    # Golf is event-date based
+    now = timezone.now().date()
+    golf_bets = MockBet.objects.filter(
+        user=user,
+        sport='golf',
+        result='pending',
+        golf_event__end_date__lt=now,
+    ).select_related('golf_event', 'golf_golfer')
+    for bet in golf_bets:
+        try:
+            result = _resolve_golf_bet(bet)
+            _apply_settlement(bet, result['result'], result['reason'])
+            settled += 1
+        except Exception as e:
+            logger.error(f'Failed to settle user {user.id} golf bet {bet.id}: {e}')
+
+    return settled
+
+
 def _settle_team_sport(sport_key, fk_name):
     """Generic team-sport settlement keyed by (sport, FK column name)."""
     filter_kwargs = {

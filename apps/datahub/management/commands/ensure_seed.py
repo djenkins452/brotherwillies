@@ -60,6 +60,14 @@ class Command(BaseCommand):
                     f'{sport} ingestion failed: {e} — continuing'
                 ))
 
+        # Clear any bets that finalized while nothing was refreshing them.
+        # Deploys are the first time fresh scores hit the DB after an outage,
+        # so settlement needs to run here in addition to refresh_data.
+        try:
+            call_command('settle_mockbets')
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'settle_mockbets on deploy failed: {e}'))
+
         # --- post-run diagnostic block ---------------------------------------
         # Prints a summary of odds coverage for each sport in the deploy log
         # so operators can see at a glance whether ingestion worked. Without

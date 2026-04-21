@@ -18,6 +18,15 @@ from .services.analytics import (
 @login_required
 def my_bets(request):
     """List view showing user's mock bets with filters."""
+    # Settle stragglers for this user before we render — guarantees the
+    # page never shows a stale 'pending' badge for a game that already
+    # finalized, even if the cron is behind. Idempotent by design.
+    from .services.settlement import settle_user_pending_bets
+    try:
+        settle_user_pending_bets(request.user)
+    except Exception:
+        pass  # Never block the page; cron is the authoritative path.
+
     bets = MockBet.objects.filter(user=request.user)
 
     # Apply filters
@@ -49,35 +58,13 @@ def my_bets(request):
         'golf_event', 'golf_golfer',
     )
 
-    # Compute summary stats for settled bets
-    settled = [b for b in bets if b.is_settled]
-    total_stake = sum(b.stake_amount for b in settled) if settled else Decimal('0')
-    total_return = sum(
-        (b.simulated_payout or Decimal('0')) + (b.stake_amount if b.result == 'win' else Decimal('0'))
-        for b in settled
-    ) if settled else Decimal('0')
-    # For wins: you get your stake back + payout. For push: stake back. For loss: nothing.
-    total_return = Decimal('0')
-    for b in settled:
-        if b.result == 'win':
-            total_return += b.stake_amount + (b.simulated_payout or Decimal('0'))
-        elif b.result == 'push':
-            total_return += b.stake_amount
-    net_pl = total_return - total_stake
-    wins = sum(1 for b in settled if b.result == 'win')
-    win_pct = (wins / len(settled) * 100) if settled else 0
-    roi = (float(net_pl) / float(total_stake) * 100) if total_stake else 0
+    # Bankroll KPIs come from the canonical analytics helper — same math as the
+    # analytics dashboard, no duplicate accounting logic on this page.
+    kpis = compute_kpis(bets)
 
     return render(request, 'mockbets/my_bets.html', {
         'bets': bets[:100],
-        'total_bets': bets.count(),
-        'settled_count': len(settled),
-        'total_stake': total_stake,
-        'total_return': total_return,
-        'net_pl': net_pl,
-        'win_pct': win_pct,
-        'roi': roi,
-        'wins': wins,
+        'kpis': kpis,
         'current_sport': sport or '',
         'current_result': result or '',
         'current_bet_type': bet_type or '',

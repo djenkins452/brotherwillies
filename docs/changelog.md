@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-04-20 - Stale pending bug fix + bankroll summary + 3-up tile grid
+
+**Summary:** Closed the loop on mock bets. Pending bets no longer sit forever after games finalize, the mock bets page now surfaces a proper bankroll summary, each bet row shows its stake/payout/net clearly, and lobby tiles render in a capped 3-per-row responsive grid.
+
+### Root cause — stale pending bets
+`apps/mockbets/management/commands/settle_mockbets.py` was written to be cron-friendly but **was never actually invoked** by any cron path. `refresh_data` ran schedule → odds → injuries → pitcher-stats → team-records → capture-snapshots → resolve-outcomes, then stopped. `ensure_seed` (deploy path) also skipped it. Because CLAUDE.md confirms Railway has no shell access, `python manage.py settle_mockbets` never ran in production — pending bets sat forever even though the MLB schedule provider correctly flipped `status='final'` with scores on every refresh.
+
+### Fix
+Two independent layers so the page is never stale even if one path fails:
+- **Cron path** — `refresh_data` now calls `settle_mockbets` after `resolve_outcomes`. `ensure_seed` also calls it on every deploy so stragglers clear on the first boot after this release.
+- **View path (defense-in-depth)** — new `settle_user_pending_bets(user)` in `services/settlement.py` is called by `my_bets` before render, scoped to the viewer. Idempotent; filters to `status='final'` with scores populated so it's cheap.
+
+### UI changes
+- **Lobby tile grid** — `.vb-section.open .vb-section-body` is now CSS grid: 1-up phone / 2-up tablet (481–768px) / **3-up desktop (≥769px)**. Matches the CLAUDE.md breakpoints.
+- **Bankroll summary** (`templates/mockbets/my_bets.html`) — always-visible header card with Total Wagered, Total Won, Total Lost, Net Profit, Record (W–L–P), and Pending count. Math comes from `compute_kpis` — same source as the analytics dashboard (no duplicate accounting).
+- **Per-bet card** — each row now has a left-color stripe keyed by result (green win / red loss / grey push / blue pending), a bold result badge, and an explicit Stake / Payout or Loss / Net row.
+- **compute_kpis** extended with `total_won` and `total_lost` keys (additive — existing callers unaffected).
+
+### Tests
+- 4 new regression tests in `StalePendingRegressionTests` in `apps/mockbets/tests.py`:
+  - `test_settle_mockbets_command_clears_stale_pending` — proves the cron-level fix
+  - `test_my_bets_view_settles_stale_pending_on_read` — proves the view-level fix (the page no longer shows PENDING for a final game)
+  - `test_settle_user_pending_does_not_touch_other_users` — per-user scoping
+  - `test_full_pipeline_place_to_final_to_display` — end-to-end: POST bet → flip game final → GET `/mockbets/` → assert WIN badge + $120.00 payout rendered
+- `BankrollKPIsTests` locks the `total_won` / `total_lost` math with a mixed-result fixture.
+- Full app suite: 169/171 (2 pre-existing failures — `feedback.tests` import error + `GolfOddsProviderPersistGateTests` — unrelated and unchanged).
+
+---
+
 ## 2026-04-20 - Decision Layer: BettingRecommendation engine
 
 **Summary:** New thin decision layer converts existing model edge into a single actionable pick per game. No rebuild — reuses every sport's `compute_game_data` via the existing SPORT_REGISTRY; settlement, bankroll, and analytics are untouched.

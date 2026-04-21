@@ -11,26 +11,39 @@
     <div class="text-sm" style="color:var(--accent);">Simulated analytics only. No real money involved.</div>
 </div>
 
-{% if settled_count > 0 %}
-<div class="stat-grid mb-2">
-    <div class="stat-tile">
-        <div class="stat-value">{{ total_bets }}</div>
-        <div class="stat-label">Total Bets</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ win_pct|floatformat:1 }}%</div>
-        <div class="stat-label">Win Rate</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value {% if net_pl > 0 %}text-green{% elif net_pl < 0 %}text-red{% endif %}">${{ net_pl|floatformat:2 }}</div>
-        <div class="stat-label">Sim. Net P/L</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value {% if roi > 0 %}text-green{% elif roi < 0 %}text-red{% endif %}">{{ roi|floatformat:1 }}%</div>
-        <div class="stat-label">Sim. ROI</div>
+<div class="card bankroll-summary mb-2">
+    <div class="bankroll-grid">
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Total Wagered</div>
+            <div class="bankroll-value">${{ kpis.total_stake|floatformat:2 }}</div>
+        </div>
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Total Won</div>
+            <div class="bankroll-value text-green">${{ kpis.total_won|floatformat:2 }}</div>
+        </div>
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Total Lost</div>
+            <div class="bankroll-value text-red">${{ kpis.total_lost|floatformat:2 }}</div>
+        </div>
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Net Profit</div>
+            <div class="bankroll-value {% if kpis.net_pl > 0 %}text-green{% elif kpis.net_pl < 0 %}text-red{% endif %}">
+                {% if kpis.net_pl > 0 %}+{% endif %}${{ kpis.net_pl|floatformat:2 }}
+            </div>
+        </div>
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Record</div>
+            <div class="bankroll-value">{{ kpis.wins }}&ndash;{{ kpis.losses }}{% if kpis.pushes %}&ndash;{{ kpis.pushes }}{% endif %}</div>
+            <div class="text-sm text-muted">{{ kpis.win_pct|floatformat:1 }}% win</div>
+        </div>
+        {% if kpis.pending_count %}
+        <div class="bankroll-cell">
+            <div class="bankroll-label">Pending</div>
+            <div class="bankroll-value">{{ kpis.pending_count }}</div>
+        </div>
+        {% endif %}
     </div>
 </div>
-{% endif %}
 
 <div class="filter-bar">
     <a href="{% url 'mockbets:my_bets' %}" class="filter-chip {% if not current_sport %}active{% endif %}">All</a>
@@ -50,26 +63,48 @@
 
 {% if bets %}
 {% for bet in bets %}
-<a href="{% url 'mockbets:bet_detail' bet.id %}" class="game-card">
+<a href="{% url 'mockbets:bet_detail' bet.id %}" class="game-card bet-card bet-card-{{ bet.result }}">
     <div class="teams" style="justify-content:flex-start;gap:8px;">
         <span class="badge badge-{% if bet.sport == 'cfb' %}blue{% elif bet.sport == 'cbb' %}green{% elif bet.sport == 'mlb' %}red{% elif bet.sport == 'college_baseball' %}blue{% else %}yellow{% endif %}" style="font-size:0.65rem;">{{ bet.sport|upper }}</span>
         <span class="team-name">{{ bet.selection }}</span>
+        <span style="margin-left:auto;">
+            {% if bet.result == 'win' %}<span class="badge badge-green bet-result-badge">&check; WIN</span>
+            {% elif bet.result == 'loss' %}<span class="badge badge-red bet-result-badge">&times; LOSS</span>
+            {% elif bet.result == 'push' %}<span class="badge badge-gray bet-result-badge">PUSH</span>
+            {% else %}<span class="badge badge-blue bet-result-badge">PENDING</span>{% endif %}
+        </span>
     </div>
     <div class="game-meta mt-1">
-        <span>{{ bet.bet_type }} &middot; {{ bet.odds_american|stringformat:"+d" }}</span>
-        <span>
-            {% if bet.result == 'win' %}<span class="badge badge-green">Win</span>
-            {% elif bet.result == 'loss' %}<span class="badge badge-red">Loss</span>
-            {% elif bet.result == 'push' %}<span class="badge badge-gray">Push</span>
-            {% else %}<span class="badge badge-blue">Pending</span>{% endif %}
-        </span>
+        <span>{{ bet.bet_type|title }} &middot; {{ bet.odds_american|stringformat:"+d" }}</span>
     </div>
-    <div class="edge-row">
-        <span class="text-sm text-muted">Stake: ${{ bet.stake_amount|floatformat:2 }}</span>
-        {% if bet.is_settled and bet.net_result is not None %}
-        <span class="text-sm {% if bet.net_result > 0 %}text-green{% elif bet.net_result < 0 %}text-red{% endif %}">
-            {% if bet.net_result > 0 %}+{% endif %}${{ bet.net_result|floatformat:2 }}
-        </span>
+    <div class="bet-money-row mt-1">
+        <div class="bet-money-cell">
+            <span class="bet-money-label">Stake</span>
+            <span class="bet-money-value">${{ bet.stake_amount|floatformat:2 }}</span>
+        </div>
+        {% if bet.result == 'win' %}
+        <div class="bet-money-cell">
+            <span class="bet-money-label">Payout</span>
+            <span class="bet-money-value text-green">+${{ bet.simulated_payout|floatformat:2 }}</span>
+        </div>
+        {% elif bet.result == 'loss' %}
+        <div class="bet-money-cell">
+            <span class="bet-money-label">Loss</span>
+            <span class="bet-money-value text-red">&minus;${{ bet.stake_amount|floatformat:2 }}</span>
+        </div>
+        {% elif bet.result == 'push' %}
+        <div class="bet-money-cell">
+            <span class="bet-money-label">Returned</span>
+            <span class="bet-money-value">${{ bet.stake_amount|floatformat:2 }}</span>
+        </div>
+        {% endif %}
+        {% if bet.is_settled %}
+        <div class="bet-money-cell">
+            <span class="bet-money-label">Net</span>
+            <span class="bet-money-value {% if bet.net_result > 0 %}text-green{% elif bet.net_result < 0 %}text-red{% endif %}">
+                {% if bet.net_result > 0 %}+{% endif %}${{ bet.net_result|floatformat:2 }}
+            </span>
+        </div>
         {% endif %}
     </div>
     <div class="text-sm text-muted mt-1">

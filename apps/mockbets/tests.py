@@ -492,3 +492,192 @@ class MLBSettlementTests(TestCase):
         )
         counts = settle_pending_bets(sport='all')
         self.assertEqual(counts['mlb'], 1)
+
+
+class StalePendingRegressionTests(TestCase):
+    """Direct regression coverage for the shipped defect: game finalized but
+    the corresponding MockBet stayed 'pending' because nothing ever ran
+    settle_mockbets in production. These tests exercise the two fix layers
+    independently and then the full placement -> final -> display pipeline."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        self.user = User.objects.create_user('stale_user', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+        conf = MLBConf.objects.create(name='AL East', slug='al-east')
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='yankees', conference=conf,
+            source='mlb_stats_api', external_id='147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='royals', conference=conf,
+            source='mlb_stats_api', external_id='118',
+        )
+
+    def _final_game(self, home_score, away_score):
+        from apps.mlb.models import Game as MLBGame
+        return MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now(), status='final',
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+
+    # --- Layer 1: the management command (the primary cron fix) -----------
+
+    def test_settle_mockbets_command_clears_stale_pending(self):
+        """The scenario that broke in production: a game is 'final' with
+        scores, a MockBet is still 'pending'. The management command — now
+        wired into refresh_data — must settle it."""
+        from django.core.management import call_command
+        from io import StringIO
+
+        game = self._final_game(6, 2)
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        self.assertEqual(bet.result, 'pending')
+        call_command('settle_mockbets', stdout=StringIO())
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')
+        self.assertEqual(bet.simulated_payout, Decimal('66.67').quantize(Decimal('0.01')))
+        self.assertIsNotNone(bet.settled_at)
+
+    # --- Layer 2: the settle-on-read view hook (defense-in-depth) ---------
+
+    def test_my_bets_view_settles_stale_pending_on_read(self):
+        """If the cron fell behind, visiting /mockbets/ must not show stale
+        'pending'. settle_user_pending_bets is called before render."""
+        game = self._final_game(6, 2)
+        MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        resp = self.client.get('/mockbets/')
+        self.assertEqual(resp.status_code, 200)
+        bet = MockBet.objects.get(user=self.user)
+        self.assertEqual(bet.result, 'win')
+        self.assertContains(resp, 'WIN')  # badge renders on the card
+        self.assertContains(resp, 'Payout')
+        self.assertNotContains(resp, 'PENDING')
+
+    def test_settle_user_pending_does_not_touch_other_users(self):
+        """Per-user scoping — one user visiting /mockbets/ must never settle
+        another user's bets, so each page stays deterministic per viewer."""
+        from apps.mockbets.services.settlement import settle_user_pending_bets
+        other = User.objects.create_user('other', password='pw')
+        game = self._final_game(6, 2)
+        my_bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        other_bet = MockBet.objects.create(
+            user=other, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        settle_user_pending_bets(self.user)
+        my_bet.refresh_from_db()
+        other_bet.refresh_from_db()
+        self.assertEqual(my_bet.result, 'win')
+        self.assertEqual(other_bet.result, 'pending')
+
+    # --- Full pipeline: placement -> final -> display update --------------
+
+    def test_full_pipeline_place_to_final_to_display(self):
+        """End-to-end proof: POST a mock bet -> flip the game to final ->
+        GET /mockbets/ -> page renders the bet as WIN with correct payout.
+        This is the exact flow a user experiences in production."""
+        import json
+        from apps.mlb.models import Game as MLBGame
+
+        game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now(), status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        # Phase 1: user places a mock bet against a scheduled game
+        resp = self.client.post(
+            '/mockbets/place/',
+            content_type='application/json',
+            data=json.dumps({
+                'sport': 'mlb',
+                'game_id': str(game.id),
+                'bet_type': 'moneyline',
+                'selection': 'Yankees',
+                'odds_american': +120,
+                'stake_amount': '100',
+            }),
+        )
+        self.assertEqual(resp.status_code, 200)
+        bet = MockBet.objects.get(user=self.user)
+        self.assertEqual(bet.result, 'pending')
+
+        # Phase 2: cron ingests the final score (status + scores flip)
+        game.status = 'final'
+        game.home_score = 5
+        game.away_score = 3
+        game.save()
+
+        # Phase 3: user visits /mockbets/ — the settle-on-read hook resolves
+        resp = self.client.get('/mockbets/')
+        self.assertEqual(resp.status_code, 200)
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')
+        self.assertEqual(bet.simulated_payout, Decimal('120.00'))
+        # Bankroll summary reflects the win
+        self.assertContains(resp, 'Total Won')
+        self.assertContains(resp, '$120.00')
+        # Card badge + per-bet money row render correctly
+        self.assertContains(resp, 'WIN')
+        self.assertContains(resp, 'Stake')
+
+
+class BankrollKPIsTests(TestCase):
+    """compute_kpis must feed the summary tiles on /mockbets/. We changed
+    it to track total_won / total_lost — lock the math with a direct test."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('kpi_user', password='pw')
+
+    def _bet(self, result, stake, payout=None):
+        return MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=+100,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal(stake),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+        )
+
+    def test_summary_math_with_mixed_results(self):
+        from apps.mockbets.services.analytics import compute_kpis
+        self._bet('win', '100', '120')
+        self._bet('win', '50', '40')
+        self._bet('loss', '75')
+        self._bet('push', '40')
+        self._bet('pending', '200')  # pending excluded from settled math
+
+        kpis = compute_kpis(MockBet.objects.filter(user=self.user))
+        self.assertEqual(kpis['total_bets'], 5)
+        self.assertEqual(kpis['settled_count'], 4)
+        self.assertEqual(kpis['pending_count'], 1)
+        self.assertEqual(kpis['wins'], 2)
+        self.assertEqual(kpis['losses'], 1)
+        self.assertEqual(kpis['pushes'], 1)
+        self.assertEqual(kpis['total_stake'], Decimal('265'))  # 100+50+75+40
+        self.assertEqual(kpis['total_won'], Decimal('160'))    # 120+40
+        self.assertEqual(kpis['total_lost'], Decimal('75'))    # loss stake
+        # net = (stake returned on wins + wins payout + push stake) - total stake
+        #     = (100+120 + 50+40 + 40) - 265 = 350 - 265 = 85
+        self.assertEqual(kpis['net_pl'], Decimal('85'))

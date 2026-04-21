@@ -60,4 +60,12 @@ class Command(BaseCommand):
                 # downstream reflects what happened here.
                 self.stdout.write(self.style.WARNING(f'{sport} failed: {e}'))
 
+        # Settle pending mock bets for any games that finalized this cycle.
+        # Without this the cron would leave user bets in 'pending' forever on
+        # Railway, where no one can shell in to run settle_mockbets by hand.
+        try:
+            call_command('settle_mockbets')
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'settle_mockbets failed: {e}'))
+
         self.stdout.write(self.style.SUCCESS('Refresh complete'))

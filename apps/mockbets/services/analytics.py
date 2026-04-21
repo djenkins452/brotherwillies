@@ -18,10 +18,15 @@ def compute_kpis(bets):
     pending = [b for b in all_bets if b.result == 'pending']
 
     total_stake = sum(b.stake_amount for b in settled) if settled else Decimal('0')
-    total_return = Decimal('0')
+    total_won = Decimal('0')   # winnings only (payout on wins), excludes returned stake
+    total_lost = Decimal('0')  # stake forfeited on losses
+    total_return = Decimal('0')  # stake + winnings returned after settlement
     for b in settled:
         if b.result == 'win':
+            total_won += b.simulated_payout or Decimal('0')
             total_return += b.stake_amount + (b.simulated_payout or Decimal('0'))
+        elif b.result == 'loss':
+            total_lost += b.stake_amount
         elif b.result == 'push':
             total_return += b.stake_amount
     net_pl = total_return - total_stake
@@ -44,6 +49,8 @@ def compute_kpis(bets):
         'losses': losses,
         'pushes': pushes,
         'total_stake': total_stake,
+        'total_won': total_won,
+        'total_lost': total_lost,
         'total_return': total_return,
         'net_pl': net_pl,
         'win_pct': win_pct,
