@@ -206,6 +206,38 @@ def _attach_recommendations(sport, user, games_data):
         g['recommendation'] = get_recommendation(sport, game_obj, user)
 
 
+def _partition_elite(games_data, live_data):
+    """Split elite-tier recommendations into their own list for the featured
+    section, and return the remaining upcoming + live lists with elites removed.
+
+    Must run AFTER assign_tiers, because tier may be demoted by the slate-level
+    cap. Preserves ordering of returned lists; elites are sorted by confidence
+    desc, edge desc so the strongest pick leads the featured section.
+    """
+    elite_ids = set()
+    elite_games = []
+    for g in list(live_data) + list(games_data):
+        rec = g.get('recommendation')
+        if rec is not None and rec.tier == 'elite':
+            game_obj = g.get('game')
+            gid = getattr(game_obj, 'id', None)
+            if gid is None or gid in elite_ids:
+                continue
+            elite_ids.add(gid)
+            elite_games.append(g)
+
+    elite_games.sort(
+        key=lambda g: (
+            -(g['recommendation'].confidence_score or 0),
+            -(g['recommendation'].model_edge or 0),
+        )
+    )
+
+    remaining_upcoming = [g for g in games_data if getattr(g.get('game'), 'id', None) not in elite_ids]
+    remaining_live = [g for g in live_data if getattr(g.get('game'), 'id', None) not in elite_ids]
+    return elite_games, remaining_upcoming, remaining_live
+
+
 def _sort_games_by_tier_then_edge(games_data, sort_by):
     """Sort by recommendation tier first (elite > strong > standard > none),
     then the existing edge-based ordering as a tiebreaker within tier."""
@@ -368,6 +400,7 @@ def value_board(request):
 
     games_data = []
     live_data = []
+    elite_games = []
     golf_events = []
     is_offseason = False
     show_bye_message = False
@@ -388,6 +421,12 @@ def value_board(request):
             if g.get('recommendation') is not None
         ]
         assign_tiers(all_recs)
+
+        # Pull elite-tier games into their own featured section above the
+        # main board. The slate-level guardrail already caps this at 2 —
+        # we just partition the same list. `elite_games` is removed from
+        # `games_data` and `live_data` so it never duplicates below.
+        elite_games, games_data, live_data = _partition_elite(games_data, live_data)
         _sort_games_by_tier_then_edge(games_data, sort_by)
 
         # Bye-week / off-week detection — currently only wired for CFB & CBB
@@ -448,6 +487,7 @@ def value_board(request):
         'available_sports': available_sports,
         'active_sport': sport,
         'games_data': visible_data,
+        'elite_games': elite_games,
         'game_sections': game_sections,
         'golf_events': golf_events,
         'total_count': total_count,

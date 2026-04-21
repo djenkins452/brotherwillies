@@ -124,3 +124,8 @@ class BettingRecommendation(models.Model):
     def tier_label(self):
         from apps.core.services.recommendations import _TIER_LABELS
         return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
+
+    @property
+    def explanation_rows(self):
+        from apps.core.services.recommendations import _build_explanation_rows
+        return _build_explanation_rows(self.confidence_score, self.odds_american, self.model_edge)

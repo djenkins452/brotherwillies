@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-04-21 - Elite Plays section + why-this-is-elite explanation
+
+**Summary:** The lobby now surfaces the day's strongest model picks in a dedicated "🔥 High Confidence Plays" section above the main board, with a short deterministic explanation (Win Probability / Market Implied / Edge) on each elite card. The full slate still renders below — this is a visual hierarchy, not a filter.
+
+### View
+- `_partition_elite(games_data, live_data)` in `apps/core/views.py` splits elite-tier games out of the main board. Runs AFTER `assign_tiers` so the slate-level cap (≤2 elites per view) is already applied.
+- Returned elite list is sorted by (confidence desc, edge desc) so the strongest pick leads.
+- Elites are removed from both upcoming and live lists before they flow into `_group_games_by_timeframe` — no duplication below.
+- Template context gains `elite_games`.
+
+### Service
+- `Recommendation.explanation_rows` (new property) returns a list of `{label, value}` dicts: Win Probability (from `confidence_score`), Market Implied (from `odds_american` via the existing `_implied_prob` helper), Edge (from `model_edge`).
+- `_build_explanation_rows()` is the shared builder used by both the dataclass and the persisted `BettingRecommendation` DB model — no template-side math.
+- Metrics that can't be computed (e.g. missing odds) are skipped, never fabricated.
+
+### UI
+- New partial `templates/core/includes/elite_plays_section.html` renders the featured section:
+  - Header `🔥 High Confidence Plays` + subtitle
+  - One card per elite rec: sport badge, matchup, tier label, pick + line, 3-row explanation block, "View Analysis" link + "Place Mock Bet" button (authed users).
+- Lobby now includes `mockbets/includes/place_bet_modal.html` so the elite CTA places bets in one tap without a detail-page hop.
+- Styling: gold border + soft glow panel. Cards stay 2-up on desktop (natural max since `MAX_ELITE_PER_SLATE = 2`), responsive down to 1-up on phone.
+
+### Tests (9 new)
+`apps/core/tests.py`:
+- `ExplanationRowsTests` — full-row formatting, negative-edge sign handling, zero-odds skips Market Implied
+- `ElitePartitionTests` — upcoming partition, live partition, sort by (confidence, edge), duplicate-safety, no-rec games stay put, end-to-end with `assign_tiers` showing the cap flows through
+
+Full app suite: 188/189 (pre-existing `feedback.tests` import error unchanged).
+
+---
+
 ## 2026-04-20 - Confidence tiers + visual prioritization on recommendations
 
 **Summary:** The BettingRecommendation layer now classifies each pick into elite / strong / standard based on confidence, labels it accordingly in the UI, applies a slate-level cap of 2 elites so the signal stays meaningful, and sorts the lobby so highlighted picks surface first. Architecture is unchanged — tier is a computed property, not a new column.

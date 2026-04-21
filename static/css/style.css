@@ -784,6 +784,110 @@ select.form-control {
 .gc-pick-line { color: var(--text-muted); margin-left: 2px; }
 .gc-pick-edge { margin-left: 6px; font-weight: 600; }
 
+/* Elite Plays featured section — sits above the main lobby board */
+.elite-plays-section {
+    padding: 14px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(250, 204, 21, 0.35);
+    background: linear-gradient(160deg, rgba(250, 204, 21, 0.08), rgba(250, 204, 21, 0.02) 55%, var(--bg-card));
+    box-shadow: 0 0 22px rgba(250, 204, 21, 0.15);
+}
+.elite-plays-header { margin-bottom: 10px; }
+.elite-plays-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.elite-plays-subtitle { margin: 2px 0 0; }
+.elite-plays-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+@media (min-width: 481px) and (max-width: 768px) {
+    .elite-plays-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 769px) {
+    /* 2-up is the natural max because MAX_ELITE_PER_SLATE = 2; stays 2 cols
+       even on wide screens rather than leaving a gaping empty cell. */
+    .elite-plays-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.elite-play-card {
+    background: var(--bg-card);
+    border: 1px solid #facc15;
+    border-radius: var(--radius);
+    padding: 14px;
+    box-shadow: 0 0 12px rgba(250, 204, 21, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.elite-play-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.elite-play-sport-badge {
+    background: rgba(250, 204, 21, 0.2);
+    color: #facc15;
+    border: 1px solid rgba(250, 204, 21, 0.5);
+}
+.elite-play-matchup {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.elite-play-tier {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #facc15;
+}
+.elite-play-pick {
+    font-size: 1.08rem;
+    line-height: 1.3;
+}
+.elite-play-icon { margin-right: 4px; }
+.elite-play-line { color: var(--text-muted); margin-left: 2px; }
+.elite-play-explanation {
+    list-style: none;
+    padding: 8px 0 2px;
+    margin: 0;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px 8px;
+}
+.elite-play-explanation li {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.elite-play-row-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+.elite-play-row-value {
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+.elite-play-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+@media (max-width: 480px) {
+    .elite-play-explanation { grid-template-columns: repeat(3, 1fr); gap: 4px; }
+    .elite-play-row-value { font-size: 0.85rem; }
+}
+
 /* Confidence tiers — elite gets glow + gold accent, strong gets a subtle
    accent ring, standard is the default card. No size/layout changes so
    the 3-up grid stays aligned. */

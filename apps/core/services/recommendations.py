@@ -58,12 +58,41 @@ class Recommendation:
     def tier_label(self) -> str:
         return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
 
+    @property
+    def market_implied_probability(self) -> Optional[float]:
+        """Market's implied probability (0-100) for the picked side, from odds_american.
+        Returns None if odds are missing or zero (defensive — shouldn't normally happen)."""
+        if not self.odds_american:
+            return None
+        return _implied_prob(self.odds_american) * 100.0
+
+    @property
+    def explanation_rows(self):
+        """Deterministic, scannable rows for the elite card explanation block.
+        Skips any metric that can't be computed — never fabricates a number."""
+        return _build_explanation_rows(self.confidence_score, self.odds_american, self.model_edge)
+
     def to_context(self):
         """Template-safe dict. Keeps the game object alive for related-field access."""
         d = asdict(self)
         d['game'] = self.game
         d['tier_label'] = self.tier_label
+        d['explanation_rows'] = self.explanation_rows
         return d
+
+
+def _build_explanation_rows(confidence_score, odds_american, model_edge):
+    """Shared builder used by both the dataclass and the persisted DB model."""
+    rows = []
+    if confidence_score is not None:
+        rows.append({'label': 'Win Probability', 'value': f'{float(confidence_score):.0f}%'})
+    if odds_american:
+        implied = _implied_prob(int(odds_american)) * 100.0
+        rows.append({'label': 'Market Implied', 'value': f'{implied:.0f}%'})
+    if model_edge is not None:
+        sign = '+' if float(model_edge) > 0 else ''
+        rows.append({'label': 'Edge', 'value': f'{sign}{float(model_edge):.1f}%'})
+    return rows
 
 
 def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendation']:

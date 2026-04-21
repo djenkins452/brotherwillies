@@ -1,0 +1,51 @@
+{% comment %}
+Elite Plays — featured section above the main board.
+
+Expects `elite_games` in context: a list of game data dicts, each with a
+`recommendation` whose tier is already 'elite' (after slate-level guardrail).
+
+All tier + explanation logic is computed upstream — this partial is pure render.
+{% endcomment %}
+{% if elite_games %}
+<section class="elite-plays-section mb-2">
+    <div class="elite-plays-header">
+        <h2 class="elite-plays-title">&#x1F525; High Confidence Plays</h2>
+        <p class="elite-plays-subtitle text-sm text-muted">The strongest model opportunities on the board</p>
+    </div>
+    <div class="elite-plays-grid">
+        {% for g in elite_games %}
+        {% with rec=g.recommendation game=g.game %}
+        <div class="elite-play-card" data-sport="{{ g.game|default_if_none:''|stringformat:'s' }}">
+            <div class="elite-play-meta">
+                <span class="badge elite-play-sport-badge">{{ active_sport|upper }}</span>
+                <span class="elite-play-matchup">{{ game.away_team.name }} @ {{ game.home_team.name }}</span>
+            </div>
+            <div class="elite-play-tier">{{ rec.tier_label }}</div>
+            <div class="elite-play-pick">
+                <span class="elite-play-icon">&#x1F3AF;</span>
+                <strong>{{ rec.pick }} {{ rec.bet_type|title }}</strong>
+                <span class="elite-play-line">({{ rec.line }})</span>
+            </div>
+            <ul class="elite-play-explanation">
+                {% for row in rec.explanation_rows %}
+                <li>
+                    <span class="elite-play-row-label">{{ row.label }}</span>
+                    <span class="elite-play-row-value">{{ row.value }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            <div class="elite-play-actions">
+                <a href="/{{ active_sport }}/game/{{ game.id }}/" class="btn btn-sm">View Analysis</a>
+                {% if user.is_authenticated %}
+                <button type="button" class="btn btn-primary btn-sm"
+                        onclick="openMockBetModal({sport:'{{ active_sport }}',game_id:'{{ game.id }}',bet_type:'{{ rec.bet_type }}',selection:'{{ rec.pick|escapejs }}',odds:{{ rec.odds_american }}})">
+                    Place Mock Bet
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        {% endwith %}
+        {% endfor %}
+    </div>
+</section>
+{% endif %}

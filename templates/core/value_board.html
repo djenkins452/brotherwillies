@@ -65,6 +65,8 @@
 </div>
 
 {% else %}
+{% include "core/includes/elite_plays_section.html" %}
+
 {# CFB / CBB games view #}
 <div class="filter-bar">
     <span class="filter-label">Sort:</span>
@@ -186,5 +188,9 @@
 </div>
 {% endif %}
 
+{% endif %}
+
+{% if user.is_authenticated %}
+{% include "mockbets/includes/place_bet_modal.html" %}
 {% endif %}
 {% endblock %}

@@ -254,6 +254,118 @@ class LobbySortByTierTests(TestCase):
         self.assertIs(games[1], no_rec)
 
 
+class ExplanationRowsTests(TestCase):
+    """The elite card's explanation block is driven by Recommendation.explanation_rows.
+    It must be deterministic, never fabricated, and skip metrics that can't be computed."""
+
+    def test_full_rows_when_all_fields_present(self):
+        rec = _fake_rec(confidence=72.0, edge=14.0)
+        rec.odds_american = -120
+        rows = rec.explanation_rows
+        labels = [r['label'] for r in rows]
+        self.assertEqual(labels, ['Win Probability', 'Market Implied', 'Edge'])
+        # Deterministic formatting
+        values = {r['label']: r['value'] for r in rows}
+        self.assertEqual(values['Win Probability'], '72%')
+        # -120 → 120/220 ≈ 54.5% → rounds to 55%
+        self.assertEqual(values['Market Implied'], '55%')
+        self.assertEqual(values['Edge'], '+14.0%')
+
+    def test_negative_edge_renders_without_plus_sign(self):
+        rec = _fake_rec(confidence=60.0, edge=-3.2)
+        rec.odds_american = 100
+        values = {r['label']: r['value'] for r in rec.explanation_rows}
+        self.assertEqual(values['Edge'], '-3.2%')
+
+    def test_zero_odds_omits_market_implied_row(self):
+        rec = _fake_rec(confidence=70.0, edge=5.0)
+        rec.odds_american = 0
+        labels = [r['label'] for r in rec.explanation_rows]
+        self.assertNotIn('Market Implied', labels)
+        self.assertIn('Win Probability', labels)
+        self.assertIn('Edge', labels)
+
+
+class ElitePartitionTests(TestCase):
+    """Ensure the lobby view partitions elite games into elite_games and keeps
+    them out of the main board."""
+
+    def _game_dict(self, game_id, tier, house_edge=1.0, confidence=70.0, rec_edge=1.0):
+        """Minimal shape compatible with _partition_elite."""
+        class _Stub:
+            pass
+        g = _Stub()
+        g.id = game_id
+        rec = _fake_rec(confidence=confidence, edge=rec_edge)
+        rec.tier = tier  # bypass assign_tiers — test is about partitioning
+        return {'game': g, 'house_edge': house_edge, 'recommendation': rec}
+
+    def test_partitions_elite_from_upcoming(self):
+        from apps.core.views import _partition_elite
+        upcoming = [
+            self._game_dict('u1', 'elite', confidence=90, rec_edge=5),
+            self._game_dict('u2', 'strong', confidence=70, rec_edge=3),
+            self._game_dict('u3', 'standard', confidence=55, rec_edge=1),
+        ]
+        elite, remaining_up, remaining_live = _partition_elite(upcoming, [])
+        self.assertEqual(len(elite), 1)
+        self.assertEqual(elite[0]['game'].id, 'u1')
+        self.assertEqual([g['game'].id for g in remaining_up], ['u2', 'u3'])
+        self.assertEqual(remaining_live, [])
+
+    def test_partitions_elite_from_live_too(self):
+        from apps.core.views import _partition_elite
+        upcoming = [self._game_dict('u1', 'standard')]
+        live = [self._game_dict('l1', 'elite', confidence=95, rec_edge=10)]
+        elite, remaining_up, remaining_live = _partition_elite(upcoming, live)
+        self.assertEqual([g['game'].id for g in elite], ['l1'])
+        self.assertEqual([g['game'].id for g in remaining_up], ['u1'])
+        self.assertEqual(remaining_live, [])
+
+    def test_elite_sorted_by_confidence_then_edge(self):
+        from apps.core.views import _partition_elite
+        upcoming = [
+            self._game_dict('a', 'elite', confidence=85, rec_edge=3),
+            self._game_dict('b', 'elite', confidence=92, rec_edge=1),
+            self._game_dict('c', 'elite', confidence=85, rec_edge=9),
+        ]
+        elite, _, _ = _partition_elite(upcoming, [])
+        # 92 first; then 85s tied on confidence → higher edge (c) wins
+        self.assertEqual([g['game'].id for g in elite], ['b', 'c', 'a'])
+
+    def test_no_duplication_across_lists(self):
+        """Defensive: if the same game somehow appears in both live and upcoming
+        (shouldn't happen in practice, but code must not duplicate it)."""
+        from apps.core.views import _partition_elite
+        shared = self._game_dict('dup', 'elite', confidence=90, rec_edge=5)
+        elite, remaining_up, remaining_live = _partition_elite([shared], [shared])
+        self.assertEqual(len(elite), 1)
+        self.assertEqual(remaining_up, [])
+        self.assertEqual(remaining_live, [])
+
+    def test_no_recommendation_games_stay_in_main(self):
+        from apps.core.views import _partition_elite
+        no_rec = {'game': type('G', (), {'id': 'x'})(), 'house_edge': 0, 'recommendation': None}
+        elite, remaining_up, _ = _partition_elite([no_rec], [])
+        self.assertEqual(elite, [])
+        self.assertEqual(len(remaining_up), 1)
+
+    def test_guardrail_cap_enforced_before_partition(self):
+        """End-to-end with assign_tiers: even with 5 would-be elites, only 2
+        reach the elite section. The rest remain as 'strong' in the main board."""
+        from apps.core.views import _partition_elite
+        games = [self._game_dict(f'g{i}', 'standard', confidence=90 - i, rec_edge=5 - i) for i in range(5)]
+        # Build with raw tiers first, then run assign_tiers so it mimics the view path
+        for g in games:
+            g['recommendation'].tier = 'standard'
+        assign_tiers([g['recommendation'] for g in games])
+        elite, remaining_up, _ = _partition_elite(games, [])
+        self.assertEqual(len(elite), MAX_ELITE_PER_SLATE)
+        self.assertEqual(len(remaining_up), 5 - MAX_ELITE_PER_SLATE)
+        for g in remaining_up:
+            self.assertEqual(g['recommendation'].tier, 'strong')
+
+
 class PlaceBetSnapshotsRecommendationTests(TestCase):
     """Integration: POSTing to /mockbets/place/ should attach a recommendation FK."""
 
