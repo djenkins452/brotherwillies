@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-04-20 - Decision Layer: BettingRecommendation engine
+
+**Summary:** New thin decision layer converts existing model edge into a single actionable pick per game. No rebuild — reuses every sport's `compute_game_data` via the existing SPORT_REGISTRY; settlement, bankroll, and analytics are untouched.
+
+### Added
+- `BettingRecommendation` model (`apps/core/models.py`) — sport-agnostic via nullable per-sport FKs, mirroring MockBet's pattern.
+- `apps/core/services/recommendations.py` with `get_recommendation(sport, game, user)` returning a Recommendation dataclass and `persist_recommendation()` that writes a DB row.
+- `MockBet.recommendation` FK — snapshots the active model pick at bet placement (set automatically in `place_bet` view, non-fatal on failure).
+- Reusable `templates/core/includes/model_pick_banner.html` partial rendered on MLB / CFB / CBB / College Baseball game detail pages.
+- Explicit pick line on every lobby game card: `🎯 Cardinals Moneyline (+120) · 6.3% edge`.
+- "Place Mock Bet on Model Pick" one-tap button that pre-fills the modal with the model's pick/odds/bet_type.
+- Admin registration for `BettingRecommendation`.
+
+### Design
+- v1 emits **moneyline picks only** — that's the market where the existing sport model services produce comparable win probabilities. Spread/total picks would require a margin-of-victory or runs model that doesn't yet exist; returning None is more honest than fabricating edge.
+- Model source selection: uses the user's configured model if authenticated and a user prob exists; otherwise house model.
+- Respects the "neutral language" guardrail — UI copy is "MODEL PICK" / "House Model" / "Your Model", never "best bet" or "lock".
+
+### Tests
+- 11 new tests in `apps/core/tests.py` covering implied-prob math, side selection under edge asymmetry, missing-odds no-op, unknown-sport no-op, confidence-score shape, persistence FK correctness, and end-to-end place-bet → recommendation snapshot.
+- Full app suite: 76 passing (only pre-existing `feedback.tests` import error remains, unchanged).
+
+---
+
 ## 2026-04-19 - MLB injury ingestion (ESPN) + tile display
 
 **Summary:** MLB was the only team sport without injury ingestion. ESPN exposes a clean per-team injuries endpoint; we now consume it, aggregate per team, attach to every upcoming game within a 7-day window, and surface the most-severe player on each tile.

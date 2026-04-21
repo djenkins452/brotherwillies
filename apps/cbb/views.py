@@ -47,6 +47,9 @@ def game_detail(request, game_id):
     )
     data = compute_game_data(game, request.user if request.user.is_authenticated else None)
 
+    from apps.core.services.recommendations import get_recommendation
+    rec = get_recommendation('cbb', game, request.user if request.user.is_authenticated else None)
+
     if request.user.is_authenticated:
         UserGameInteraction.objects.create(
             user=request.user, cbb_game=game, action='viewed', page_key='game_detail'
@@ -55,6 +58,7 @@ def game_detail(request, game_id):
     return render(request, 'cbb/game_detail.html', {
         'game': game,
         'data': data,
+        'recommendation': rec,
         'help_key': 'game_detail',
         'nav_active': 'cbb',
     })

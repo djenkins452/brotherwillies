@@ -1,5 +1,8 @@
+import uuid
+
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.utils import timezone
 
 
 class SiteConfig(models.Model):
@@ -36,3 +39,76 @@ class SiteConfig(models.Model):
         """Return the singleton config, creating with defaults if needed."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class BettingRecommendation(models.Model):
+    """Decision-layer snapshot: the single highest-edge pick the model would make on a game.
+
+    Sport-agnostic via per-sport nullable FKs (mirrors MockBet's pattern). A row is a
+    snapshot in time — the current pick can change as odds or injuries move, so we do
+    not enforce uniqueness on (game, model_source). The freshest row is whichever has
+    the newest `created_at`.
+    """
+    SPORT_CHOICES = [
+        ('cfb', 'College Football'),
+        ('cbb', 'College Basketball'),
+        ('mlb', 'MLB'),
+        ('college_baseball', 'College Baseball'),
+    ]
+
+    BET_TYPE_CHOICES = [
+        ('moneyline', 'Moneyline'),
+        ('spread', 'Spread'),
+        ('total', 'Total'),
+    ]
+
+    MODEL_SOURCE_CHOICES = [
+        ('house', 'House Model'),
+        ('user', 'User Model'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sport = models.CharField(max_length=20, choices=SPORT_CHOICES)
+
+    cfb_game = models.ForeignKey(
+        'cfb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='recommendations'
+    )
+    cbb_game = models.ForeignKey(
+        'cbb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='recommendations'
+    )
+    mlb_game = models.ForeignKey(
+        'mlb.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='recommendations'
+    )
+    college_baseball_game = models.ForeignKey(
+        'college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='recommendations'
+    )
+
+    bet_type = models.CharField(max_length=10, choices=BET_TYPE_CHOICES)
+    pick = models.CharField(max_length=200)
+    line = models.CharField(max_length=32, blank=True)
+    odds_american = models.IntegerField()
+    confidence_score = models.DecimalField(max_digits=5, decimal_places=2)
+    model_edge = models.DecimalField(max_digits=6, decimal_places=2)
+    model_source = models.CharField(max_length=5, choices=MODEL_SOURCE_CHOICES, default='house')
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['sport', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.sport} {self.bet_type}: {self.pick} ({self.line}) edge={self.model_edge}"
+
+    @property
+    def game(self):
+        if self.sport == 'cfb':
+            return self.cfb_game
+        if self.sport == 'cbb':
+            return self.cbb_game
+        if self.sport == 'mlb':
+            return self.mlb_game
+        if self.sport == 'college_baseball':
+            return self.college_baseball_game
+        return None

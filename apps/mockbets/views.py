@@ -208,6 +208,18 @@ def place_bet(request):
 
     bet.save()
 
+    # Snapshot the current model pick alongside the bet (team sports only).
+    # Non-fatal on failure — the bet is already saved and valid without it.
+    if sport in ('cfb', 'cbb', 'mlb', 'college_baseball') and bet.game is not None:
+        try:
+            from apps.core.services.recommendations import persist_recommendation
+            rec = persist_recommendation(sport, bet.game, request.user)
+            if rec is not None:
+                bet.recommendation = rec
+                bet.save(update_fields=['recommendation'])
+        except Exception:
+            pass
+
     return JsonResponse({
         'success': True,
         'bet_id': str(bet.id),

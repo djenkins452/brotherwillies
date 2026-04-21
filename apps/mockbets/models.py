@@ -101,6 +101,15 @@ class MockBet(models.Model):
     review_flag = models.CharField(max_length=6, choices=REVIEW_CHOICES, blank=True)
     review_notes = models.TextField(blank=True)
 
+    # Snapshot of the decision-layer pick active when this bet was placed
+    recommendation = models.ForeignKey(
+        'core.BettingRecommendation',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mock_bets',
+    )
+
     class Meta:
         ordering = ['-placed_at']
 

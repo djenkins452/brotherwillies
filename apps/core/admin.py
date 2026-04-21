@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import SiteConfig
+from .models import SiteConfig, BettingRecommendation
 
 
 @admin.register(SiteConfig)
@@ -21,3 +21,11 @@ class SiteConfigAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(BettingRecommendation)
+class BettingRecommendationAdmin(admin.ModelAdmin):
+    list_display = ('sport', 'bet_type', 'pick', 'line', 'odds_american', 'confidence_score', 'model_edge', 'model_source', 'created_at')
+    list_filter = ('sport', 'bet_type', 'model_source')
+    search_fields = ('pick',)
+    readonly_fields = ('id', 'created_at')

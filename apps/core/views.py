@@ -172,6 +172,7 @@ def _get_value_data_for_sport(sport, user, sort_by):
     compute_fn = entry['compute_fn']
     games_data = [compute_fn(g, user) for g in games]
     games_data = _apply_filters(games_data, user)
+    _attach_recommendations(sport, user, games_data)
 
     if sort_by == 'user_edge':
         games_data.sort(key=lambda g: abs(g.get('user_edge', 0) or 0), reverse=True)
@@ -196,7 +197,20 @@ def _get_live_data_for_sport(sport, user):
         .order_by(time_field)
     )
     compute_fn = entry['compute_fn']
-    return [compute_fn(g, user) for g in games]
+    data = [compute_fn(g, user) for g in games]
+    _attach_recommendations(sport, user, data)
+    return data
+
+
+def _attach_recommendations(sport, user, games_data):
+    """Mutate each dict in `games_data` to add a `recommendation` key (or None)."""
+    from apps.core.services.recommendations import get_recommendation
+    for g in games_data:
+        game_obj = g.get('game')
+        if game_obj is None:
+            g['recommendation'] = None
+            continue
+        g['recommendation'] = get_recommendation(sport, game_obj, user)
 
 
 def _get_golf_events():

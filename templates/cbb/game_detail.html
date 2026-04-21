@@ -29,9 +29,15 @@
     {% endif %}
 </div>
 
+{% include "core/includes/model_pick_banner.html" %}
+
 {% if user.is_authenticated and game.status != 'final' %}
 <div class="mb-2">
+    {% if recommendation %}
+    <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'cbb',game_id:'{{ game.id }}',bet_type:'{{ recommendation.bet_type }}',selection:'{{ recommendation.pick|escapejs }}',odds:{{ recommendation.odds_american }}})">Place Mock Bet on Model Pick</button>
+    {% else %}
     <button class="btn btn-primary btn-sm" onclick="openMockBetModal({sport:'cbb',game_id:'{{ game.id }}'{% if data.latest_odds.moneyline_home %},odds:{{ data.latest_odds.moneyline_home }}{% endif %}})">Place Mock Bet</button>
+    {% endif %}
 </div>
 {% endif %}
 

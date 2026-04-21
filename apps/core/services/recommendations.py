@@ -1,0 +1,139 @@
+"""Decision layer — turns model probabilities into a single actionable pick per game.
+
+Reuses each sport's existing `compute_game_data` (via SPORT_REGISTRY) and the latest
+OddsSnapshot. No new modeling happens here.
+
+v1 emits moneyline picks only: that is the market where the existing sport model
+services actually produce a comparable win probability. Spread picks require a
+margin-of-victory model; total picks require a runs/points projection. Both are
+future extensions — stubbed below with `None` rather than fabricated.
+"""
+from dataclasses import dataclass, asdict
+from decimal import Decimal
+from typing import Optional
+
+from apps.core.sport_registry import SPORT_REGISTRY
+
+
+@dataclass
+class Recommendation:
+    sport: str
+    game: object
+    bet_type: str
+    pick: str
+    line: str
+    odds_american: int
+    confidence_score: float
+    model_edge: float
+    model_source: str
+
+    def to_context(self):
+        """Template-safe dict. Keeps the game object alive for related-field access."""
+        d = asdict(self)
+        d['game'] = self.game
+        return d
+
+
+def _implied_prob(american: int) -> float:
+    """American odds → implied probability in [0, 1]."""
+    if american > 0:
+        return 100.0 / (american + 100.0)
+    return abs(american) / (abs(american) + 100.0)
+
+
+def _format_american(odds: int) -> str:
+    return f"+{odds}" if odds > 0 else str(odds)
+
+
+def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendation]:
+    odds = data.get('latest_odds')
+    if not odds or odds.moneyline_home is None or odds.moneyline_away is None:
+        return None
+
+    if model_source == 'user' and data.get('user_prob') is not None:
+        home_prob = data['user_prob'] / 100.0
+    else:
+        home_prob = data['house_prob'] / 100.0
+        model_source = 'house'
+    away_prob = 1.0 - home_prob
+
+    home_edge = home_prob - _implied_prob(odds.moneyline_home)
+    away_edge = away_prob - _implied_prob(odds.moneyline_away)
+
+    if home_edge >= away_edge:
+        pick_name = game.home_team.name
+        pick_odds = odds.moneyline_home
+        edge = home_edge
+        confidence = home_prob
+    else:
+        pick_name = game.away_team.name
+        pick_odds = odds.moneyline_away
+        edge = away_edge
+        confidence = away_prob
+
+    return Recommendation(
+        sport='',
+        game=game,
+        bet_type='moneyline',
+        pick=pick_name,
+        line=_format_american(pick_odds),
+        odds_american=pick_odds,
+        confidence_score=round(confidence * 100, 1),
+        model_edge=round(edge * 100, 1),
+        model_source=model_source,
+    )
+
+
+def get_recommendation(sport: str, game, user=None) -> Optional[Recommendation]:
+    """Compute the single highest-edge pick for a game. Returns None if no odds exist.
+
+    Preference order for model source:
+      - If the user has a configured model AND its prob differs meaningfully from house,
+        use the user model. Otherwise fall back to the house model.
+    """
+    entry = SPORT_REGISTRY.get(sport)
+    if not entry:
+        return None
+
+    data = entry['compute_fn'](game, user)
+
+    prefer_user = (
+        user is not None
+        and getattr(user, 'is_authenticated', False)
+        and data.get('user_prob') is not None
+    )
+    source = 'user' if prefer_user else 'house'
+
+    candidates = [
+        _moneyline_candidate(game, data, source),
+        # spread/total candidates require margin/runs models — not implemented in v1
+    ]
+    candidates = [c for c in candidates if c is not None]
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda c: c.model_edge)
+    best.sport = sport
+    return best
+
+
+def persist_recommendation(sport: str, game, user=None):
+    """Compute and save a BettingRecommendation row. Returns the saved model or None."""
+    from apps.core.models import BettingRecommendation
+
+    rec = get_recommendation(sport, game, user)
+    if rec is None:
+        return None
+
+    game_fk_field = f"{sport}_game"
+    return BettingRecommendation.objects.create(
+        sport=sport,
+        bet_type=rec.bet_type,
+        pick=rec.pick,
+        line=rec.line,
+        odds_american=rec.odds_american,
+        confidence_score=Decimal(str(rec.confidence_score)),
+        model_edge=Decimal(str(rec.model_edge)),
+        model_source=rec.model_source,
+        **{game_fk_field: game},
+    )

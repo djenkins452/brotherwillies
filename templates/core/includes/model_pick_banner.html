@@ -1,0 +1,27 @@
+{% comment %}
+Render the decision-layer pick for a single game.
+
+Expects a `recommendation` in context — a Recommendation dataclass (from
+apps.core.services.recommendations) or None. Renders nothing if None.
+
+No logic here — all decisions happen in the service.
+{% endcomment %}
+{% if recommendation %}
+<div class="card model-pick-banner mb-2" data-pick-source="{{ recommendation.model_source }}">
+    <div class="model-pick-label text-sm text-muted">MODEL PICK
+        {% if recommendation.model_source == 'user' %}<span class="badge">Your Model</span>
+        {% else %}<span class="badge">House Model</span>{% endif %}
+    </div>
+    <div class="model-pick-headline" style="font-size:1.15rem;font-weight:700;">
+        <span class="model-pick-icon">&#x1F3AF;</span>
+        {{ recommendation.pick }} {{ recommendation.bet_type|title }}
+        (<span class="model-pick-line">{{ recommendation.line }}</span>)
+    </div>
+    <div class="model-pick-meta text-sm mt-1">
+        Confidence: <strong>{{ recommendation.confidence_score|floatformat:0 }}%</strong>
+        &middot;
+        Edge vs market:
+        <strong class="{% if recommendation.model_edge > 0 %}edge-positive{% elif recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ recommendation.model_edge|floatformat:1 }}%</strong>
+    </div>
+</div>
+{% endif %}

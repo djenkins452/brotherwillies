@@ -73,10 +73,13 @@ def game_detail(request, game_id):
         id=game_id,
     )
     from apps.mlb.services.model_service import compute_game_data
+    from apps.core.services.recommendations import get_recommendation
     data = compute_game_data(game, request.user)
+    rec = get_recommendation('mlb', game, request.user)
     return render(request, 'mlb/game_detail.html', {
         'game': game,
         'data': data,
+        'recommendation': rec,
         'nav_active': 'mlb',
         'help_key': 'mlb_game',
     })
