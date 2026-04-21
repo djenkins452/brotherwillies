@@ -4,11 +4,14 @@ Render the decision-layer pick for a single game.
 Expects a `recommendation` in context — a Recommendation dataclass (from
 apps.core.services.recommendations) or None. Renders nothing if None.
 
-No logic here — all decisions happen in the service.
+No logic here — tier + tier_label are decided in the service.
 {% endcomment %}
 {% if recommendation %}
-<div class="card model-pick-banner mb-2" data-pick-source="{{ recommendation.model_source }}">
-    <div class="model-pick-label text-sm text-muted">MODEL PICK
+<div class="card model-pick-banner model-pick-banner-{{ recommendation.tier }} mb-2"
+     data-pick-source="{{ recommendation.model_source }}"
+     data-pick-tier="{{ recommendation.tier }}">
+    <div class="model-pick-label text-sm">
+        <span class="model-pick-tier">{{ recommendation.tier_label }}</span>
         {% if recommendation.model_source == 'user' %}<span class="badge">Your Model</span>
         {% else %}<span class="badge">House Model</span>{% endif %}
     </div>

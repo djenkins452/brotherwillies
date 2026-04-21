@@ -93,7 +93,7 @@
     <div class="vb-section-body">
         {% for g in section.games %}
         <a href="/{{ active_sport }}/game/{{ g.game.id }}/"
-           class="game-card{% if section.is_live %} game-card-live{% endif %}{% if g.is_favorite %} game-card-favorite{% endif %}"
+           class="game-card{% if section.is_live %} game-card-live{% endif %}{% if g.is_favorite %} game-card-favorite{% endif %}{% if g.recommendation %} game-card-tier-{{ g.recommendation.tier }}{% endif %}"
            {% if g.is_favorite and favorite_team_color %}style="--team-color: {{ favorite_team_color }}"{% endif %}>
             {% if section.is_live %}<span class="badge badge-live">Live</span>{% endif %}
             {% if g.is_favorite %}
@@ -153,11 +153,14 @@
             </div>
             {% endif %}
             {% if g.recommendation %}
-            <div class="gc-pick text-sm mt-1">
-                <span class="gc-pick-icon">&#x1F3AF;</span>
-                <strong>{{ g.recommendation.pick }} {{ g.recommendation.bet_type|title }}</strong>
-                <span class="gc-pick-line">({{ g.recommendation.line }})</span>
-                <span class="gc-pick-edge {% if g.recommendation.model_edge > 0 %}edge-positive{% elif g.recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">&middot; {{ g.recommendation.model_edge|floatformat:1 }}% edge</span>
+            <div class="gc-pick gc-pick-{{ g.recommendation.tier }} text-sm mt-1">
+                <span class="gc-pick-tier">{{ g.recommendation.tier_label }}</span>
+                <div>
+                    <span class="gc-pick-icon">&#x1F3AF;</span>
+                    <strong>{{ g.recommendation.pick }} {{ g.recommendation.bet_type|title }}</strong>
+                    <span class="gc-pick-line">({{ g.recommendation.line }})</span>
+                    <span class="gc-pick-edge {% if g.recommendation.model_edge > 0 %}edge-positive{% elif g.recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">&middot; {{ g.recommendation.model_edge|floatformat:1 }}% edge</span>
+                </div>
             </div>
             {% endif %}
         </a>

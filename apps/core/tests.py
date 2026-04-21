@@ -15,10 +15,16 @@ from django.utils import timezone
 
 from apps.core.models import BettingRecommendation
 from apps.core.services.recommendations import (
+    Recommendation,
+    assign_tiers,
     get_recommendation,
     persist_recommendation,
     _implied_prob,
     _format_american,
+    _raw_tier,
+    ELITE_THRESHOLD,
+    STRONG_THRESHOLD,
+    MAX_ELITE_PER_SLATE,
 )
 from apps.mlb.models import Conference, Team, Game, OddsSnapshot
 from apps.mockbets.models import MockBet
@@ -132,6 +138,120 @@ class PersistRecommendationTests(TestCase):
         game = _make_mlb_game()
         self.assertIsNone(persist_recommendation('mlb', game))
         self.assertEqual(BettingRecommendation.objects.count(), 0)
+
+
+def _fake_rec(confidence, edge=1.0, pick='X'):
+    """Build a plain Recommendation for tier-logic tests — no game/odds needed."""
+    return Recommendation(
+        sport='mlb', game=None, bet_type='moneyline', pick=pick,
+        line='+100', odds_american=100,
+        confidence_score=confidence, model_edge=edge, model_source='house',
+    )
+
+
+class TierThresholdTests(TestCase):
+    def test_raw_tier_boundaries(self):
+        # elite: >= 80, strong: 65..<80, standard: <65
+        self.assertEqual(_raw_tier(80.0), 'elite')
+        self.assertEqual(_raw_tier(95.0), 'elite')
+        self.assertEqual(_raw_tier(79.9), 'strong')
+        self.assertEqual(_raw_tier(65.0), 'strong')
+        self.assertEqual(_raw_tier(64.9), 'standard')
+        self.assertEqual(_raw_tier(0.0), 'standard')
+
+    def test_tier_labels(self):
+        elite = _fake_rec(90)
+        strong = _fake_rec(70)
+        standard = _fake_rec(50)
+        assign_tiers([elite, strong, standard])
+        self.assertEqual(elite.tier_label, '🔥 High Confidence')
+        self.assertEqual(strong.tier_label, 'Strong Edge')
+        self.assertEqual(standard.tier_label, 'Model Pick')
+
+
+class AssignTiersGuardrailTests(TestCase):
+    def test_caps_elite_at_max_and_demotes_rest_to_strong(self):
+        # 4 would-be elites. Only top 2 by confidence should stay elite.
+        r1 = _fake_rec(95, edge=5)
+        r2 = _fake_rec(90, edge=3)
+        r3 = _fake_rec(88, edge=8)
+        r4 = _fake_rec(85, edge=1)
+        r5 = _fake_rec(70, edge=9)  # strong — untouched by cap
+        r6 = _fake_rec(50, edge=2)  # standard
+
+        assign_tiers([r1, r2, r3, r4, r5, r6])
+
+        self.assertEqual(MAX_ELITE_PER_SLATE, 2)
+        elites = [r for r in [r1, r2, r3, r4, r5, r6] if r.tier == 'elite']
+        self.assertEqual(len(elites), 2)
+        # Top by confidence (95, 90) kept; rest dropped to strong
+        self.assertIn(r1, elites)
+        self.assertIn(r2, elites)
+        self.assertEqual(r3.tier, 'strong')
+        self.assertEqual(r4.tier, 'strong')
+        # Already-strong and standard untouched
+        self.assertEqual(r5.tier, 'strong')
+        self.assertEqual(r6.tier, 'standard')
+
+    def test_edge_breaks_ties_when_confidence_equal(self):
+        # Two recs tied at 85 confidence — edge decides which stays elite.
+        r1 = _fake_rec(85, edge=2)
+        r2 = _fake_rec(85, edge=7)
+        r3 = _fake_rec(85, edge=4)
+        assign_tiers([r1, r2, r3])
+        elites = [r for r in [r1, r2, r3] if r.tier == 'elite']
+        self.assertEqual(len(elites), 2)
+        self.assertIn(r2, elites)  # highest edge
+        self.assertIn(r3, elites)  # second-highest edge
+        self.assertEqual(r1.tier, 'strong')
+
+    def test_small_slate_keeps_all_elites(self):
+        r1 = _fake_rec(95)
+        r2 = _fake_rec(85)
+        assign_tiers([r1, r2])
+        self.assertEqual(r1.tier, 'elite')
+        self.assertEqual(r2.tier, 'elite')
+
+    def test_empty_list_is_safe(self):
+        self.assertEqual(assign_tiers([]), [])
+
+
+class LobbySortByTierTests(TestCase):
+    """Verify tier-first ordering in the lobby sort helper."""
+
+    def test_tier_beats_edge_magnitude(self):
+        from apps.core.views import _sort_games_by_tier_then_edge
+        # Game A: strong tier, tiny edge.  Game B: standard tier, huge edge.
+        # Tier comes first — A must win even though B's edge is larger.
+        game_a = {'house_edge': 0.5, 'recommendation': _fake_rec(75, edge=0.5)}
+        game_b = {'house_edge': 9.9, 'recommendation': _fake_rec(50, edge=9.9)}
+        games = [game_b, game_a]
+        assign_tiers([game_a['recommendation'], game_b['recommendation']])
+        _sort_games_by_tier_then_edge(games, sort_by='house_edge')
+        self.assertIs(games[0], game_a)
+        self.assertIs(games[1], game_b)
+
+    def test_edge_is_tiebreaker_within_tier(self):
+        from apps.core.views import _sort_games_by_tier_then_edge
+        a = {'house_edge': 2.0, 'recommendation': _fake_rec(75, edge=2.0)}
+        b = {'house_edge': 8.0, 'recommendation': _fake_rec(70, edge=8.0)}
+        assign_tiers([a['recommendation'], b['recommendation']])
+        _sort_games_by_tier_then_edge([a, b], sort_by='house_edge')
+        games = [a, b]
+        _sort_games_by_tier_then_edge(games, sort_by='house_edge')
+        # Both are 'strong' after tier assignment — bigger absolute edge wins
+        self.assertIs(games[0], b)
+        self.assertIs(games[1], a)
+
+    def test_none_recommendation_sorts_last(self):
+        from apps.core.views import _sort_games_by_tier_then_edge
+        no_rec = {'house_edge': 9.9, 'recommendation': None}
+        standard = {'house_edge': 1.0, 'recommendation': _fake_rec(50, edge=1.0)}
+        assign_tiers([standard['recommendation']])
+        games = [no_rec, standard]
+        _sort_games_by_tier_then_edge(games, sort_by='house_edge')
+        self.assertIs(games[0], standard)
+        self.assertIs(games[1], no_rec)
 
 
 class PlaceBetSnapshotsRecommendationTests(TestCase):

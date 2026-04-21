@@ -8,11 +8,37 @@ services actually produce a comparable win probability. Spread picks require a
 margin-of-victory model; total picks require a runs/points projection. Both are
 future extensions — stubbed below with `None` rather than fabricated.
 """
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from apps.core.sport_registry import SPORT_REGISTRY
+
+
+# Tier thresholds based on confidence_score (0-100).
+# Per-slate guardrail caps elite at MAX_ELITE_PER_SLATE — any extras are
+# downgraded to strong so the "elite" signal stays rare and meaningful.
+ELITE_THRESHOLD = 80.0
+STRONG_THRESHOLD = 65.0
+MAX_ELITE_PER_SLATE = 2
+
+_TIER_LABELS = {
+    'elite': '🔥 High Confidence',
+    'strong': 'Strong Edge',
+    'standard': 'Model Pick',
+}
+
+# Lower = higher priority in sort keys.
+TIER_ORDER = {'elite': 0, 'strong': 1, 'standard': 2, None: 3}
+
+
+def _raw_tier(confidence_score: float) -> str:
+    """Classify a single recommendation by confidence alone — ignores slate guardrail."""
+    if confidence_score >= ELITE_THRESHOLD:
+        return 'elite'
+    if confidence_score >= STRONG_THRESHOLD:
+        return 'strong'
+    return 'standard'
 
 
 @dataclass
@@ -26,12 +52,45 @@ class Recommendation:
     confidence_score: float
     model_edge: float
     model_source: str
+    tier: str = 'standard'
+
+    @property
+    def tier_label(self) -> str:
+        return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
 
     def to_context(self):
         """Template-safe dict. Keeps the game object alive for related-field access."""
         d = asdict(self)
         d['game'] = self.game
+        d['tier_label'] = self.tier_label
         return d
+
+
+def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendation']:
+    """Classify each recommendation and enforce the slate-level elite cap.
+
+    Mutates tier on each input in place and returns the same list for convenience.
+
+    Rules:
+      - Raw tier from confidence (_raw_tier).
+      - If more than MAX_ELITE_PER_SLATE qualify as elite, only the top N by
+        (confidence_score desc, model_edge desc) keep elite; the rest drop to strong.
+    """
+    # First pass: every rec gets its raw tier.
+    for rec in recommendations:
+        rec.tier = _raw_tier(rec.confidence_score)
+
+    # Guardrail: cap elites.
+    elites = [r for r in recommendations if r.tier == 'elite']
+    if len(elites) > MAX_ELITE_PER_SLATE:
+        elites.sort(
+            key=lambda r: (r.confidence_score, r.model_edge),
+            reverse=True,
+        )
+        for demoted in elites[MAX_ELITE_PER_SLATE:]:
+            demoted.tier = 'strong'
+
+    return recommendations
 
 
 def _implied_prob(american: int) -> float:

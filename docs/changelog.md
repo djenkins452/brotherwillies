@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-04-20 - Confidence tiers + visual prioritization on recommendations
+
+**Summary:** The BettingRecommendation layer now classifies each pick into elite / strong / standard based on confidence, labels it accordingly in the UI, applies a slate-level cap of 2 elites so the signal stays meaningful, and sorts the lobby so highlighted picks surface first. Architecture is unchanged — tier is a computed property, not a new column.
+
+### Logic
+- Thresholds: **elite ≥ 80**, **strong 65–79.99**, **standard <65** (`ELITE_THRESHOLD`, `STRONG_THRESHOLD` in `apps/core/services/recommendations.py`).
+- Labels: elite → `🔥 High Confidence`, strong → `Strong Edge`, standard → `Model Pick`.
+- `Recommendation.tier` is a dataclass field; `tier_label` is a property. The persisted `BettingRecommendation` model exposes the same via computed properties.
+- `assign_tiers(recs)` — slate-level pass that sets each rec's tier from its raw confidence, then enforces `MAX_ELITE_PER_SLATE = 2` by demoting extra elites (ordered by confidence desc, edge desc) to strong.
+
+### Sort (lobby)
+- `_sort_games_by_tier_then_edge` sorts games by `(tier_priority, -edge_magnitude)`. Elite always beats strong, strong always beats standard, standard always beats "no recommendation". Within a tier the existing edge-based ordering is preserved as a tiebreaker — same `sort=` query param as before.
+- `value_board` view runs `assign_tiers` across the union of live + upcoming games so the elite cap applies to the whole lobby, not per-section.
+
+### Visual
+- `.game-card-tier-elite` — gold border + soft glow + subtle gradient (clear at a glance without changing card size, so the 3-up grid stays aligned).
+- `.game-card-tier-strong` — accent-blue border ring, moderate emphasis.
+- `.game-card-tier-standard` — default card styling.
+- `.model-pick-banner-{tier}` mirrors the same treatment on game-detail pages.
+- Tier label (🔥 High Confidence / Strong Edge / Model Pick) renders inline on each lobby tile's pick line and as the header on the detail-page banner.
+
+### Tests
+- 9 new tests in `apps/core/tests.py`:
+  - Boundary checks for raw tier thresholds (80/65 boundaries)
+  - Label mapping
+  - `assign_tiers` caps elites at 2
+  - Edge breaks ties when confidence is equal
+  - Small slates keep all elites
+  - Empty list is safe
+  - Lobby sort: tier beats edge magnitude, edge is tiebreaker within tier, no-recommendation games land at the bottom
+- Full app suite: 178/180 (two pre-existing unrelated failures).
+
+---
+
 ## 2026-04-20 - Stale pending bug fix + bankroll summary + 3-up tile grid
 
 **Summary:** Closed the loop on mock bets. Pending bets no longer sit forever after games finalize, the mock bets page now surfaces a proper bankroll summary, each bet row shows its stake/payout/net clearly, and lobby tiles render in a capped 3-per-row responsive grid.

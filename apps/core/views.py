@@ -173,14 +173,7 @@ def _get_value_data_for_sport(sport, user, sort_by):
     games_data = [compute_fn(g, user) for g in games]
     games_data = _apply_filters(games_data, user)
     _attach_recommendations(sport, user, games_data)
-
-    if sort_by == 'user_edge':
-        games_data.sort(key=lambda g: abs(g.get('user_edge', 0) or 0), reverse=True)
-    elif sort_by == 'delta':
-        games_data.sort(key=lambda g: abs(g.get('delta', 0) or 0), reverse=True)
-    else:
-        games_data.sort(key=lambda g: abs(g.get('house_edge', 0) or 0), reverse=True)
-
+    _sort_games_by_tier_then_edge(games_data, sort_by)
     return games_data
 
 
@@ -211,6 +204,27 @@ def _attach_recommendations(sport, user, games_data):
             g['recommendation'] = None
             continue
         g['recommendation'] = get_recommendation(sport, game_obj, user)
+
+
+def _sort_games_by_tier_then_edge(games_data, sort_by):
+    """Sort by recommendation tier first (elite > strong > standard > none),
+    then the existing edge-based ordering as a tiebreaker within tier."""
+    from apps.core.services.recommendations import TIER_ORDER
+
+    def edge_magnitude(g):
+        if sort_by == 'user_edge':
+            return abs(g.get('user_edge', 0) or 0)
+        if sort_by == 'delta':
+            return abs(g.get('delta', 0) or 0)
+        return abs(g.get('house_edge', 0) or 0)
+
+    def key(g):
+        rec = g.get('recommendation')
+        tier_pri = TIER_ORDER[rec.tier if rec else None]
+        # Tier asc (elite=0 first), magnitude desc within tier (use negative).
+        return (tier_pri, -edge_magnitude(g))
+
+    games_data.sort(key=key)
 
 
 def _get_golf_events():
@@ -362,6 +376,19 @@ def value_board(request):
         games_data = _get_value_data_for_sport(sport, user, sort_by)
         is_offseason = not _is_in_season(sport)
         live_data = _get_live_data_for_sport(sport, user)
+        # Slate-level elite guardrail runs across the combined set so the
+        # lobby never shows more than MAX_ELITE_PER_SLATE "high confidence"
+        # picks regardless of how many games meet the raw threshold.
+        # assign_tiers mutates each rec's .tier in place; re-sort after so
+        # demoted elites fall into the strong bucket's ordering.
+        from apps.core.services.recommendations import assign_tiers
+        all_recs = [
+            g['recommendation']
+            for g in (games_data + live_data)
+            if g.get('recommendation') is not None
+        ]
+        assign_tiers(all_recs)
+        _sort_games_by_tier_then_edge(games_data, sort_by)
 
         # Bye-week / off-week detection — currently only wired for CFB & CBB
         # because only those sports expose a favorite_team on the profile.

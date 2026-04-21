@@ -112,3 +112,15 @@ class BettingRecommendation(models.Model):
         if self.sport == 'college_baseball':
             return self.college_baseball_game
         return None
+
+    @property
+    def tier(self):
+        """Raw tier from confidence_score. Persisted snapshots don't participate
+        in the slate-level elite cap — that's a lobby-render concern only."""
+        from apps.core.services.recommendations import _raw_tier
+        return _raw_tier(float(self.confidence_score))
+
+    @property
+    def tier_label(self):
+        from apps.core.services.recommendations import _TIER_LABELS
+        return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
