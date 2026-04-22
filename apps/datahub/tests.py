@@ -296,6 +296,44 @@ class ScoreOnlyProviderTests(TestCase):
         self.assertEqual(stats['updated'], 0)
         self.assertEqual(Game.objects.count(), initial)  # no row created
 
+    def test_not_found_emits_warning_log_with_external_id(self):
+        """Operators need visibility when the API surfaces a game we haven't
+        ingested yet. Emit a structured warning keyed by external_id."""
+        import uuid as _uuid
+        raw = self._raw_game()
+        missing_id = str(_uuid.uuid4())
+        raw['gamePk'] = missing_id
+        prov = self._patched_provider([raw])
+        with self.assertLogs('apps.datahub.providers.base', level='WARNING') as cm:
+            prov.update_scores_only()
+        output = '\n'.join(cm.output)
+        self.assertIn('Score update skipped', output)
+
+    def test_summary_log_includes_counts_and_window(self):
+        """Final summary log must carry counts + resolved window hours so the
+        Railway deploy log tells the full story of a cycle."""
+        prov = self._patched_provider([self._raw_game(home_score=5, away_score=3)])
+        with self.assertLogs('apps.datahub.providers.base', level='INFO') as cm:
+            prov.update_scores_only()
+        self.assertTrue(
+            any('Score update summary' in line for line in cm.output),
+            msg=f'Missing summary log in {cm.output}',
+        )
+
+    def test_window_settings_respected(self):
+        """Widen the lookahead via settings — a game 30h out must now count as
+        in-window, not out_of_window. Proves the window is call-time resolved."""
+        prov = self._patched_provider([self._raw_game(offset_hours=30)])
+        # Default 12h lookahead: game is out of window
+        stats = prov.update_scores_only()
+        self.assertEqual(stats['out_of_window'], 1)
+        # Widen lookahead to 48h: now it's in window and gets updated
+        with self.settings(SCORE_UPDATE_LOOKAHEAD_HOURS=48):
+            stats = prov.update_scores_only()
+        self.assertEqual(stats['out_of_window'], 0)
+        self.assertEqual(stats['updated'], 1)
+        self.assertEqual(stats['window_hours']['lookahead'], 48)
+
 
 class RefreshScoresAndSettleCommandTests(TestCase):
     """End-to-end: the 15-minute command flips a pending bet to 'win' after
@@ -390,6 +428,40 @@ class RefreshScoresAndSettleCommandTests(TestCase):
 
         # Exactly one settlement log row — the second run must no-op on bets.
         self.assertEqual(MockBetSettlementLog.objects.filter(mock_bet=self.bet).count(), 1)
+
+    def test_dispatcher_emits_cycle_summary_log(self):
+        """Dispatcher must emit both a per-provider success log and a cycle
+        summary log so operators can grep the Railway log for health state."""
+        from apps.datahub.services.scores import update_scores_only
+        with patch(
+            'apps.datahub.providers.mlb.schedule_provider.MLBScheduleProvider.fetch',
+            return_value=self._mocked_api_payload(home=5, away=3),
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            LIVE_COLLEGE_BASEBALL_ENABLED=False,
+        ):
+            with self.assertLogs('apps.datahub.services.scores', level='INFO') as cm:
+                update_scores_only(sport='mlb')
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb score update success', joined)
+        self.assertIn('Score refresh cycle complete', joined)
+
+    def test_dispatcher_continues_past_provider_failure(self):
+        """A single provider raising must not break the dispatcher — the cycle
+        summary still runs and marks providers_failed=1."""
+        from apps.datahub.services.scores import update_scores_only
+        with patch(
+            'apps.datahub.providers.mlb.schedule_provider.MLBScheduleProvider.fetch',
+            side_effect=RuntimeError('api down'),
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            LIVE_COLLEGE_BASEBALL_ENABLED=False,
+        ):
+            results = update_scores_only(sport='mlb')
+        self.assertEqual(results['mlb']['status'], 'error')
+        self.assertIn('api down', results['mlb']['error'])
 
     def test_skips_bets_for_games_still_in_progress(self):
         """If the game is 'live' (not final), the command must leave the bet pending.

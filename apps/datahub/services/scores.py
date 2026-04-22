@@ -30,26 +30,52 @@ _SPORTS = [
 def update_scores_only(sport='all'):
     """Run the score-only refresh for one or all supported sports.
 
-    Returns a dict keyed by sport with the provider's counts. Unsupported
-    sports silently produce an empty entry so callers can log uniformly.
+    Returns a dict keyed by sport with the provider's counts. Emits structured
+    per-provider logs plus a cycle-summary log so operators can see provider
+    health at a glance in the Railway deploy log.
     """
     if not settings.LIVE_DATA_ENABLED:
         logger.info('LIVE_DATA_ENABLED is false — skipping score-only refresh')
         return {}
 
     results = {}
+    providers_run = 0
+    providers_failed = 0
+    providers_disabled = 0
+    total_updated = 0
+    total_not_found = 0
+
     for sport_key, toggle in _SPORTS:
         if sport not in (sport_key, 'all'):
             continue
         if not getattr(settings, toggle, False):
             results[sport_key] = {'status': 'disabled'}
+            providers_disabled += 1
             continue
         try:
             provider = get_provider(sport_key, 'schedule')
-            results[sport_key] = provider.update_scores_only()
+            stats = provider.update_scores_only()
+            results[sport_key] = stats
+            providers_run += 1
+            total_updated += stats.get('updated', 0)
+            total_not_found += stats.get('not_found', 0)
+            logger.info(f'{sport_key} score update success', extra=stats)
         except Exception as e:
             # Never raise out of the lightweight path — a single sport's
             # provider outage must not block settlement for the others.
-            logger.error(f'[{sport_key}] score-only refresh failed: {e}', exc_info=True)
+            providers_failed += 1
             results[sport_key] = {'status': 'error', 'error': str(e)}
+            logger.error(f'{sport_key} score update failed', exc_info=e)
+
+    logger.info(
+        'Score refresh cycle complete',
+        extra={
+            'sport_filter': sport,
+            'providers_run': providers_run,
+            'providers_failed': providers_failed,
+            'providers_disabled': providers_disabled,
+            'total_updated': total_updated,
+            'total_not_found': total_not_found,
+        },
+    )
     return results

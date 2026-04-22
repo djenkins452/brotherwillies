@@ -800,19 +800,10 @@ select.form-control {
     letter-spacing: 0.02em;
 }
 .elite-plays-subtitle { margin: 2px 0 0; }
-.elite-plays-grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 10px;
-}
-@media (min-width: 481px) and (max-width: 768px) {
-    .elite-plays-grid { grid-template-columns: repeat(2, 1fr); }
-}
-@media (min-width: 769px) {
-    /* 2-up is the natural max because MAX_ELITE_PER_SLATE = 2; stays 2 cols
-       even on wide screens rather than leaving a gaping empty cell. */
-    .elite-plays-grid { grid-template-columns: repeat(2, 1fr); }
-}
+/* Elite section uses the shared .tiles-container grid — the strict 3-column
+   cap applies here too. MAX_ELITE_PER_SLATE=2 means at most 2 cards fill
+   the row; wider viewports leave one empty cell, which stays aligned with
+   the main board grid below and keeps the visual rhythm consistent. */
 
 .elite-play-card {
     background: var(--bg-card);
@@ -1186,25 +1177,32 @@ input[type="range"]::-webkit-slider-thumb {
 .vb-section.open .vb-section-body {
     max-height: 5000px;
     padding: 0 12px 12px;
-    /* Mobile-first: 1-up stack by default. Breakpoints widen to 2 and 3 cols. */
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 10px;
 }
 .vb-section.open .vb-section-body > .game-card {
     /* Grid `gap` controls spacing — reset the per-card margin so the
        existing .game-card style doesn't double up on vertical rhythm. */
     margin-bottom: 0;
 }
-@media (min-width: 481px) and (max-width: 768px) {
-    .vb-section.open .vb-section-body {
-        grid-template-columns: repeat(2, 1fr);
-    }
+
+/* Shared tile grid — strict 3-column max, used by every tile board in
+   the app (lobby value board, elite plays section, any future grid).
+   Enforcing the cap in one place means no template can accidentally
+   render a 4-up board. */
+.tiles-container {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
 }
-@media (min-width: 769px) {
-    .vb-section.open .vb-section-body {
-        grid-template-columns: repeat(3, 1fr);
-    }
+@media (max-width: 1024px) {
+    .tiles-container { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+    .tiles-container { grid-template-columns: 1fr; }
+}
+.tiles-container > .game-card {
+    /* Same margin reset as .vb-section-body — tiles-container owns vertical
+       rhythm via `gap`, individual cards shouldn't add their own. */
+    margin-bottom: 0;
 }
 
 /* Favorite team card accent — uses --team-color CSS variable from inline style */

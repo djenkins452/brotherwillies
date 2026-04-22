@@ -46,7 +46,7 @@
         <span class="vb-section-count">{{ golf_events|length }}</span>
         <span class="vb-section-chevron">&#9660;</span>
     </div>
-    <div class="vb-section-body">
+    <div class="vb-section-body tiles-container">
         {% for event in golf_events %}
         <a href="/golf/{{ event.slug }}/" class="game-card">
             <div class="teams">
@@ -92,7 +92,7 @@
         <span class="vb-section-count">{{ section.count }}</span>
         <span class="vb-section-chevron">&#9660;</span>
     </div>
-    <div class="vb-section-body">
+    <div class="vb-section-body tiles-container">
         {% for g in section.games %}
         <a href="/{{ active_sport }}/game/{{ g.game.id }}/"
            class="game-card{% if section.is_live %} game-card-live{% endif %}{% if g.is_favorite %} game-card-favorite{% endif %}{% if g.recommendation %} game-card-tier-{{ g.recommendation.tier }}{% endif %}"

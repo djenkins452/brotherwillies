@@ -12,7 +12,7 @@ All tier + explanation logic is computed upstream — this partial is pure rende
         <h2 class="elite-plays-title">&#x1F525; High Confidence Plays</h2>
         <p class="elite-plays-subtitle text-sm text-muted">The strongest model opportunities on the board</p>
     </div>
-    <div class="elite-plays-grid">
+    <div class="elite-plays-grid tiles-container">
         {% for g in elite_games %}
         {% with rec=g.recommendation game=g.game %}
         <div class="elite-play-card" data-sport="{{ g.game|default_if_none:''|stringformat:'s' }}">

@@ -2,6 +2,58 @@
 
 ---
 
+## 2026-04-21 - Observability, configurable score window, strict 3-column tile grid
+
+**Summary:** Made the 15-minute score-refresh cycle observable (structured per-provider + cycle-summary logs, plus per-miss warnings for games the API returns but we haven't ingested), made the score-update window env-configurable, and enforced a shared 3-max tile grid across all boards.
+
+### Settings
+New env vars (defaults match prior hardcoded behavior):
+- `SCORE_UPDATE_LOOKBACK_HOURS` (default `24`) — how far back the lightweight cycle considers games.
+- `SCORE_UPDATE_LOOKAHEAD_HOURS` (default `12`) — how far forward.
+Read at call time so `self.settings(...)` overrides take effect immediately in tests.
+
+### Observability
+- `apps/datahub/providers/base.py`:
+  - Each `not_found` miss now emits `logger.warning('Score update skipped — game not found in DB', extra={sport, external_id})` so operators see drift between the provider feed and our DB.
+  - Cycle summary log (`logger.info('Score update summary', ...)`) carries `updated` / `unchanged` / `skipped` / `out_of_window` / `not_found` / `window_hours` — grepable as one line.
+  - New `_normalized_external_id` hook so each provider surfaces its own identifier in the miss log.
+- `apps/datahub/services/scores.py`:
+  - Per-provider success log after each run (`<sport> score update success`).
+  - Per-provider failure log (`<sport> score update failed`, `exc_info`).
+  - Cycle summary log (`Score refresh cycle complete`) with `providers_run` / `providers_failed` / `providers_disabled` / `total_updated` / `total_not_found`.
+  - Provider exceptions no longer propagate out of the dispatcher — one sport's outage can't block settlement for the others.
+
+### Strict 3-column tile grid
+- New shared CSS class `.tiles-container` in `static/css/style.css`:
+  - Desktop (>1024px): `repeat(3, 1fr)`
+  - Tablet (≤1024px): `repeat(2, 1fr)`
+  - Phone (≤640px): `1fr`
+  - Gap: 16px
+- Applied to:
+  - `templates/core/value_board.html` (`.vb-section-body` — both MLB/CBB/CFB tile container and golf)
+  - `templates/core/includes/elite_plays_section.html` (elite grid now inherits the 3-max from the shared class)
+- Removed per-component grid rules on `.elite-plays-grid` and `.vb-section.open .vb-section-body` so the ceiling lives in exactly one place.
+- Layout never exceeds 3 columns regardless of viewport.
+
+### Tests (5 new in `apps/datahub/tests.py`)
+- `test_not_found_emits_warning_log_with_external_id` — per-miss warning fires with `external_id`.
+- `test_summary_log_includes_counts_and_window` — provider emits the cycle summary info log.
+- `test_window_settings_respected` — overriding `SCORE_UPDATE_LOOKAHEAD_HOURS` via `self.settings(...)` flips a previously out-of-window game into `updated`.
+- `test_dispatcher_emits_cycle_summary_log` — dispatcher emits both per-provider success log and cycle-complete summary.
+- `test_dispatcher_continues_past_provider_failure` — a raising provider produces `results[sport] = {'status': 'error', ...}` without blocking the cycle.
+
+Full app suite: 199/201 (pre-existing `feedback.tests` import + `GolfOddsProviderPersistGateTests` flake unchanged).
+
+### Railway env (ops note)
+Optional overrides — set in Railway Variables if tuning:
+```
+SCORE_UPDATE_LOOKBACK_HOURS=24
+SCORE_UPDATE_LOOKAHEAD_HOURS=12
+```
+Defaults stay equivalent to the previous hardcoded window, so no operator action is required.
+
+---
+
 ## 2026-04-21 - Dual-speed pipeline: lightweight scores + settle every 15 minutes
 
 **Summary:** Introduced a narrow 15-minute cron that updates scores/status and settles pending mock bets without pulling odds or recomputing models. The heavy `refresh_data` pipeline (6-hour) is untouched and still owns schedule rebuilds, odds, injuries, pitcher stats, and snapshot capture.

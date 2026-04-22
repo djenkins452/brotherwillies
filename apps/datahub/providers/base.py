@@ -2,16 +2,22 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import timedelta
 
+from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 
-# Score-only window — providers only update games whose start time falls
-# inside this window, so we don't touch schedule rows far in the past/future.
-# A day on each side is comfortable slack for timezone drift and marathon games.
-_LIVE_WINDOW_BEFORE = timedelta(days=1)
-_LIVE_WINDOW_AFTER = timedelta(hours=12)
+def _score_window():
+    """Resolve the score-only live window from settings at call time.
+
+    Read at call time (not import time) so tests and runtime overrides via
+    `self.settings(...)` take effect immediately. Falls back to 24h/12h if
+    the settings are missing — matches the default in brotherwillies/settings.py.
+    """
+    lookback = int(getattr(settings, 'SCORE_UPDATE_LOOKBACK_HOURS', 24))
+    lookahead = int(getattr(settings, 'SCORE_UPDATE_LOOKAHEAD_HOURS', 12))
+    return timedelta(hours=lookback), timedelta(hours=lookahead)
 
 
 class AbstractProvider(ABC):
@@ -103,9 +109,10 @@ class AbstractProvider(ABC):
             return {'status': 'empty', 'updated': 0, 'skipped': 0}
         normalized = self.normalize(raw) or []
 
+        before, after = _score_window()
         now = timezone.now()
-        window_start = now - _LIVE_WINDOW_BEFORE
-        window_end = now + _LIVE_WINDOW_AFTER
+        window_start = now - before
+        window_end = now + after
 
         updated = 0
         skipped = 0
@@ -120,7 +127,19 @@ class AbstractProvider(ABC):
 
             game = self._find_existing_game(item)
             if game is None:
+                # Visibility: structured warning per miss so operators can see
+                # provider drift (games the API reports but we haven't ingested).
+                # Keyed by sport + external identifier for easy log-aggregator
+                # filtering. Low-volume in practice (~15 MLB games/day, most
+                # already in DB after the first heavy cron cycle).
                 not_found += 1
+                logger.warning(
+                    'Score update skipped — game not found in DB',
+                    extra={
+                        'sport': self.sport,
+                        'external_id': self._normalized_external_id(item),
+                    },
+                )
                 continue
 
             new_status, new_home, new_away = self._extract_score_fields(item)
@@ -143,10 +162,21 @@ class AbstractProvider(ABC):
 
         stats = {
             'status': 'ok',
+            'sport': self.sport,
             'updated': updated,
-            'skipped': skipped,
+            'unchanged': skipped,  # explicit name for "found but no change"
+            'skipped': skipped,    # legacy alias — callers/tests still use this
             'out_of_window': out_of_window,
             'not_found': not_found,
+            'window_hours': {
+                'lookback': int(before.total_seconds() // 3600),
+                'lookahead': int(after.total_seconds() // 3600),
+            },
         }
-        logger.info(f"[{label}] {stats}")
+        logger.info('Score update summary', extra=stats)
         return stats
+
+    def _normalized_external_id(self, normalized_item):
+        """Best-effort external identifier for diagnostic logs. Override if the
+        provider's normalized shape doesn't expose `external_id` directly."""
+        return normalized_item.get('external_id') or ''

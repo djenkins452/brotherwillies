@@ -135,6 +135,12 @@ LIVE_GOLF_ENABLED = os.environ.get('LIVE_GOLF_ENABLED', 'false').lower() == 'tru
 LIVE_MLB_ENABLED = os.environ.get('LIVE_MLB_ENABLED', 'false').lower() == 'true'
 LIVE_COLLEGE_BASEBALL_ENABLED = os.environ.get('LIVE_COLLEGE_BASEBALL_ENABLED', 'false').lower() == 'true'
 
+# Lightweight score-refresh window. The 15-minute `refresh_scores_and_settle`
+# cron only updates games whose start time falls inside this window — widen
+# lookback for marathon sports, narrow it to reduce provider API footprint.
+SCORE_UPDATE_LOOKBACK_HOURS = int(os.environ.get('SCORE_UPDATE_LOOKBACK_HOURS', '24'))
+SCORE_UPDATE_LOOKAHEAD_HOURS = int(os.environ.get('SCORE_UPDATE_LOOKAHEAD_HOURS', '12'))
+
 # Baseball API base URLs (override if the official endpoints change or a mirror is needed)
 MLB_STATSAPI_BASE_URL = os.environ.get('MLB_STATSAPI_BASE_URL', 'https://statsapi.mlb.com/api')
 ESPN_BASEBALL_BASE_URL = os.environ.get(
