@@ -581,7 +581,19 @@
             options: {
                 ...defaultOptions,
                 scales: {
-                    x: { ...defaultOptions.scales.x, title: { display: true, text: 'American Odds', color: COLORS.text } },
+                    // Force linear so points spread by actual odds value.
+                    // Without this the scatter inherits defaultOptions.scales.x
+                    // which falls back to a category axis — every point ends
+                    // up stacked at x=0.
+                    x: {
+                        ...defaultOptions.scales.x,
+                        type: 'linear',
+                        title: { display: true, text: 'American Odds', color: COLORS.text },
+                        ticks: {
+                            ...defaultOptions.scales.x.ticks,
+                            callback: v => (v > 0 ? '+' + v : v),
+                        },
+                    },
                     y: { ...defaultOptions.scales.y, title: { display: true, text: 'Implied Prob %', color: COLORS.text } },
                 },
             },
