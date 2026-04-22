@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-04-21 - MLB hub fixes: 3-up wrap grid, actual pick on banner + Bet Placed
+
+**Summary:** Fixed three defects on the MLB hub page spotted live:
+
+1. **Horizontal scroll carousel replaced with a 3-up wrapping grid.** `.mlb-rail` was `display: flex; overflow-x: auto; scroll-snap-type: x proximity` with 288px-fixed tiles, which rendered 4+ tiles across with hidden scroll on wider viewports. Switched to `display: grid; grid-template-columns: repeat(3, minmax(0, 1fr))` with the same 1024/640 breakpoints as the rest of the app. Tiles now wrap to new rows instead of scrolling.
+2. **Focus banner + Bet Placed chip answer "who did I bet on?"** Added `pick_text`, `pick_selection`, `pick_odds`, `user_bet_selection`, `user_bet_odds`, `user_bet_bet_type` fields to `GameSignals`. `prioritize()` fetches the decision-layer recommendation per game (via `get_recommendation`) and expands the pending-bet query to surface selection + odds. The focus banner shows "Your bet: Yankees (+120)" if the user has a bet on that game, or "Model pick: Yankees Moneyline (-150)" otherwise. The Bet Placed action chip now renders `· Yankees (+120)` inline. The Best Bet chip shows the model pick inline instead of the generic "Model edge vs market".
+3. **Template comment leak.** `templates/mlb/_focus_banner.html` had `{# ... #}` spanning multiple lines — Django only supports single-line `{# #}` comments. Replaced with `{% comment %}...{% endcomment %}` so it no longer renders as visible text.
+
+### Files
+- `static/css/mlb.css` — `.mlb-rail` is now a 3-max wrapping grid; `.mlb-tile` width is `100%` (grid cell) instead of `288px`; new `.mlb-action__pick` + `.mlb-focus__pick` styles.
+- `apps/mlb/services/prioritization.py` — `GameSignals` gains pick + user-bet fields; `build_signals` calls `get_recommendation('mlb', game, user)` (non-fatal on failure); `prioritize()` bet query pulls selection/odds/bet_type.
+- `templates/mlb/_focus_banner.html` — replaces multi-line `{# #}` with `{% comment %}`; adds the pick row between matchup and action meta.
+- `templates/mlb/_tile_actions.html` — Bet Placed chip shows `· {selection} ({odds})`; Best Bet chip shows the model pick text inline.
+
+### Tests
+Full MLB app test suite: 81/81 pass. Full app suite: 213/215 (two pre-existing unrelated failures unchanged). Django check clean.
+
+---
+
 ## 2026-04-21 - Selection engine + recommendation performance feedback loop
 
 **Summary:** Upgraded the recommendation layer to classify each pick as Recommended or Not Recommended using edge-aware decision rules, switched tier classification from confidence-based to edge-based, denormalized snapshot fields onto MockBet so analytics don't depend on future rule/model changes, and shipped a Recommendation Performance widget on the mock-bet analytics page with a 0-100 system confidence score. All games still visible — the new status is a label, not a filter.

@@ -1,6 +1,9 @@
 {% load mlb_reasons %}
-{# Focus banner — single "what should I do right now" surface.
-   Rendered at the top of the hub when get_focus_game() returns non-None. #}
+{% comment %}
+Focus banner — single "what should I do right now" surface. Rendered at the
+top of the hub when get_focus_game() returns non-None. `focus.recommendation`
+(optional) carries the pick text so the banner tells users *who* to bet on.
+{% endcomment %}
 {% with primary=focus.actions.0 %}
 <a href="{% url 'mlb:game' focus.game.id %}" class="mlb-focus" aria-label="Focus game">
   <div class="mlb-focus__accent" style="background: {{ focus.game.home_team.primary_color|default:'#eab308' }};"></div>
@@ -14,6 +17,20 @@
       <span class="mlb-focus__at">@</span>
       <span class="mlb-focus__team">{{ focus.game.home_team.name }}</span>
     </div>
+    {% if focus.user_bet_selection %}
+    <div class="mlb-focus__pick mlb-focus__pick--user">
+      <span class="mlb-focus__pick-label">Your bet:</span>
+      <strong>{{ focus.user_bet_selection }}</strong>
+      {% if focus.user_bet_odds %}
+        <span class="mlb-focus__pick-odds">({% if focus.user_bet_odds > 0 %}+{% endif %}{{ focus.user_bet_odds }})</span>
+      {% endif %}
+    </div>
+    {% elif focus.pick_text %}
+    <div class="mlb-focus__pick">
+      <span class="mlb-focus__pick-label">Model pick:</span>
+      <strong>{{ focus.pick_text }}</strong>
+    </div>
+    {% endif %}
     <div class="mlb-focus__meta">
       <span class="mlb-focus__action mlb-focus__action--{{ primary.type|cut:'_' }}">
         {% if primary.type == 'best_bet' %}💰{% elif primary.type == 'watch_now' %}🔥{% endif %}

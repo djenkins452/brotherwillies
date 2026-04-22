@@ -72,32 +72,31 @@
     border: 1px solid var(--border);
 }
 
-/* ---------- Horizontal rail ---------- */
+/* ---------- Tile grid (was a horizontal scroll rail) ----------
+   Strict 3-column max on desktop, wraps to new rows. Matches the
+   app-wide .tiles-container breakpoints so the MLB hub reads the same
+   as the lobby. Removed the old overflow-x scroll and fixed-width tiles. */
 .mlb-rail {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
-    overflow-x: auto;
-    overflow-y: visible;
     padding: 4px 2px 12px;
-    scroll-snap-type: x proximity;
-    scroll-padding: 2px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
 }
-.mlb-rail::-webkit-scrollbar { height: 6px; }
-.mlb-rail::-webkit-scrollbar-track { background: transparent; }
-.mlb-rail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+@media (max-width: 1024px) {
+    .mlb-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+    .mlb-rail { grid-template-columns: minmax(0, 1fr); }
+}
 .mlb-rail > [role="listitem"] {
-    flex: 0 0 auto;
-    scroll-snap-align: start;
+    min-width: 0;  /* let grid cells shrink below tile intrinsic width */
 }
 
 /* ---------- Tile ---------- */
 .mlb-tile {
     position: relative;
     display: block;
-    width: 288px;
+    width: 100%;  /* fill grid cell instead of the old fixed 288px rail width */
     padding: 14px 16px 12px;
     background: var(--mlb-tile-bg);
     border: 1px solid var(--mlb-tile-border);
@@ -404,6 +403,16 @@
     margin-right: 4px;
     opacity: 0.6;
 }
+/* Pick text on an action chip — shows the actual team/line instead of the
+   generic reason ("Model edge vs market"). Answers "who do I bet on?" */
+.mlb-action__pick {
+    font-weight: 600;
+    letter-spacing: 0;
+    font-size: 10px;
+    opacity: 0.95;
+    text-transform: none;
+    margin-left: 4px;
+}
 
 /* Watch Now (red family) */
 .mlb-action--watchnow.mlb-action--primary {
@@ -533,6 +542,29 @@
     color: var(--text-muted);
     font-weight: 500;
     font-size: 14px;
+}
+/* Pick line on the focus banner — tells the user the actual team + line.
+   `.mlb-focus__pick--user` uses accent green when showing the user's own bet. */
+.mlb-focus__pick {
+    font-size: 14px;
+    color: var(--text-primary);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.mlb-focus__pick-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+.mlb-focus__pick-odds {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.mlb-focus__pick--user strong {
+    color: #22c55e;
 }
 .mlb-focus__meta {
     display: flex;

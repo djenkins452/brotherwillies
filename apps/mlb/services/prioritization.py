@@ -92,6 +92,15 @@ class GameSignals:
 
     # User state
     user_bet_id: str | None = None          # mockbet uuid when user has pending bet
+    user_bet_selection: str | None = None   # e.g. "Yankees" — what the user bet on
+    user_bet_odds: int | None = None        # american odds at placement
+    user_bet_bet_type: str | None = None    # moneyline / spread / total
+    # Decision-layer pick (house model) if we can compute one. Gives the
+    # focus banner and Bet Placed chip a real answer to "who should I / did
+    # I bet on?" instead of just a matchup + percentage.
+    pick_text: str | None = None            # e.g. "Yankees ML (-150)"
+    pick_odds: int | None = None
+    pick_selection: str | None = None
 
     # Display context
     home_record: str | None = None
@@ -447,7 +456,21 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
     from .streaks import format_record, format_pitcher_record
     streaks = streaks or {}
     user_bet_by_game = user_bet_by_game or {}
-    bet_id = user_bet_by_game.get(game.id)
+    bet_info = user_bet_by_game.get(game.id) or {}
+    bet_id = bet_info.get('id')
+
+    # Decision-layer pick — non-fatal on failure, so the hub still renders
+    # even when the recommendation service can't produce one (no odds yet).
+    pick_text = pick_odds = pick_selection = None
+    try:
+        from apps.core.services.recommendations import get_recommendation
+        rec = get_recommendation('mlb', game, user)
+        if rec is not None:
+            pick_text = f"{rec.pick} {rec.bet_type.title()} ({rec.line})"
+            pick_odds = rec.odds_american
+            pick_selection = rec.pick
+    except Exception:
+        pass
 
     signals = GameSignals(
         game=game,
@@ -473,6 +496,12 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
         away_pitcher_record=format_pitcher_record(game.away_pitcher),
         has_user_bet=bet_id is not None,
         user_bet_id=str(bet_id) if bet_id else None,
+        user_bet_selection=bet_info.get('selection'),
+        user_bet_odds=bet_info.get('odds_american'),
+        user_bet_bet_type=bet_info.get('bet_type'),
+        pick_text=pick_text,
+        pick_odds=pick_odds,
+        pick_selection=pick_selection,
     )
     # Confidence must be computed *before* resolve_actions so action dicts
     # can carry it. compute_confidence uses only immutable signal fields.
@@ -502,11 +531,18 @@ def prioritize(games: Iterable, *, user=None) -> list[GameSignals]:
         for bet in (
             MockBet.objects
             .filter(user=user, result='pending', mlb_game_id__in=[g.id for g in games])
-            .only('id', 'mlb_game_id')
+            .only('id', 'mlb_game_id', 'selection', 'odds_american', 'bet_type')
         ):
             # If the user has multiple pending bets on the same game (legit
-            # for different bet types), surface the most recent one's id.
-            user_bet_by_game[bet.mlb_game_id] = bet.id
+            # for different bet types), surface the most recent one. We also
+            # carry selection + odds so the Bet Placed chip can tell the user
+            # *what* they bet on — not just that they bet.
+            user_bet_by_game[bet.mlb_game_id] = {
+                'id': bet.id,
+                'selection': bet.selection,
+                'odds_american': bet.odds_american,
+                'bet_type': bet.bet_type,
+            }
 
     return [
         build_signals(g, user=user, streaks=streaks, user_bet_by_game=user_bet_by_game)
