@@ -661,6 +661,44 @@
     color: #1a1300;
     outline: none;
 }
+/* CTA copy varies with decision status — green for "Bet This", grey for
+   "Not Recommended". Click is always enabled; we guide, not block. */
+.mlb-bet-btn--bet-this {
+    color: #fff;
+    background: #16a34a;
+    border-color: #16a34a;
+}
+.mlb-bet-btn--bet-this:hover,
+.mlb-bet-btn--bet-this:focus-visible {
+    background: #15803d;
+    color: #fff;
+    border-color: #15803d;
+}
+.mlb-bet-btn--not-recommended {
+    color: #9ca3af;
+    background: transparent;
+    border-color: #6b7280;
+}
+.mlb-bet-btn--not-recommended:hover,
+.mlb-bet-btn--not-recommended:focus-visible {
+    background: #6b7280;
+    color: #fff;
+    border-color: #6b7280;
+}
+
+/* Decision-section headers — color-coded accents to reinforce hierarchy. */
+.mlb-section--elite .mlb-section__title { color: #facc15; }
+.mlb-section--recommended .mlb-section__title { color: #22c55e; }
+.mlb-section--not-recommended .mlb-section__title { color: var(--text-muted); }
+
+/* Not-recommended rail dims the whole tile set as a group so the eye skips
+   past — still clickable, still readable, hover restores full opacity. */
+.mlb-rail--dimmed > [role="listitem"] { opacity: 0.7; }
+.mlb-rail--dimmed > [role="listitem"]:hover { opacity: 1; }
+
+/* Empty state when no elite plays qualify — keeps the slot intact so the
+   three-section rhythm doesn't collapse into a single "recommended" block. */
+.mlb-empty-state { padding: 20px; text-align: center; }
 
 /* "Why this matters" footer */
 .mlb-tile__why {

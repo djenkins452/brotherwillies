@@ -1306,3 +1306,216 @@ class ESPNOddsProviderTests(TestCase):
         self.assertEqual(snap.spread, -1.5)
         self.assertEqual(snap.total, 8.5)
         self.assertEqual(snap.sportsbook, 'DraftKings')
+
+
+class MLBHubDecisionPartitionTests(TestCase):
+    """The MLB hub page partitions today's games into elite / recommended /
+    not_recommended sections driven by the decision layer. These tests make
+    sure:
+      - every signal lands in exactly one section (no duplicates, no drops)
+      - the slate elite cap is honored before partitioning runs
+      - within-section ordering is (edge DESC, confidence DESC)
+      - games with no recommendation fall into not_recommended
+    """
+
+    def _fake_signal(self, sport_status='scheduled', rec=None, game_id='g1'):
+        """Build a GameSignals stub — we only need `.game.status` and
+        `.recommendation` for partition_games_by_decision to work."""
+        from apps.mlb.services.prioritization import GameSignals
+
+        class _StubGame:
+            id = game_id
+            status = sport_status
+            first_pitch = timezone.now()
+        return GameSignals(
+            game=_StubGame(), priority='low', priority_score=0.0,
+            recommendation=rec,
+        )
+
+    def _fake_rec(self, tier='standard', status='recommended', edge=5.0, confidence=70.0):
+        from apps.core.services.recommendations import Recommendation
+        return Recommendation(
+            sport='mlb', game=None, bet_type='moneyline', pick='X',
+            line='+100', odds_american=100,
+            confidence_score=confidence, model_edge=edge, model_source='house',
+            tier=tier, status=status, status_reason='',
+        )
+
+    def test_elite_tier_lands_in_top_plays(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = self._fake_signal(rec=self._fake_rec(tier='elite', edge=10.0))
+        sections = partition_games_by_decision([s])
+        self.assertEqual(sections['elite'], [s])
+        self.assertEqual(sections['recommended'], [])
+        self.assertEqual(sections['not_recommended'], [])
+
+    def test_recommended_non_elite_lands_in_recommended(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = self._fake_signal(
+            rec=self._fake_rec(tier='strong', status='recommended', edge=6.5)
+        )
+        sections = partition_games_by_decision([s])
+        self.assertEqual(sections['recommended'], [s])
+        self.assertEqual(sections['elite'], [])
+
+    def test_not_recommended_lands_in_not_recommended(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = self._fake_signal(
+            rec=self._fake_rec(tier='standard', status='not_recommended', edge=2.0)
+        )
+        sections = partition_games_by_decision([s])
+        self.assertEqual(sections['not_recommended'], [s])
+
+    def test_no_recommendation_lands_in_not_recommended(self):
+        """Games without odds (rec=None) still render — in the dimmed section."""
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = self._fake_signal(rec=None)
+        sections = partition_games_by_decision([s])
+        self.assertEqual(sections['not_recommended'], [s])
+        self.assertEqual(sections['elite'], [])
+        self.assertEqual(sections['recommended'], [])
+
+    def test_every_game_appears_exactly_once(self):
+        """Full slate of 10 games covering all three tiers + a None-rec case.
+        Total across sections == total input, and no tile shows up twice."""
+        from apps.mlb.services.prioritization import partition_games_by_decision
+
+        signals = [
+            self._fake_signal(game_id=f'g{i}',
+                              rec=self._fake_rec(tier='elite', edge=12.0 - i))
+            for i in range(2)
+        ]
+        signals += [
+            self._fake_signal(game_id=f'r{i}',
+                              rec=self._fake_rec(tier='strong',
+                                                 status='recommended',
+                                                 edge=7.0 - i * 0.1))
+            for i in range(3)
+        ]
+        signals += [
+            self._fake_signal(game_id=f'n{i}',
+                              rec=self._fake_rec(tier='standard',
+                                                 status='not_recommended',
+                                                 edge=2.0))
+            for i in range(4)
+        ]
+        signals.append(self._fake_signal(game_id='unknown', rec=None))
+
+        sections = partition_games_by_decision(signals)
+
+        total = (len(sections['elite']) + len(sections['recommended'])
+                 + len(sections['not_recommended']))
+        self.assertEqual(total, len(signals))
+        all_ids = (
+            [s.game.id for s in sections['elite']]
+            + [s.game.id for s in sections['recommended']]
+            + [s.game.id for s in sections['not_recommended']]
+        )
+        self.assertEqual(len(all_ids), len(set(all_ids)), 'duplicate id across sections')
+
+    def test_sort_order_within_section_is_edge_desc(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        a = self._fake_signal(game_id='a',
+                              rec=self._fake_rec(tier='strong', edge=6.5))
+        b = self._fake_signal(game_id='b',
+                              rec=self._fake_rec(tier='strong', edge=7.5))
+        c = self._fake_signal(game_id='c',
+                              rec=self._fake_rec(tier='strong', edge=7.0))
+        sections = partition_games_by_decision([a, b, c])
+        self.assertEqual(
+            [s.game.id for s in sections['recommended']],
+            ['b', 'c', 'a'],
+        )
+
+    def test_games_without_rec_sort_last_in_not_recommended(self):
+        """Real not-recommended games sort above null-rec games."""
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        real = self._fake_signal(game_id='real',
+                                 rec=self._fake_rec(tier='standard',
+                                                    status='not_recommended',
+                                                    edge=2.0))
+        null = self._fake_signal(game_id='null', rec=None)
+        sections = partition_games_by_decision([null, real])
+        self.assertEqual(
+            [s.game.id for s in sections['not_recommended']],
+            ['real', 'null'],
+        )
+
+    def test_elite_cap_from_assign_tiers_is_honored(self):
+        """End-to-end with the slate-level cap: 4 recs all with elite-level
+        edge — after assign_tiers runs, only 2 stay in the elite section.
+        Proves the partition respects the guardrail rather than re-classifying."""
+        from apps.core.services.recommendations import assign_tiers, MAX_ELITE_PER_SLATE
+        from apps.mlb.services.prioritization import partition_games_by_decision
+
+        recs = [
+            self._fake_rec(tier='standard', edge=e, confidence=c)
+            for e, c in [(12.0, 90.0), (11.0, 85.0), (10.0, 80.0), (9.0, 75.0)]
+        ]
+        signals = [self._fake_signal(game_id=f's{i}', rec=r) for i, r in enumerate(recs)]
+        assign_tiers(recs)
+        sections = partition_games_by_decision(signals)
+
+        self.assertEqual(len(sections['elite']), MAX_ELITE_PER_SLATE)
+        # Top by edge (12, 11) keep elite
+        self.assertEqual(
+            [s.game.id for s in sections['elite']], ['s0', 's1'],
+        )
+        # Demoted elites land in recommended section
+        demoted_ids = [s.game.id for s in sections['recommended']]
+        self.assertIn('s2', demoted_ids)
+        self.assertIn('s3', demoted_ids)
+
+
+class MLBHubCTATests(TestCase):
+    """CTA text on tile actions adapts to decision status: Bet This / Not
+    Recommended / generic Mock Bet when no recommendation exists."""
+
+    def _render_tile_cta(self, status, has_prefill=True):
+        """Render the _tile_actions partial via an inline Template with a
+        GameSignals-shaped context. Returns the rendered HTML."""
+        from django.contrib.auth.models import AnonymousUser, User
+        from django.template.loader import render_to_string
+        from apps.mlb.services.prioritization import GameSignals
+        from apps.core.services.recommendations import Recommendation
+
+        class _StubGame:
+            id = 'cta'
+            status = 'scheduled'
+            home_team = type('T', (), {'name': 'Home'})()
+            away_team = type('T', (), {'name': 'Away'})()
+        rec = None
+        if status is not None:
+            rec = Recommendation(
+                sport='mlb', game=None, bet_type='moneyline', pick='Home',
+                line='-150', odds_american=-150,
+                confidence_score=70.0, model_edge=6.0, model_source='house',
+                tier='strong', status=status, status_reason='',
+            )
+        s = GameSignals(
+            game=_StubGame(), priority='low', priority_score=0.0,
+            actions=[{'type': 'watch_now', 'strength': 'primary',
+                      'reason': 'tight_spread'}],
+            recommendation=rec,
+        )
+        # Simulate _attach_prefill having run
+        s.prefill_json = '{"sport":"mlb"}' if has_prefill else ''
+
+        user, _ = User.objects.get_or_create(username='ctauser')
+        return render_to_string('mlb/_tile_actions.html', {'s': s, 'user': user})
+
+    def test_recommended_status_renders_bet_this(self):
+        html = self._render_tile_cta(status='recommended')
+        self.assertIn('Bet This', html)
+        self.assertNotIn('Not Recommended', html)
+
+    def test_not_recommended_status_renders_not_recommended(self):
+        html = self._render_tile_cta(status='not_recommended')
+        self.assertIn('Not Recommended', html)
+        # CTA is still a button — never disabled — so click through still works
+        self.assertIn('openMLBBet(this)', html)
+
+    def test_no_recommendation_falls_back_to_mock_bet(self):
+        """Defensive: a tile without a recommendation still gets a usable CTA."""
+        html = self._render_tile_cta(status=None)
+        self.assertIn('Mock Bet', html)

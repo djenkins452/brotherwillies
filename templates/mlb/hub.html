@@ -17,35 +17,75 @@
     {% include "mlb/_focus_banner.html" with focus=focus %}
   {% endif %}
 
-  {% if not live_tiles and not today_tiles and not future_games %}
+  {% if not elite_games and not recommended_games and not not_recommended_games and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
     </div>
   {% else %}
 
-    {% if live_tiles %}
-      <section class="mlb-section">
-        <div class="mlb-section__head">
-          <h2 class="mlb-section__title"><span class="mlb-live-dot" aria-hidden="true"></span> Live Now</h2>
-          <span class="mlb-section__count">{{ live_tiles|length }}</span>
+    {# Section 1 — 🔥 Top Plays (elite tier, capped at 2 by assign_tiers) #}
+    <section class="mlb-section mlb-section--elite">
+      <div class="mlb-section__head">
+        <h2 class="mlb-section__title">&#x1F525; Top Plays Today</h2>
+        {% if elite_games %}<span class="mlb-section__count">{{ elite_games|length }}</span>{% endif %}
+      </div>
+      {% if elite_games %}
+        <div class="mlb-rail tiles-container" role="list">
+          {% for s in elite_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
         </div>
-        <div class="mlb-rail" data-mlb-rail role="list">
-          {% for s in live_tiles %}
-            <div role="listitem">{% include "mlb/_tile_live.html" with s=s %}</div>
+      {% else %}
+        <div class="card card-muted mlb-empty-state">
+          <p>No high-confidence plays right now.</p>
+          <p class="text-sm text-muted">Check recommended bets below.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    {# Section 2 — 👍 Recommended (status=recommended, tier != elite) #}
+    {% if recommended_games %}
+      <section class="mlb-section mlb-section--recommended">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">&#x1F44D; Recommended Bets</h2>
+          <span class="mlb-section__count">{{ recommended_games|length }}</span>
+        </div>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for s in recommended_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
           {% endfor %}
         </div>
       </section>
     {% endif %}
 
-    {% if today_tiles %}
-      <section class="mlb-section">
+    {# Section 3 — ⚠️ Not Recommended (dimmed but still clickable) #}
+    {% if not_recommended_games %}
+      <section class="mlb-section mlb-section--not-recommended">
         <div class="mlb-section__head">
-          <h2 class="mlb-section__title">Today</h2>
-          <span class="mlb-section__count">{{ today_tiles|length }}</span>
+          <h2 class="mlb-section__title">&#x26A0;&#xFE0F; Not Recommended</h2>
+          <span class="mlb-section__count">{{ not_recommended_games|length }}</span>
         </div>
-        <div class="mlb-rail" data-mlb-rail role="list">
-          {% for s in today_tiles %}
-            <div role="listitem">{% include "mlb/_tile_upcoming.html" with s=s %}</div>
+        <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
+          {% for s in not_recommended_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
           {% endfor %}
         </div>
       </section>

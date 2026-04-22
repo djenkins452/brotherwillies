@@ -102,6 +102,10 @@ class GameSignals:
     pick_odds: int | None = None
     pick_selection: str | None = None
     pick_action_label: str = 'Recommended Bet'  # "Recommended Bet" or "Model Lean"
+    # Full decision-layer recommendation (tier, status, edge, confidence, ...)
+    # or None when no odds are available. Held so the hub view can partition
+    # games by tier/status without re-computing.
+    recommendation: object | None = None
 
     # Display context
     home_record: str | None = None
@@ -464,14 +468,15 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
     # even when the recommendation service can't produce one (no odds yet).
     pick_text = pick_odds = pick_selection = None
     pick_action_label = 'Recommended Bet'
+    recommendation = None
     try:
         from apps.core.services.recommendations import get_recommendation
-        rec = get_recommendation('mlb', game, user)
-        if rec is not None:
-            pick_text = f"{rec.pick} {rec.bet_type.title()} ({rec.line})"
-            pick_odds = rec.odds_american
-            pick_selection = rec.pick
-            pick_action_label = rec.action_label  # "Recommended Bet" or "Model Lean"
+        recommendation = get_recommendation('mlb', game, user)
+        if recommendation is not None:
+            pick_text = f"{recommendation.pick} {recommendation.bet_type.title()} ({recommendation.line})"
+            pick_odds = recommendation.odds_american
+            pick_selection = recommendation.pick
+            pick_action_label = recommendation.action_label
     except Exception:
         pass
 
@@ -506,6 +511,7 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
         pick_odds=pick_odds,
         pick_selection=pick_selection,
         pick_action_label=pick_action_label,
+        recommendation=recommendation,
     )
     # Confidence must be computed *before* resolve_actions so action dicts
     # can carry it. compute_confidence uses only immutable signal fields.
@@ -639,3 +645,46 @@ def sort_live(signals: list[GameSignals]) -> list[GameSignals]:
 def sort_today(signals: list[GameSignals]) -> list[GameSignals]:
     """Today sort: priority desc, then earliest first_pitch first."""
     return sorted(signals, key=lambda s: (-s.priority_score, s.game.first_pitch))
+
+
+def _decision_sort_key(s: GameSignals):
+    """Sort within a decision section: edge DESC, confidence DESC. Games without
+    a recommendation (no odds yet) are pushed to the bottom of their section."""
+    rec = s.recommendation
+    if rec is None:
+        return (1, 0.0, 0.0)  # bucket 1 — after real recs
+    return (0, -float(rec.model_edge or 0), -float(rec.confidence_score or 0))
+
+
+def partition_games_by_decision(signals: list[GameSignals]) -> dict:
+    """Split MLB signals into the three decision-driven sections.
+
+    Every input signal ends up in exactly one list — no games are dropped.
+    Games without a recommendation (no odds yet) land in `not_recommended`;
+    we can't actionably bet them yet, so they share the dimmed treatment.
+
+    CALL ORDER: invoke AFTER `assign_tiers(list_of_recs)` so the slate-level
+    elite cap (MAX_ELITE_PER_SLATE=2) has already been applied. Otherwise
+    more than 2 games can show up in the Top Plays section.
+    """
+    elite, recommended, not_recommended = [], [], []
+    for s in signals:
+        rec = s.recommendation
+        if rec is None:
+            not_recommended.append(s)
+            continue
+        if rec.tier == 'elite':
+            elite.append(s)
+        elif rec.status == 'recommended':
+            recommended.append(s)
+        else:
+            not_recommended.append(s)
+
+    elite.sort(key=_decision_sort_key)
+    recommended.sort(key=_decision_sort_key)
+    not_recommended.sort(key=_decision_sort_key)
+    return {
+        'elite': elite,
+        'recommended': recommended,
+        'not_recommended': not_recommended,
+    }

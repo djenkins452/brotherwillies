@@ -8,7 +8,8 @@ from apps.mockbets.services.prefill import prefill_from_signals
 
 from .models import Game, Team
 from .services.prioritization import (
-    get_focus_game, mark_top_opportunities, prioritize, sort_live, sort_today,
+    get_focus_game, mark_top_opportunities, partition_games_by_decision,
+    prioritize, sort_live, sort_today,
 )
 
 
@@ -52,6 +53,17 @@ def mlb_hub(request):
     all_tiles = live_tiles + today_tiles
     mark_top_opportunities(all_tiles)
 
+    # Slate-level elite cap (MAX_ELITE_PER_SLATE = 2). Mutates rec.tier in
+    # place; we must call this before partitioning so Top Plays never shows
+    # more than the allowed number.
+    from apps.core.services.recommendations import assign_tiers
+    all_recs = [s.recommendation for s in all_tiles if s.recommendation is not None]
+    assign_tiers(all_recs)
+
+    # Decision-driven partition. Each game appears in exactly one section;
+    # games without a recommendation (no odds yet) fall into not_recommended.
+    decision_sections = partition_games_by_decision(all_tiles)
+
     # Focus Engine: single "do this right now" surface. None when no game
     # meets the bar — the banner is simply omitted rather than forced.
     focus = get_focus_game(all_tiles)
@@ -59,6 +71,9 @@ def mlb_hub(request):
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
         'today_tiles': today_tiles,
+        'elite_games': decision_sections['elite'],
+        'recommended_games': decision_sections['recommended'],
+        'not_recommended_games': decision_sections['not_recommended'],
         'future_games': future_upcoming,
         'focus': focus,
         'teams': Team.objects.select_related('conference').all(),

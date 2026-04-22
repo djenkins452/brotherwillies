@@ -45,10 +45,12 @@
       </a>
     {% elif s.prefill_json %}
       <button type="button"
-              class="mlb-bet-btn"
+              class="mlb-bet-btn{% if s.recommendation and s.recommendation.status == 'not_recommended' %} mlb-bet-btn--not-recommended{% elif s.recommendation and s.recommendation.status == 'recommended' %} mlb-bet-btn--bet-this{% endif %}"
               data-mlb-prefill='{{ s.prefill_json }}'
               onclick="event.preventDefault(); event.stopPropagation(); openMLBBet(this);">
-        Mock Bet
+        {% if s.recommendation.status == 'recommended' %}Bet This
+        {% elif s.recommendation.status == 'not_recommended' %}Not Recommended
+        {% else %}Mock Bet{% endif %}
       </button>
     {% endif %}
   {% endif %}

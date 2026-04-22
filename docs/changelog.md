@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-04-22 - MLB hub is now a decision board (elite / recommended / not recommended)
+
+**Summary:** The `/mlb/` page stopped being a schedule and started being a decision board. Today's games (live + scheduled today) are now partitioned into three color-coded sections — 🔥 Top Plays Today (elite), 👍 Recommended Bets, ⚠️ Not Recommended — each using the shared 3-max `.tiles-container` grid. CTAs adapt per status: "Bet This" (green), "Not Recommended" (grey, still clickable), or "Mock Bet" when no recommendation exists. Every game still renders.
+
+### Service
+- `apps/mlb/services/prioritization.py`:
+  - `GameSignals` gains a `recommendation` field (full Recommendation dataclass, or `None` when odds aren't in yet).
+  - `build_signals` stores the recommendation alongside `pick_text` / `pick_action_label` (it was already being fetched — just hold onto it).
+  - New `partition_games_by_decision(signals)` → `{elite, recommended, not_recommended}`. Elite = `rec.tier == 'elite'`. Recommended = `status == 'recommended' AND tier != 'elite'`. Not recommended = `status == 'not_recommended'` OR `recommendation is None`. Sort within each section: edge DESC, confidence DESC; null-recommendation games sort last.
+
+### View
+- `apps/mlb/views.py::mlb_hub`:
+  - After `mark_top_opportunities`, calls `assign_tiers(all_recs)` across the combined live + today slate so the Phase-4 guardrail (`MAX_ELITE_PER_SLATE=2`) is enforced **before** partitioning — Top Plays never shows more than 2.
+  - Replaces the raw `live_tiles` / `today_tiles` context with `elite_games` / `recommended_games` / `not_recommended_games` (plus the existing context keys kept for the focus banner + upcoming list).
+
+### Template (`templates/mlb/hub.html`)
+- Replaced Live Now / Today rails with three decision sections using `tiles-container`.
+- Each tile still auto-picks the right partial (`_tile_live.html` for live games, `_tile_upcoming.html` otherwise) — the dimension changed, not the tile rendering.
+- Empty-state card when no elite plays qualify: "No high-confidence plays right now. Check recommended bets below."
+- Upcoming (future days) kept as a separate context section at the bottom.
+
+### CTA copy (`templates/mlb/_tile_actions.html`)
+- `Bet This` — green solid button — when `s.recommendation.status == 'recommended'`.
+- `Not Recommended` — grey outlined button, **still clickable** — when `s.recommendation.status == 'not_recommended'`.
+- `Mock Bet` — unchanged — when no recommendation exists.
+
+### Styling (`static/css/mlb.css`)
+- `.mlb-section--elite .mlb-section__title` gold, `.mlb-section--recommended` green, `.mlb-section--not-recommended` muted grey — header accents match the section meaning.
+- `.mlb-rail--dimmed` applies a 0.7 opacity to the whole not-recommended row (hover restores full); still readable, just stepped back.
+- `.mlb-bet-btn--bet-this` and `.mlb-bet-btn--not-recommended` variants.
+- `.mlb-empty-state` placeholder so the three-section rhythm doesn't collapse when elites are empty.
+
+### Sample rendered output (abbreviated)
+```
+🔥 Top Plays Today                                  2
+  Yankees ML (-110)  · +12% edge · 78% conf  [Bet This]
+  Dodgers ML (-120)  · +10% edge · 72% conf  [Bet This]
+
+👍 Recommended Bets                                 4
+  Cardinals ML (+120) · +7% edge  · 55% conf [Bet This]
+  Mets ML (-105)      · +6% edge  · 54% conf [Bet This]
+  ...
+
+⚠️ Not Recommended                                  6
+  Phillies ML (-200)  · +3% edge · 70% conf  [Not Recommended]  ← juice gate
+  Rockies ML (+400)   · +1% edge · 23% conf  [Not Recommended]  ← low edge
+  ...
+```
+
+### Tests (11 new in `apps/mlb/tests.py`)
+- `MLBHubDecisionPartitionTests` (8):
+  - Elite/recommended/not-recommended/null-rec each land in the right section
+  - Every input game appears in exactly one section (no dupes, no drops)
+  - Within-section sort is edge DESC, confidence DESC
+  - Null-recommendation games sort last within not-recommended
+  - `assign_tiers` cap of 2 is honored end-to-end — demoted would-be-elites fall to recommended
+- `MLBHubCTATests` (3): CTA text adapts to status — "Bet This" / "Not Recommended" / fallback "Mock Bet".
+
+Full app suite: 239/240 (pre-existing `feedback.tests` import unrelated). Django check clean. No new migrations.
+
+### No games removed
+Every signal that `prioritize()` produced still renders — just in a different section. Games without a recommendation appear in the Not Recommended list (not a fourth bucket) with the dimmed treatment. The Upcoming section retains future-day games.
+
+---
+
 ## 2026-04-22 - Actionable language + visual hierarchy + Why-This-Lost engine
 
 **Summary:** Three paired upgrades that make the system actively coach decisions instead of just describing them: actionable "Recommended Bet:" / "Model Lean:" CTA copy replacing passive "Model Pick" language, a sharper visual hierarchy between elite / strong / standard / not-recommended cards, and a full Why-This-Lost analysis engine that runs on every lost bet and aggregates into a Loss Breakdown widget on the analytics dashboard.
