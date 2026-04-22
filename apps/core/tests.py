@@ -17,14 +17,19 @@ from apps.core.models import BettingRecommendation
 from apps.core.services.recommendations import (
     Recommendation,
     assign_tiers,
+    compute_status,
     get_recommendation,
     persist_recommendation,
     _implied_prob,
     _format_american,
     _raw_tier,
-    ELITE_THRESHOLD,
-    STRONG_THRESHOLD,
+    ELITE_EDGE,
+    STRONG_EDGE,
+    MIN_EDGE,
+    HEAVY_FAVORITE_ODDS,
     MAX_ELITE_PER_SLATE,
+    STATUS_RECOMMENDED,
+    STATUS_NOT_RECOMMENDED,
 )
 from apps.mlb.models import Conference, Team, Game, OddsSnapshot
 from apps.mockbets.models import MockBet
@@ -150,19 +155,22 @@ def _fake_rec(confidence, edge=1.0, pick='X'):
 
 
 class TierThresholdTests(TestCase):
+    """Tier is now edge-based (pp scale). Boundaries: elite≥8, strong≥6, standard<6."""
+
     def test_raw_tier_boundaries(self):
-        # elite: >= 80, strong: 65..<80, standard: <65
-        self.assertEqual(_raw_tier(80.0), 'elite')
-        self.assertEqual(_raw_tier(95.0), 'elite')
-        self.assertEqual(_raw_tier(79.9), 'strong')
-        self.assertEqual(_raw_tier(65.0), 'strong')
-        self.assertEqual(_raw_tier(64.9), 'standard')
+        self.assertEqual(_raw_tier(8.0), 'elite')
+        self.assertEqual(_raw_tier(15.0), 'elite')
+        self.assertEqual(_raw_tier(7.9), 'strong')
+        self.assertEqual(_raw_tier(6.0), 'strong')
+        self.assertEqual(_raw_tier(5.9), 'standard')
         self.assertEqual(_raw_tier(0.0), 'standard')
+        self.assertEqual(_raw_tier(-3.0), 'standard')
+        self.assertEqual(_raw_tier(None), 'standard')
 
     def test_tier_labels(self):
-        elite = _fake_rec(90)
-        strong = _fake_rec(70)
-        standard = _fake_rec(50)
+        elite = _fake_rec(confidence=70, edge=10)
+        strong = _fake_rec(confidence=70, edge=7)
+        standard = _fake_rec(confidence=70, edge=1)
         assign_tiers([elite, strong, standard])
         self.assertEqual(elite.tier_label, '🔥 High Confidence')
         self.assertEqual(strong.tier_label, 'Strong Edge')
@@ -171,43 +179,43 @@ class TierThresholdTests(TestCase):
 
 class AssignTiersGuardrailTests(TestCase):
     def test_caps_elite_at_max_and_demotes_rest_to_strong(self):
-        # 4 would-be elites. Only top 2 by confidence should stay elite.
-        r1 = _fake_rec(95, edge=5)
-        r2 = _fake_rec(90, edge=3)
-        r3 = _fake_rec(88, edge=8)
-        r4 = _fake_rec(85, edge=1)
-        r5 = _fake_rec(70, edge=9)  # strong — untouched by cap
-        r6 = _fake_rec(50, edge=2)  # standard
+        """4 would-be elites (all edge ≥ 8pp). Only top 2 by edge keep elite."""
+        r1 = _fake_rec(confidence=75, edge=15)   # highest edge
+        r2 = _fake_rec(confidence=70, edge=12)
+        r3 = _fake_rec(confidence=90, edge=9)
+        r4 = _fake_rec(confidence=85, edge=8)
+        r5 = _fake_rec(confidence=70, edge=7)    # strong (not affected by cap)
+        r6 = _fake_rec(confidence=50, edge=2)    # standard
 
         assign_tiers([r1, r2, r3, r4, r5, r6])
 
         self.assertEqual(MAX_ELITE_PER_SLATE, 2)
         elites = [r for r in [r1, r2, r3, r4, r5, r6] if r.tier == 'elite']
         self.assertEqual(len(elites), 2)
-        # Top by confidence (95, 90) kept; rest dropped to strong
+        # Top two by edge (15, 12) keep elite; high-confidence r3 does NOT
+        # win out over r1/r2 because tier ranking is now edge-first.
         self.assertIn(r1, elites)
         self.assertIn(r2, elites)
         self.assertEqual(r3.tier, 'strong')
         self.assertEqual(r4.tier, 'strong')
-        # Already-strong and standard untouched
         self.assertEqual(r5.tier, 'strong')
         self.assertEqual(r6.tier, 'standard')
 
-    def test_edge_breaks_ties_when_confidence_equal(self):
-        # Two recs tied at 85 confidence — edge decides which stays elite.
-        r1 = _fake_rec(85, edge=2)
-        r2 = _fake_rec(85, edge=7)
-        r3 = _fake_rec(85, edge=4)
+    def test_confidence_breaks_ties_when_edge_equal(self):
+        """Three recs all tied at edge=10 — confidence decides which stay elite."""
+        r1 = _fake_rec(confidence=60, edge=10)
+        r2 = _fake_rec(confidence=90, edge=10)
+        r3 = _fake_rec(confidence=75, edge=10)
         assign_tiers([r1, r2, r3])
         elites = [r for r in [r1, r2, r3] if r.tier == 'elite']
         self.assertEqual(len(elites), 2)
-        self.assertIn(r2, elites)  # highest edge
-        self.assertIn(r3, elites)  # second-highest edge
+        self.assertIn(r2, elites)  # highest confidence
+        self.assertIn(r3, elites)  # second-highest confidence
         self.assertEqual(r1.tier, 'strong')
 
     def test_small_slate_keeps_all_elites(self):
-        r1 = _fake_rec(95)
-        r2 = _fake_rec(85)
+        r1 = _fake_rec(confidence=75, edge=12)
+        r2 = _fake_rec(confidence=75, edge=10)
         assign_tiers([r1, r2])
         self.assertEqual(r1.tier, 'elite')
         self.assertEqual(r2.tier, 'elite')
@@ -216,32 +224,90 @@ class AssignTiersGuardrailTests(TestCase):
         self.assertEqual(assign_tiers([]), [])
 
 
+class DecisionRuleTests(TestCase):
+    """Decision rules — the status/reason assignment used by the UI filter banding."""
+
+    def test_low_edge_is_not_recommended(self):
+        status, reason = compute_status(model_edge=3.5, odds_american=+100)
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'low_edge')
+
+    def test_exactly_min_edge_is_recommended(self):
+        """4.0pp is the threshold — at the boundary we recommend (clears Rule 1)."""
+        status, reason = compute_status(model_edge=MIN_EDGE, odds_american=+100)
+        self.assertEqual(status, STATUS_RECOMMENDED)
+        self.assertEqual(reason, '')
+
+    def test_heavy_favorite_with_weak_edge_is_not_recommended(self):
+        """-150 odds + edge below 6pp → juice gate rejects it."""
+        status, reason = compute_status(model_edge=4.5, odds_american=-200)
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'high_juice')
+
+    def test_heavy_favorite_with_strong_edge_is_recommended(self):
+        """-300 odds but edge clears STRONG_EDGE → Rule 2 does not trigger."""
+        status, reason = compute_status(model_edge=STRONG_EDGE, odds_american=-300)
+        self.assertEqual(status, STATUS_RECOMMENDED)
+        self.assertEqual(reason, '')
+
+    def test_elite_edge_overrides_juice_rule(self):
+        """10pp edge against -500 odds is still recommended — elite override."""
+        status, reason = compute_status(model_edge=10.0, odds_american=-500)
+        self.assertEqual(status, STATUS_RECOMMENDED)
+        self.assertEqual(reason, '')
+
+    def test_favorite_at_boundary_still_gated(self):
+        """Odds of exactly -150 (HEAVY_FAVORITE_ODDS) qualify as heavy favorite."""
+        status, reason = compute_status(model_edge=5.0, odds_american=HEAVY_FAVORITE_ODDS)
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'high_juice')
+
+    def test_recommendation_dataclass_carries_status(self):
+        """Recommendations built by get_recommendation include the computed status."""
+        game = _make_mlb_game(home_rating=80, away_rating=20)
+        OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, moneyline_home=-110, moneyline_away=-110,
+        )
+        rec = get_recommendation('mlb', game)
+        self.assertIn(rec.status, (STATUS_RECOMMENDED, STATUS_NOT_RECOMMENDED))
+        # 50% market vs our strong home model prob → large edge → recommended
+        self.assertEqual(rec.status, STATUS_RECOMMENDED)
+
+
 class LobbySortByTierTests(TestCase):
-    """Verify tier-first ordering in the lobby sort helper."""
+    """Verify tier-first ordering in the lobby sort helper.
+
+    Under the new edge-based tier rules, a 'strong' tier tile has edge ≥ 6pp
+    by construction — so using edge as the within-tier tiebreaker means the
+    sort is always (tier priority, edge desc)."""
 
     def test_tier_beats_edge_magnitude(self):
         from apps.core.views import _sort_games_by_tier_then_edge
-        # Game A: strong tier, tiny edge.  Game B: standard tier, huge edge.
-        # Tier comes first — A must win even though B's edge is larger.
-        game_a = {'house_edge': 0.5, 'recommendation': _fake_rec(75, edge=0.5)}
-        game_b = {'house_edge': 9.9, 'recommendation': _fake_rec(50, edge=9.9)}
-        games = [game_b, game_a]
+        # Game A: strong tier (edge=6.5).  Game B: also strong (edge=7.0) but
+        # game_a has smaller house_edge context. This proves tier-first still
+        # works when other sort keys disagree.
+        game_a = {'house_edge': 0.5, 'recommendation': _fake_rec(75, edge=6.5)}
+        game_b = {'house_edge': 0.1, 'recommendation': _fake_rec(50, edge=7.0)}
+        games = [game_a, game_b]
         assign_tiers([game_a['recommendation'], game_b['recommendation']])
+        # Both are strong. Within-tier tiebreak uses sort_by=house_edge:
+        # game_a (0.5) > game_b (0.1) — game_a first.
         _sort_games_by_tier_then_edge(games, sort_by='house_edge')
         self.assertIs(games[0], game_a)
-        self.assertIs(games[1], game_b)
 
-    def test_edge_is_tiebreaker_within_tier(self):
+    def test_elite_beats_strong_regardless_of_context_edge(self):
         from apps.core.views import _sort_games_by_tier_then_edge
-        a = {'house_edge': 2.0, 'recommendation': _fake_rec(75, edge=2.0)}
-        b = {'house_edge': 8.0, 'recommendation': _fake_rec(70, edge=8.0)}
-        assign_tiers([a['recommendation'], b['recommendation']])
-        _sort_games_by_tier_then_edge([a, b], sort_by='house_edge')
-        games = [a, b]
+        # Game A: strong tier (edge=6.5) with huge context edge.
+        # Game B: elite tier (edge=9.0) with tiny context edge.
+        # Elite must come first despite A having bigger house_edge.
+        game_a = {'house_edge': 9.9, 'recommendation': _fake_rec(75, edge=6.5)}
+        game_b = {'house_edge': 0.1, 'recommendation': _fake_rec(50, edge=9.0)}
+        games = [game_a, game_b]
+        assign_tiers([game_a['recommendation'], game_b['recommendation']])
         _sort_games_by_tier_then_edge(games, sort_by='house_edge')
-        # Both are 'strong' after tier assignment — bigger absolute edge wins
-        self.assertIs(games[0], b)
-        self.assertIs(games[1], a)
+        self.assertIs(games[0], game_b)
+        self.assertIs(games[1], game_a)
 
     def test_none_recommendation_sorts_last(self):
         from apps.core.views import _sort_games_by_tier_then_edge
@@ -322,16 +388,17 @@ class ElitePartitionTests(TestCase):
         self.assertEqual([g['game'].id for g in remaining_up], ['u1'])
         self.assertEqual(remaining_live, [])
 
-    def test_elite_sorted_by_confidence_then_edge(self):
+    def test_elite_sorted_by_edge_then_confidence(self):
+        """Global ranking is edge DESC, confidence DESC — edge wins first."""
         from apps.core.views import _partition_elite
         upcoming = [
-            self._game_dict('a', 'elite', confidence=85, rec_edge=3),
-            self._game_dict('b', 'elite', confidence=92, rec_edge=1),
-            self._game_dict('c', 'elite', confidence=85, rec_edge=9),
+            self._game_dict('a', 'elite', confidence=85, rec_edge=9),   # edge 9
+            self._game_dict('b', 'elite', confidence=92, rec_edge=12),  # edge 12
+            self._game_dict('c', 'elite', confidence=70, rec_edge=9),   # edge 9 (lower conf)
         ]
         elite, _, _ = _partition_elite(upcoming, [])
-        # 92 first; then 85s tied on confidence → higher edge (c) wins
-        self.assertEqual([g['game'].id for g in elite], ['b', 'c', 'a'])
+        # Highest edge first (b), then edge-tied (a and c), confidence breaks tie (a > c)
+        self.assertEqual([g['game'].id for g in elite], ['b', 'a', 'c'])
 
     def test_no_duplication_across_lists(self):
         """Defensive: if the same game somehow appears in both live and upcoming
@@ -351,13 +418,18 @@ class ElitePartitionTests(TestCase):
         self.assertEqual(len(remaining_up), 1)
 
     def test_guardrail_cap_enforced_before_partition(self):
-        """End-to-end with assign_tiers: even with 5 would-be elites, only 2
-        reach the elite section. The rest remain as 'strong' in the main board."""
+        """End-to-end with assign_tiers: 5 recs all with edge ≥ ELITE_EDGE —
+        only top 2 by (edge desc, confidence desc) reach the elite section.
+        The rest fall into 'strong' in the main board."""
         from apps.core.views import _partition_elite
-        games = [self._game_dict(f'g{i}', 'standard', confidence=90 - i, rec_edge=5 - i) for i in range(5)]
-        # Build with raw tiers first, then run assign_tiers so it mimics the view path
+        # Edges 12, 11, 10, 9, 8 — all elite-tier by themselves
+        games = [
+            self._game_dict(f'g{i}', 'standard',
+                            confidence=90 - i, rec_edge=12 - i)
+            for i in range(5)
+        ]
         for g in games:
-            g['recommendation'].tier = 'standard'
+            g['recommendation'].tier = 'standard'  # reset — assign_tiers will reclassify
         assign_tiers([g['recommendation'] for g in games])
         elite, remaining_up, _ = _partition_elite(games, [])
         self.assertEqual(len(elite), MAX_ELITE_PER_SLATE)
@@ -403,3 +475,124 @@ class PlaceBetSnapshotsRecommendationTests(TestCase):
         self.assertIsNotNone(bet.recommendation)
         self.assertEqual(bet.recommendation.sport, 'mlb')
         self.assertEqual(bet.recommendation.bet_type, 'moneyline')
+
+    def test_place_bet_denormalizes_status_tier_confidence(self):
+        """MockBet captures status/tier/confidence at placement so analytics
+        don't depend on the recommendation row staying intact."""
+        resp = self.client.post(
+            '/mockbets/place/',
+            data={
+                'sport': 'mlb',
+                'game_id': str(self.game.id),
+                'bet_type': 'moneyline',
+                'selection': 'Home',
+                'odds_american': -110,
+                'stake_amount': '100',
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        bet = MockBet.objects.get(user=self.user)
+        self.assertIn(bet.recommendation_status, ('recommended', 'not_recommended'))
+        self.assertIn(bet.recommendation_tier, ('elite', 'strong', 'standard'))
+        self.assertIsNotNone(bet.recommendation_confidence)
+        # Values should match the linked recommendation
+        self.assertEqual(bet.recommendation_status, bet.recommendation.status)
+        self.assertEqual(bet.recommendation_tier, bet.recommendation.tier)
+
+
+class RecommendationPerformanceTests(TestCase):
+    """The recommendation_performance service groups settled MockBet results
+    by the snapshot fields. These tests lock the math and the system
+    confidence score formula."""
+
+    def setUp(self):
+        from apps.mockbets.models import MockBet
+        self.user = User.objects.create_user('perf_user', password='pw')
+        self.MockBet = MockBet
+
+    def _bet(self, result, stake, payout=None, status='recommended', tier='elite', edge=10.0):
+        from apps.mockbets.models import MockBet
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=+100,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal(stake),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+            recommendation_status=status,
+            recommendation_tier=tier,
+            expected_edge=Decimal(str(edge)),
+        )
+
+    def test_group_by_status_isolates_recommended_vs_not(self):
+        from apps.mockbets.services.recommendation_performance import compute_performance_by_status
+        # 3 recommended wins, 1 loss; 2 not-recommended losses
+        for _ in range(3):
+            self._bet('win', '100', '100', status='recommended')
+        self._bet('loss', '100', status='recommended')
+        self._bet('loss', '100', status='not_recommended')
+        self._bet('loss', '100', status='not_recommended')
+
+        result = compute_performance_by_status(self.MockBet.objects.filter(user=self.user))
+        self.assertEqual(result['recommended']['wins'], 3)
+        self.assertEqual(result['recommended']['losses'], 1)
+        self.assertAlmostEqual(result['recommended']['win_rate'], 75.0, places=1)
+        self.assertEqual(result['not_recommended']['wins'], 0)
+        self.assertEqual(result['not_recommended']['losses'], 2)
+        self.assertEqual(result['not_recommended']['win_rate'], 0.0)
+
+    def test_group_by_tier_elite_strong_standard(self):
+        from apps.mockbets.services.recommendation_performance import compute_performance_by_tier
+        self._bet('win', '100', '100', tier='elite')
+        self._bet('win', '100', '100', tier='elite')
+        self._bet('loss', '100', tier='strong')
+        self._bet('push', '100', tier='standard')
+
+        result = compute_performance_by_tier(self.MockBet.objects.filter(user=self.user))
+        self.assertEqual(result['elite']['wins'], 2)
+        self.assertEqual(result['strong']['losses'], 1)
+        self.assertEqual(result['standard']['pushes'], 1)
+
+    def test_pending_bets_excluded_from_all_groups(self):
+        from apps.mockbets.services.recommendation_performance import compute_performance_by_status
+        self._bet('win', '100', '100', status='recommended')
+        self._bet('pending', '100', status='recommended')
+        result = compute_performance_by_status(self.MockBet.objects.filter(user=self.user))
+        self.assertEqual(result['recommended']['total_bets'], 1)
+
+    def test_system_confidence_score_reflects_sample_size(self):
+        """At the same win rate and ROI, a larger sample must score higher than
+        a smaller one — the sample_term pulls the small sample down."""
+        from apps.mockbets.services.recommendation_performance import compute_system_confidence_score
+
+        # Phase A: 3 perfect wins (small sample)
+        for _ in range(3):
+            self._bet('win', '100', '100')
+        small_score = compute_system_confidence_score(self.MockBet.objects.filter(user=self.user))
+        self.assertEqual(small_score['components']['total_bets'], 3)
+        self.assertLess(small_score['score'], 100.0)  # sample penalty prevents maxing
+
+        # Phase B: add 47 more perfect wins — hits full sample saturation (50)
+        for _ in range(47):
+            self._bet('win', '100', '100')
+        big_score = compute_system_confidence_score(self.MockBet.objects.filter(user=self.user))
+        self.assertEqual(big_score['components']['total_bets'], 50)
+        self.assertGreater(big_score['score'], small_score['score'])
+
+    def test_system_confidence_score_zero_for_empty_bets(self):
+        from apps.mockbets.services.recommendation_performance import compute_system_confidence_score
+        score = compute_system_confidence_score(self.MockBet.objects.filter(user=self.user))
+        # No data: win_rate=0, roi=0 (neutral), sample=0 → only the neutral ROI
+        # term contributes (0.5 center * 0.3 weight * 100 = 15)
+        self.assertEqual(score['components']['total_bets'], 0)
+        self.assertGreaterEqual(score['score'], 0)
+        self.assertLess(score['score'], 20)
+
+    def test_compute_all_returns_bundle(self):
+        from apps.mockbets.services.recommendation_performance import compute_all
+        self._bet('win', '100', '100')
+        bundle = compute_all(self.MockBet.objects.filter(user=self.user))
+        self.assertIn('by_status', bundle)
+        self.assertIn('by_tier', bundle)
+        self.assertIn('system_confidence', bundle)

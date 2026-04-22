@@ -907,6 +907,114 @@ select.form-control {
     background: rgba(79, 140, 255, 0.1);
 }
 
+/* Recommendation status — chip + not-recommended treatment.
+   Not-recommended tiles stay fully readable (still visible) but are
+   visually de-emphasized so the eye lands on recommended picks first. */
+.gc-pick-header {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 2px;
+}
+.gc-pick-status,
+.model-pick-status {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.gc-pick-status-recommended,
+.model-pick-status-recommended {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.4);
+}
+.gc-pick-status-not_recommended,
+.model-pick-status-not_recommended {
+    background: rgba(148, 163, 184, 0.12);
+    color: var(--text-muted);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+}
+.gc-pick-reason,
+.model-pick-reason {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Not-recommended cards stay visible but step back — softer border,
+   reduced opacity so the eye skips them faster. NEVER display:none. */
+.game-card-not_recommended {
+    opacity: 0.72;
+    border-color: var(--border);
+    box-shadow: none;
+}
+.game-card-not_recommended:hover {
+    opacity: 1;
+}
+.model-pick-banner-not_recommended {
+    opacity: 0.85;
+    border-left-color: var(--text-muted);
+    background: rgba(148, 163, 184, 0.05);
+    box-shadow: none;
+}
+
+/* Recommendation performance widget on the mock-bet analytics page. */
+.rec-perf-system {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.rec-perf-score-tile {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: rgba(79, 140, 255, 0.06);
+    flex: 1;
+    min-width: 220px;
+}
+.rec-perf-score-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+.rec-perf-score-value {
+    font-size: 1.8rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--accent);
+}
+.rec-perf-table { margin-top: 4px; }
+.rec-perf-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.rec-perf-chip-recommended {
+    background: rgba(34, 197, 94, 0.15); color: #22c55e;
+}
+.rec-perf-chip-not_recommended {
+    background: rgba(148, 163, 184, 0.15); color: var(--text-muted);
+}
+.rec-perf-chip-tier-elite {
+    background: rgba(250, 204, 21, 0.15); color: #facc15;
+}
+.rec-perf-chip-tier-strong {
+    background: rgba(79, 140, 255, 0.15); color: var(--accent);
+}
+.rec-perf-chip-tier-standard {
+    background: rgba(148, 163, 184, 0.12); color: var(--text-muted);
+}
+
 /* Sort label */
 .filter-label {
     font-size: 0.8rem;

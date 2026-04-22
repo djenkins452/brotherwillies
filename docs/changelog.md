@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-04-21 - Selection engine + recommendation performance feedback loop
+
+**Summary:** Upgraded the recommendation layer to classify each pick as Recommended or Not Recommended using edge-aware decision rules, switched tier classification from confidence-based to edge-based, denormalized snapshot fields onto MockBet so analytics don't depend on future rule/model changes, and shipped a Recommendation Performance widget on the mock-bet analytics page with a 0-100 system confidence score. All games still visible — the new status is a label, not a filter.
+
+### Decision rules (new)
+Constants in `apps/core/services/recommendations.py` — units are percentage points to match the stored `model_edge` scale:
+- `MIN_EDGE = 4.0` — below this, any pick is Not Recommended (`low_edge`)
+- `STRONG_EDGE = 6.0` — edge required to clear heavy-favorite juice
+- `ELITE_EDGE = 8.0` — overrides the juice rule; always Recommended
+- `HEAVY_FAVORITE_ODDS = -150` — odds threshold for the juice gate
+
+Rule evaluation order (first match wins):
+1. Elite override — `model_edge >= ELITE_EDGE` → Recommended
+2. Min edge — `model_edge < MIN_EDGE` → Not Recommended (`low_edge`)
+3. Juice gate — `odds_american <= -150 AND edge < STRONG_EDGE` → Not Recommended (`high_juice`)
+4. Default — Recommended
+
+### Tier migration (confidence → edge)
+Tier classification now reads `model_edge`, not `confidence_score`:
+- `elite` — edge ≥ 8 pp
+- `strong` — edge ≥ 6 pp
+- `standard` — otherwise
+
+Rationale: "strength of the opportunity" is a better mental model than "model confidence" — 92% confidence against -900 odds is not a strong edge, the market already priced it in. `assign_tiers` still caps elite at `MAX_ELITE_PER_SLATE=2` and now ranks by (edge desc, confidence desc). `_partition_elite` uses the same ordering.
+
+### Snapshot fields
+- `apps/core/models.py::BettingRecommendation` — new persisted `status`, `status_reason` fields.
+- `apps/mockbets/models.py::MockBet` — new denormalized snapshot fields: `recommendation_status`, `recommendation_tier`, `recommendation_confidence`, `status_reason`. Captured in `place_bet` at bet creation so "what the system believed at bet time" is preserved forever.
+- Migrations: `core/0003_bettingrecommendation_status_and_more.py`, `mockbets/0004_mockbet_recommendation_confidence_and_more.py`.
+
+### Performance service
+`apps/mockbets/services/recommendation_performance.py`:
+- `compute_performance_by_status(bets)` — wins/losses/pushes/win_rate/roi/net_pl grouped by recommended vs not_recommended.
+- `compute_performance_by_tier(bets)` — same metrics grouped by elite/strong/standard.
+- `compute_system_confidence_score(bets)` — 0-100 score = `(win_rate * 0.5 + roi_term * 0.3 + sample_term * 0.2) * 100`, where `roi_term = ((clamp(roi/20, -1, 1) + 1) / 2)` and `sample_term = min(1, n/50)`. Sample penalty prevents small lucky streaks from maxing the score.
+- `compute_all(bets)` — bundle for the analytics widget.
+
+### UI
+- Lobby tile shows status chip next to the tier label (`Recommended` green / `Not Recommended` muted grey, optional reason italic).
+- Detail-page banner shows the same.
+- `.game-card-not_recommended` applies reduced opacity (0.72) and softer border — card is still fully readable, just de-emphasized. **Never hidden.**
+- Mock Bet Analytics page: new "Recommendation Performance" widget at the top with the system confidence score tile and two tables (by status, by tier). Framed around: "Recommended should outperform Not Recommended. Elite should outperform Strong. If not, the rules are wrong — update them."
+
+### Sample analytics output
+```
+System Confidence Score: 62.4
+  — 18 settled bets, 61.1% win, 12.3% ROI
+
+By Status
+  Recommended       13 bets   69.2% win   +18.5% ROI   +$240.50
+  Not Recommended    5 bets   40.0% win   -8.0% ROI    -$40.00
+
+By Tier
+  Elite              2 bets  100.0% win   +75.0% ROI   +$150.00
+  Strong             8 bets   62.5% win   +14.0% ROI   +$112.00
+  Standard           8 bets   50.0% win    -2.5% ROI    -$20.00
+```
+
+### Tests (17 new / updated in `apps/core/tests.py`)
+- `DecisionRuleTests` — 7 tests covering low_edge, boundary, high_juice, elite-override, favorite-boundary, and status propagation into the dataclass.
+- `TierThresholdTests` — rewritten for edge-based boundaries.
+- `AssignTiersGuardrailTests` — rewritten for edge-first ranking.
+- `LobbySortByTierTests` — reframed around elite-beats-strong and within-tier tiebreak.
+- `ElitePartitionTests` — updated to reflect edge-based sorting.
+- `PlaceBetSnapshotsRecommendationTests` — new `test_place_bet_denormalizes_status_tier_confidence`.
+- `RecommendationPerformanceTests` — 6 new tests covering status grouping, tier grouping, pending exclusion, sample-size penalty, empty-bets safety, compute_all bundle.
+
+Full app suite: 213/215 (pre-existing `feedback.tests` import + `GolfOddsProviderPersistGateTests` flake unchanged).
+
+### All games still visible
+The `not_recommended` state is a visual label only. `_partition_elite` and `_sort_games_by_tier_then_edge` still include every game in `games_data`. Verified in existing lobby tests.
+
+---
+
 ## 2026-04-21 - Observability, configurable score window, strict 3-column tile grid
 
 **Summary:** Made the 15-minute score-refresh cycle observable (structured per-provider + cycle-summary logs, plus per-miss warnings for games the API returns but we haven't ingested), made the score-update window env-configurable, and enforced a shared 3-max tile grid across all boards.

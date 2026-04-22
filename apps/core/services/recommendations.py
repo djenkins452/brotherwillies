@@ -15,11 +15,19 @@ from typing import List, Optional
 from apps.core.sport_registry import SPORT_REGISTRY
 
 
-# Tier thresholds based on confidence_score (0-100).
+# Decision thresholds — units are percentage points (pp) to match the stored
+# `model_edge` scale (e.g. 5.2 means 5.2 pp above market). Mixing units here
+# with decimal probabilities would silently misclassify every recommendation.
+MIN_EDGE = 4.0      # 4 pp — below this, the pick is not recommended at all
+STRONG_EDGE = 6.0   # 6 pp — edge required to overcome heavy-favorite juice
+ELITE_EDGE = 8.0    # 8 pp — strong enough to always recommend regardless of juice
+
+# Heavy-favorite juice threshold. American odds at or below this are "expensive"
+# enough that the model needs a strong edge to clear them. -150 ≈ 60% implied.
+HEAVY_FAVORITE_ODDS = -150
+
 # Per-slate guardrail caps elite at MAX_ELITE_PER_SLATE — any extras are
 # downgraded to strong so the "elite" signal stays rare and meaningful.
-ELITE_THRESHOLD = 80.0
-STRONG_THRESHOLD = 65.0
 MAX_ELITE_PER_SLATE = 2
 
 _TIER_LABELS = {
@@ -28,17 +36,68 @@ _TIER_LABELS = {
     'standard': 'Model Pick',
 }
 
+STATUS_RECOMMENDED = 'recommended'
+STATUS_NOT_RECOMMENDED = 'not_recommended'
+
+_STATUS_LABELS = {
+    STATUS_RECOMMENDED: 'Recommended',
+    STATUS_NOT_RECOMMENDED: 'Not Recommended',
+}
+
+_STATUS_REASON_LABELS = {
+    'low_edge': 'Low Edge',
+    'high_juice': 'High Juice Risk',
+    'marginal': 'Marginal',
+    '': '',
+}
+
 # Lower = higher priority in sort keys.
 TIER_ORDER = {'elite': 0, 'strong': 1, 'standard': 2, None: 3}
 
 
-def _raw_tier(confidence_score: float) -> str:
-    """Classify a single recommendation by confidence alone — ignores slate guardrail."""
-    if confidence_score >= ELITE_THRESHOLD:
+def _raw_tier(model_edge: float) -> str:
+    """Classify a recommendation by its edge vs market (in pp), not by confidence.
+
+    Rationale: the product reality is "strength of the opportunity". A 92%
+    model confidence against -900 market odds is not a strong edge — the
+    market already priced it in. Edge-based tiering avoids that trap.
+    """
+    if model_edge is None:
+        return 'standard'
+    if model_edge >= ELITE_EDGE:
         return 'elite'
-    if confidence_score >= STRONG_THRESHOLD:
+    if model_edge >= STRONG_EDGE:
         return 'strong'
     return 'standard'
+
+
+def compute_status(model_edge: float, odds_american: int):
+    """Apply decision rules to determine recommended vs not_recommended.
+
+    Evaluation order lets the elite-edge override short-circuit heavy-juice
+    skepticism — a model edge of 10pp against -200 odds is still worth flagging.
+
+    Returns (status, status_reason). `status_reason` is '' for recommended picks.
+    """
+    # Rule 3 first — elite edge overrides juice risk
+    if model_edge is not None and model_edge >= ELITE_EDGE:
+        return STATUS_RECOMMENDED, ''
+    # Rule 1 — minimum edge to bother
+    if model_edge is None or model_edge < MIN_EDGE:
+        return STATUS_NOT_RECOMMENDED, 'low_edge'
+    # Rule 2 — heavy-favorite juice gate
+    if odds_american is not None and odds_american <= HEAVY_FAVORITE_ODDS and model_edge < STRONG_EDGE:
+        return STATUS_NOT_RECOMMENDED, 'high_juice'
+    # Rule 4 — default
+    return STATUS_RECOMMENDED, ''
+
+
+def status_label(status: str) -> str:
+    return _STATUS_LABELS.get(status, '')
+
+
+def status_reason_label(status_reason: str) -> str:
+    return _STATUS_REASON_LABELS.get(status_reason or '', '')
 
 
 @dataclass
@@ -53,10 +112,24 @@ class Recommendation:
     model_edge: float
     model_source: str
     tier: str = 'standard'
+    status: str = STATUS_RECOMMENDED
+    status_reason: str = ''
 
     @property
     def tier_label(self) -> str:
         return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
+
+    @property
+    def status_label(self) -> str:
+        return _STATUS_LABELS.get(self.status, '')
+
+    @property
+    def status_reason_label(self) -> str:
+        return _STATUS_REASON_LABELS.get(self.status_reason or '', '')
+
+    @property
+    def is_recommended(self) -> bool:
+        return self.status == STATUS_RECOMMENDED
 
     @property
     def market_implied_probability(self) -> Optional[float]:
@@ -98,22 +171,21 @@ def _build_explanation_rows(confidence_score, odds_american, model_edge):
 def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendation']:
     """Classify each recommendation and enforce the slate-level elite cap.
 
-    Mutates tier on each input in place and returns the same list for convenience.
+    Mutates tier in place and returns the same list for convenience.
 
-    Rules:
-      - Raw tier from confidence (_raw_tier).
+    Rules (post-edge migration):
+      - Raw tier from model_edge (_raw_tier). Edge in pp matches stored scale.
       - If more than MAX_ELITE_PER_SLATE qualify as elite, only the top N by
-        (confidence_score desc, model_edge desc) keep elite; the rest drop to strong.
+        (model_edge desc, confidence_score desc) keep elite; the rest drop to
+        strong. Edge is the primary ranking signal per the selection spec.
     """
-    # First pass: every rec gets its raw tier.
     for rec in recommendations:
-        rec.tier = _raw_tier(rec.confidence_score)
+        rec.tier = _raw_tier(rec.model_edge)
 
-    # Guardrail: cap elites.
     elites = [r for r in recommendations if r.tier == 'elite']
     if len(elites) > MAX_ELITE_PER_SLATE:
         elites.sort(
-            key=lambda r: (r.confidence_score, r.model_edge),
+            key=lambda r: (r.model_edge, r.confidence_score),
             reverse=True,
         )
         for demoted in elites[MAX_ELITE_PER_SLATE:]:
@@ -159,6 +231,8 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         edge = away_edge
         confidence = away_prob
 
+    model_edge_pp = round(edge * 100, 1)
+    status, reason = compute_status(model_edge_pp, pick_odds)
     return Recommendation(
         sport='',
         game=game,
@@ -167,8 +241,11 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         line=_format_american(pick_odds),
         odds_american=pick_odds,
         confidence_score=round(confidence * 100, 1),
-        model_edge=round(edge * 100, 1),
+        model_edge=model_edge_pp,
         model_source=model_source,
+        tier=_raw_tier(model_edge_pp),
+        status=status,
+        status_reason=reason,
     )
 
 
@@ -223,5 +300,7 @@ def persist_recommendation(sport: str, game, user=None):
         confidence_score=Decimal(str(rec.confidence_score)),
         model_edge=Decimal(str(rec.model_edge)),
         model_source=rec.model_source,
+        status=rec.status,
+        status_reason=rec.status_reason,
         **{game_fk_field: game},
     )

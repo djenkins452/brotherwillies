@@ -110,6 +110,40 @@ class MockBet(models.Model):
         related_name='mock_bets',
     )
 
+    # Denormalized snapshot of what the system KNEW at placement time. These
+    # duplicate fields from the linked BettingRecommendation row intentionally
+    # — they insulate historical analytics from future model/rule changes and
+    # avoid a JOIN on the analytics hot path. See recommendation_performance.py.
+    RECOMMENDATION_STATUS_CHOICES = [
+        ('', ''),  # pre-migration bets
+        ('recommended', 'Recommended'),
+        ('not_recommended', 'Not Recommended'),
+    ]
+    RECOMMENDATION_TIER_CHOICES = [
+        ('', ''),
+        ('elite', 'Elite'),
+        ('strong', 'Strong'),
+        ('standard', 'Standard'),
+    ]
+    STATUS_REASON_CHOICES = [
+        ('', ''),
+        ('low_edge', 'Low Edge'),
+        ('high_juice', 'High Juice Risk'),
+        ('marginal', 'Marginal'),
+    ]
+    recommendation_status = models.CharField(
+        max_length=20, choices=RECOMMENDATION_STATUS_CHOICES, blank=True, default=''
+    )
+    recommendation_tier = models.CharField(
+        max_length=10, choices=RECOMMENDATION_TIER_CHOICES, blank=True, default=''
+    )
+    recommendation_confidence = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+    )
+    status_reason = models.CharField(
+        max_length=20, choices=STATUS_REASON_CHOICES, blank=True, default='',
+    )
+
     class Meta:
         ordering = ['-placed_at']
 

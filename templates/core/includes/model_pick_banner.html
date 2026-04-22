@@ -7,11 +7,16 @@ apps.core.services.recommendations) or None. Renders nothing if None.
 No logic here — tier + tier_label are decided in the service.
 {% endcomment %}
 {% if recommendation %}
-<div class="card model-pick-banner model-pick-banner-{{ recommendation.tier }} mb-2"
+<div class="card model-pick-banner model-pick-banner-{{ recommendation.tier }} model-pick-banner-{{ recommendation.status }} mb-2"
      data-pick-source="{{ recommendation.model_source }}"
-     data-pick-tier="{{ recommendation.tier }}">
+     data-pick-tier="{{ recommendation.tier }}"
+     data-pick-status="{{ recommendation.status }}">
     <div class="model-pick-label text-sm">
         <span class="model-pick-tier">{{ recommendation.tier_label }}</span>
+        <span class="model-pick-status model-pick-status-{{ recommendation.status }}">{{ recommendation.status_label }}</span>
+        {% if recommendation.status_reason_label %}
+        <span class="model-pick-reason">{{ recommendation.status_reason_label }}</span>
+        {% endif %}
         {% if recommendation.model_source == 'user' %}<span class="badge">Your Model</span>
         {% else %}<span class="badge">House Model</span>{% endif %}
     </div>

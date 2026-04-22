@@ -109,6 +109,60 @@
 </div>
 
 {% if kpis.settled_count > 0 %}
+{# ===== RECOMMENDATION PERFORMANCE ===== #}
+<div class="card mb-1">
+    <h3 class="card-title">Recommendation Performance</h3>
+    <p class="text-sm text-muted" style="margin-top:0;">How good are the system's picks actually? Win rate / ROI grouped by what the system was telling you at bet time.</p>
+    <div class="rec-perf-system">
+        <div class="rec-perf-score-tile">
+            <div class="rec-perf-score-label">System Confidence</div>
+            <div class="rec-perf-score-value">{{ rec_performance.system_confidence.score|floatformat:1 }}</div>
+            <div class="text-sm text-muted">
+                {{ rec_performance.system_confidence.components.total_bets }} settled bets
+                &middot; {{ rec_performance.system_confidence.components.win_rate_pct|floatformat:1 }}% win
+                &middot; {{ rec_performance.system_confidence.components.roi_pct|floatformat:1 }}% ROI
+            </div>
+        </div>
+    </div>
+
+    <h4 class="text-sm" style="margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);">By Recommendation Status</h4>
+    <table class="data-table rec-perf-table">
+        <thead>
+            <tr><th>Status</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th></tr>
+        </thead>
+        <tbody>
+            {% for key, stats in rec_performance.by_status.items %}
+            <tr>
+                <td><span class="rec-perf-chip rec-perf-chip-{{ key }}">{{ key|title|cut:"_" }}</span></td>
+                <td>{{ stats.total_bets }}</td>
+                <td>{{ stats.win_rate|floatformat:1 }}</td>
+                <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
+                <td class="{% if stats.net_pl > 0 %}text-green{% elif stats.net_pl < 0 %}text-red{% endif %}">${{ stats.net_pl|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h4 class="text-sm" style="margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);">By Tier</h4>
+    <table class="data-table rec-perf-table">
+        <thead>
+            <tr><th>Tier</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th></tr>
+        </thead>
+        <tbody>
+            {% for key, stats in rec_performance.by_tier.items %}
+            <tr>
+                <td><span class="rec-perf-chip rec-perf-chip-tier-{{ key }}">{{ key|title }}</span></td>
+                <td>{{ stats.total_bets }}</td>
+                <td>{{ stats.win_rate|floatformat:1 }}</td>
+                <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
+                <td class="{% if stats.net_pl > 0 %}text-green{% elif stats.net_pl < 0 %}text-red{% endif %}">${{ stats.net_pl|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-sm text-muted mt-1">Target signal: Recommended should outperform Not Recommended, and Elite should outperform Strong. If not, the rules are wrong — update them.</p>
+</div>
+
 {# ===== CUMULATIVE P/L CHART ===== #}
 <div class="card mb-1">
     <h3 class="card-title">Cumulative P/L</h3>

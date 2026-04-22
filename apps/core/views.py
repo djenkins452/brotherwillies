@@ -226,10 +226,12 @@ def _partition_elite(games_data, live_data):
             elite_ids.add(gid)
             elite_games.append(g)
 
+    # Global ranking rule (edge DESC, confidence DESC) — edge is the primary
+    # signal per the selection engine spec; confidence is the tiebreaker.
     elite_games.sort(
         key=lambda g: (
-            -(g['recommendation'].confidence_score or 0),
             -(g['recommendation'].model_edge or 0),
+            -(g['recommendation'].confidence_score or 0),
         )
     )
 

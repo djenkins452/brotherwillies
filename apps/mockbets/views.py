@@ -197,13 +197,26 @@ def place_bet(request):
 
     # Snapshot the current model pick alongside the bet (team sports only).
     # Non-fatal on failure — the bet is already saved and valid without it.
+    #
+    # We denormalize status/tier/confidence onto the MockBet row so analytics
+    # queries don't depend on the linked BettingRecommendation staying intact,
+    # and so "what the system believed at bet time" is preserved forever even
+    # if decision rules change later.
     if sport in ('cfb', 'cbb', 'mlb', 'college_baseball') and bet.game is not None:
         try:
             from apps.core.services.recommendations import persist_recommendation
             rec = persist_recommendation(sport, bet.game, request.user)
             if rec is not None:
                 bet.recommendation = rec
-                bet.save(update_fields=['recommendation'])
+                bet.recommendation_status = rec.status or ''
+                bet.recommendation_tier = getattr(rec, 'tier', '') or ''
+                bet.recommendation_confidence = rec.confidence_score
+                bet.status_reason = rec.status_reason or ''
+                bet.save(update_fields=[
+                    'recommendation', 'recommendation_status',
+                    'recommendation_tier', 'recommendation_confidence',
+                    'status_reason',
+                ])
         except Exception:
             pass
 
@@ -307,6 +320,10 @@ def analytics_dashboard(request):
     calibration = compute_confidence_calibration(all_bets)
     edge = compute_edge_analysis(all_bets)
     variance = compute_variance_stats(all_bets)
+    # Recommendation performance — proves the selection engine is actually
+    # picking winners vs just making guesses.
+    from .services.recommendation_performance import compute_all as compute_rec_perf
+    rec_performance = compute_rec_perf(all_bets)
 
     return render(request, 'mockbets/analytics.html', {
         'kpis': kpis,
@@ -315,6 +332,7 @@ def analytics_dashboard(request):
         'calibration': calibration,
         'edge': edge,
         'variance': variance,
+        'rec_performance': rec_performance,
         'current_sport': sport or '',
         'current_bet_type': bet_type or '',
         'current_confidence': confidence or '',

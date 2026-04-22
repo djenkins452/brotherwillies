@@ -83,6 +83,17 @@ class BettingRecommendation(models.Model):
         'college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True, related_name='recommendations'
     )
 
+    STATUS_CHOICES = [
+        ('recommended', 'Recommended'),
+        ('not_recommended', 'Not Recommended'),
+    ]
+    STATUS_REASON_CHOICES = [
+        ('', ''),
+        ('low_edge', 'Low Edge'),
+        ('high_juice', 'High Juice Risk'),
+        ('marginal', 'Marginal'),
+    ]
+
     bet_type = models.CharField(max_length=10, choices=BET_TYPE_CHOICES)
     pick = models.CharField(max_length=200)
     line = models.CharField(max_length=32, blank=True)
@@ -90,6 +101,11 @@ class BettingRecommendation(models.Model):
     confidence_score = models.DecimalField(max_digits=5, decimal_places=2)
     model_edge = models.DecimalField(max_digits=6, decimal_places=2)
     model_source = models.CharField(max_length=5, choices=MODEL_SOURCE_CHOICES, default='house')
+    # Decision-rule output — persisted so historical queries don't depend on
+    # re-running current rules against old data. See compute_status() in
+    # apps/core/services/recommendations.py for the rule set.
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='recommended')
+    status_reason = models.CharField(max_length=20, choices=STATUS_REASON_CHOICES, blank=True, default='')
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -129,3 +145,17 @@ class BettingRecommendation(models.Model):
     def explanation_rows(self):
         from apps.core.services.recommendations import _build_explanation_rows
         return _build_explanation_rows(self.confidence_score, self.odds_american, self.model_edge)
+
+    @property
+    def status_label(self):
+        from apps.core.services.recommendations import status_label
+        return status_label(self.status)
+
+    @property
+    def status_reason_label(self):
+        from apps.core.services.recommendations import status_reason_label
+        return status_reason_label(self.status_reason)
+
+    @property
+    def is_recommended(self):
+        return self.status == 'recommended'
