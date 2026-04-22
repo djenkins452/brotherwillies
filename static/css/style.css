@@ -732,6 +732,58 @@ select.form-control {
     line-height: 1.2;
 }
 
+/* Loss analysis — the "why this lost" badge + detail card.
+   Color-codes the reason so the user can eye-scan their history: variance
+   (blue, it was fine), model_error (orange, model was wrong), bad_edge
+   (grey, shouldn't have bet), market_movement (yellow, market was right). */
+.bet-loss-reason {
+    padding: 6px 10px;
+    border-radius: 4px;
+    border-left: 3px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+}
+.bet-loss-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.bet-loss-metrics { font-size: 0.75rem; }
+.bet-loss-card { padding: 14px; }
+.bet-loss-badge-lg {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.bet-loss-reason-variance {
+    border-left-color: var(--accent);
+    background: rgba(79, 140, 255, 0.08);
+}
+.bet-loss-reason-variance .bet-loss-badge,
+.bet-loss-reason-variance .bet-loss-badge-lg { color: var(--accent); }
+.bet-loss-reason-model_error {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+}
+.bet-loss-reason-model_error .bet-loss-badge,
+.bet-loss-reason-model_error .bet-loss-badge-lg { color: #f59e0b; }
+.bet-loss-reason-bad_edge {
+    border-left-color: var(--text-muted);
+    background: rgba(148, 163, 184, 0.08);
+}
+.bet-loss-reason-bad_edge .bet-loss-badge,
+.bet-loss-reason-bad_edge .bet-loss-badge-lg { color: var(--text-muted); }
+.bet-loss-reason-market_movement {
+    border-left-color: #eab308;
+    background: rgba(234, 179, 8, 0.08);
+}
+.bet-loss-reason-market_movement .bet-loss-badge,
+.bet-loss-reason-market_movement .bet-loss-badge-lg { color: #eab308; }
+.bet-loss-reason-unknown { border-left-color: var(--border); }
+
 /* Per-bet cards — visual win/loss state */
 .bet-card { border-left-width: 3px; border-left-style: solid; border-left-color: var(--border); }
 .bet-card-win { border-left-color: var(--green); background: rgba(34, 197, 94, 0.04); }
@@ -882,16 +934,20 @@ select.form-control {
 /* Confidence tiers — elite gets glow + gold accent, strong gets a subtle
    accent ring, standard is the default card. No size/layout changes so
    the 3-up grid stays aligned. */
+/* Stronger visual hierarchy per the Phase 2 spec — elite POPS, strong is
+   a clear step above standard, standard is quiet, not_recommended is
+   clearly de-emphasized (but never hidden). */
 .game-card-tier-elite {
-    border-color: #facc15;                       /* gold */
-    box-shadow: 0 0 0 1px #facc15, 0 0 14px rgba(250, 204, 21, 0.25);
+    border: 2px solid #facc15;                       /* gold */
+    box-shadow: 0 0 12px rgba(255, 215, 0, 0.4);
     background: linear-gradient(180deg, rgba(250, 204, 21, 0.06), transparent 60%), var(--bg-card);
 }
 .game-card-tier-strong {
-    border-color: rgba(79, 140, 255, 0.55);
-    box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.35);
+    border: 2px solid rgba(0, 200, 255, 0.6);
 }
-/* standard: no override — default card styles apply */
+.game-card-tier-standard {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
 
 .gc-pick-elite .gc-pick-tier { color: #facc15; }
 .gc-pick-strong .gc-pick-tier { color: var(--accent); }
@@ -929,15 +985,27 @@ select.form-control {
 }
 .gc-pick-status-recommended,
 .model-pick-status-recommended {
-    background: rgba(34, 197, 94, 0.15);
-    color: #22c55e;
-    border: 1px solid rgba(34, 197, 94, 0.4);
+    background: #16a34a;
+    color: #fff;
+    border: 1px solid #16a34a;
 }
 .gc-pick-status-not_recommended,
 .model-pick-status-not_recommended {
-    background: rgba(148, 163, 184, 0.12);
+    background: #6b7280;
+    color: #fff;
+    border: 1px solid #6b7280;
+}
+/* New action-CTA accent — "Recommended Bet:" / "Model Lean:" prefix on
+   the pick line. Keeps contrast vs the rest of the inline pick text. */
+.gc-pick-action,
+.model-pick-action {
+    font-weight: 700;
+    color: var(--accent);
+    margin-right: 2px;
+}
+.gc-pick-not_recommended .gc-pick-action,
+.model-pick-banner-not_recommended .model-pick-action {
     color: var(--text-muted);
-    border: 1px solid rgba(148, 163, 184, 0.35);
 }
 .gc-pick-reason,
 .model-pick-reason {
@@ -949,8 +1017,8 @@ select.form-control {
 /* Not-recommended cards stay visible but step back — softer border,
    reduced opacity so the eye skips them faster. NEVER display:none. */
 .game-card-not_recommended {
-    opacity: 0.72;
-    border-color: var(--border);
+    opacity: 0.7;
+    border: 1px dashed rgba(255, 255, 255, 0.2);
     box-shadow: none;
 }
 .game-card-not_recommended:hover {

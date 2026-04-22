@@ -44,6 +44,15 @@ _STATUS_LABELS = {
     STATUS_NOT_RECOMMENDED: 'Not Recommended',
 }
 
+# Action-oriented CTA copy — what the user should actually do. Keeps the
+# passive "Model Pick" language out of the UI while still being honest when
+# the system does not recommend the bet (then it's a "Model Lean" — here's
+# what the model would pick, but the decision rules say don't bet).
+_STATUS_ACTION_LABELS = {
+    STATUS_RECOMMENDED: 'Recommended Bet',
+    STATUS_NOT_RECOMMENDED: 'Model Lean',
+}
+
 _STATUS_REASON_LABELS = {
     'low_edge': 'Low Edge',
     'high_juice': 'High Juice Risk',
@@ -96,6 +105,11 @@ def status_label(status: str) -> str:
     return _STATUS_LABELS.get(status, '')
 
 
+def action_label(status: str) -> str:
+    """Actionable CTA copy — 'Recommended Bet' vs 'Model Lean'."""
+    return _STATUS_ACTION_LABELS.get(status, _STATUS_ACTION_LABELS[STATUS_RECOMMENDED])
+
+
 def status_reason_label(status_reason: str) -> str:
     return _STATUS_REASON_LABELS.get(status_reason or '', '')
 
@@ -122,6 +136,10 @@ class Recommendation:
     @property
     def status_label(self) -> str:
         return _STATUS_LABELS.get(self.status, '')
+
+    @property
+    def action_label(self) -> str:
+        return _STATUS_ACTION_LABELS.get(self.status, _STATUS_ACTION_LABELS[STATUS_RECOMMENDED])
 
     @property
     def status_reason_label(self) -> str:

@@ -131,6 +131,35 @@ def compute_system_confidence_score(bets: Iterable) -> dict:
     }
 
 
+def compute_loss_breakdown(bets: Iterable) -> dict:
+    """Aggregate why-we-lost classification across settled losses.
+
+    Returns per-reason counts + percentages. Unknown / blank reasons are
+    bucketed into `unknown` so the widget can still render something for
+    pre-snapshot bets.
+    """
+    from collections import Counter
+    from apps.mockbets.services.loss_analysis import reason_label
+
+    losses = [b for b in bets if b.result == 'loss']
+    counts = Counter()
+    for b in losses:
+        counts[b.loss_reason or 'unknown'] += 1
+
+    total = sum(counts.values())
+    rows = []
+    # Stable display order so the widget doesn't reshuffle between renders.
+    for key in ('variance', 'model_error', 'market_movement', 'bad_edge', 'unknown'):
+        c = counts.get(key, 0)
+        rows.append({
+            'reason': key,
+            'label': reason_label(key) or key.title(),
+            'count': c,
+            'pct': round(c / total * 100, 1) if total else 0.0,
+        })
+    return {'total_losses': total, 'rows': rows}
+
+
 def compute_all(bets) -> dict:
     """Convenience: everything the analytics widget needs in one call."""
     materialized: List = list(bets)
@@ -138,4 +167,5 @@ def compute_all(bets) -> dict:
         'by_status': compute_performance_by_status(materialized),
         'by_tier': compute_performance_by_tier(materialized),
         'system_confidence': compute_system_confidence_score(materialized),
+        'loss_breakdown': compute_loss_breakdown(materialized),
     }

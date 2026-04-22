@@ -19,7 +19,7 @@ top of the hub when get_focus_game() returns non-None. `focus.recommendation`
     </div>
     {% if focus.user_bet_selection %}
     <div class="mlb-focus__pick mlb-focus__pick--user">
-      <span class="mlb-focus__pick-label">Your bet:</span>
+      <span class="mlb-focus__pick-label">&#x1F3AF; Your bet:</span>
       <strong>{{ focus.user_bet_selection }}</strong>
       {% if focus.user_bet_odds %}
         <span class="mlb-focus__pick-odds">({% if focus.user_bet_odds > 0 %}+{% endif %}{{ focus.user_bet_odds }})</span>
@@ -27,7 +27,7 @@ top of the hub when get_focus_game() returns non-None. `focus.recommendation`
     </div>
     {% elif focus.pick_text %}
     <div class="mlb-focus__pick">
-      <span class="mlb-focus__pick-label">Model pick:</span>
+      <span class="mlb-focus__pick-label">{{ focus.pick_action_label|default:"Recommended Bet" }}:</span>
       <strong>{{ focus.pick_text }}</strong>
     </div>
     {% endif %}

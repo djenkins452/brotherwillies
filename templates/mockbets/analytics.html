@@ -163,6 +163,29 @@
     <p class="text-sm text-muted mt-1">Target signal: Recommended should outperform Not Recommended, and Elite should outperform Strong. If not, the rules are wrong — update them.</p>
 </div>
 
+{# ===== WHY LOSSES HAPPEN ===== #}
+{% if rec_performance.loss_breakdown.total_losses > 0 %}
+<div class="card mb-1">
+    <h3 class="card-title">Loss Breakdown</h3>
+    <p class="text-sm text-muted" style="margin-top:0;">When we lost, why did it happen? Variance = strong bet, just unlucky. Model Miss = overconfident. Market Misread = we went against a correct market. Weak Edge = we shouldn't have bet.</p>
+    <table class="data-table loss-breakdown-table">
+        <thead>
+            <tr><th>Reason</th><th>Losses</th><th>Share</th></tr>
+        </thead>
+        <tbody>
+            {% for row in rec_performance.loss_breakdown.rows %}
+            <tr>
+                <td><span class="bet-loss-badge bet-loss-reason-{{ row.reason }}" style="padding:4px 8px;border-radius:3px;">{{ row.label }}</span></td>
+                <td>{{ row.count }}</td>
+                <td>{{ row.pct|floatformat:1 }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-sm text-muted mt-1">Total settled losses: {{ rec_performance.loss_breakdown.total_losses }}</p>
+</div>
+{% endif %}
+
 {# ===== CUMULATIVE P/L CHART ===== #}
 <div class="card mb-1">
     <h3 class="card-title">Cumulative P/L</h3>

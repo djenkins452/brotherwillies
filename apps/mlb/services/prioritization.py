@@ -101,6 +101,7 @@ class GameSignals:
     pick_text: str | None = None            # e.g. "Yankees ML (-150)"
     pick_odds: int | None = None
     pick_selection: str | None = None
+    pick_action_label: str = 'Recommended Bet'  # "Recommended Bet" or "Model Lean"
 
     # Display context
     home_record: str | None = None
@@ -462,6 +463,7 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
     # Decision-layer pick — non-fatal on failure, so the hub still renders
     # even when the recommendation service can't produce one (no odds yet).
     pick_text = pick_odds = pick_selection = None
+    pick_action_label = 'Recommended Bet'
     try:
         from apps.core.services.recommendations import get_recommendation
         rec = get_recommendation('mlb', game, user)
@@ -469,6 +471,7 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
             pick_text = f"{rec.pick} {rec.bet_type.title()} ({rec.line})"
             pick_odds = rec.odds_american
             pick_selection = rec.pick
+            pick_action_label = rec.action_label  # "Recommended Bet" or "Model Lean"
     except Exception:
         pass
 
@@ -502,6 +505,7 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
         pick_text=pick_text,
         pick_odds=pick_odds,
         pick_selection=pick_selection,
+        pick_action_label=pick_action_label,
     )
     # Confidence must be computed *before* resolve_actions so action dicts
     # can carry it. compute_confidence uses only immutable signal fields.

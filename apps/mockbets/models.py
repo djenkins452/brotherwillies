@@ -144,6 +144,28 @@ class MockBet(models.Model):
         max_length=20, choices=STATUS_REASON_CHOICES, blank=True, default='',
     )
 
+    # Post-settlement loss analysis — populated by the settlement engine when
+    # a bet resolves to 'loss'. See apps/mockbets/services/loss_analysis.py.
+    LOSS_REASON_CHOICES = [
+        ('', ''),
+        ('variance', 'Bad Luck'),
+        ('model_error', 'Model Miss'),
+        ('market_movement', 'Market Misread'),
+        ('bad_edge', 'Weak Edge'),
+        ('unknown', 'Unknown'),
+    ]
+    loss_reason = models.CharField(
+        max_length=20, choices=LOSS_REASON_CHOICES, blank=True, default='',
+    )
+    confidence_miss = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+        help_text='Signed gap between snapshot confidence and market implied %',
+    )
+    edge_miss = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+        help_text='Snapshot edge (pp) that did not pay off',
+    )
+
     class Meta:
         ordering = ['-placed_at']
 
@@ -179,6 +201,16 @@ class MockBet(models.Model):
         elif self.result == 'loss':
             return Decimal('0.00')
         return None
+
+    @property
+    def loss_reason_label(self):
+        from apps.mockbets.services.loss_analysis import reason_label
+        return reason_label(self.loss_reason)
+
+    @property
+    def loss_reason_details(self):
+        from apps.mockbets.services.loss_analysis import reason_details
+        return reason_details(self.loss_reason)
 
     @property
     def net_result(self):

@@ -358,11 +358,28 @@ def _resolve_golf_matchup(bet, event):
 
 
 def _apply_settlement(bet, result, reason):
-    """Apply settlement result to a bet with audit log."""
+    """Apply settlement result to a bet with audit log.
+
+    On a loss, also runs the why-this-lost analysis and persists the
+    classification + miss metrics so the user's bet detail + analytics
+    page can explain each loss. Non-fatal on analyzer errors — the core
+    settlement write must always succeed.
+    """
     with transaction.atomic():
         bet.result = result
         bet.simulated_payout = bet.calculate_payout()
         bet.settled_at = timezone.now()
+
+        if result == 'loss':
+            try:
+                from .loss_analysis import analyze_loss
+                analysis = analyze_loss(bet)
+                bet.loss_reason = analysis.get('primary_reason') or ''
+                bet.confidence_miss = analysis.get('confidence_miss')
+                bet.edge_miss = analysis.get('edge_miss')
+            except Exception as e:
+                logger.error(f'loss_analysis failed for bet {bet.id}: {e}')
+
         bet.save()
 
         MockBetSettlementLog.objects.create(

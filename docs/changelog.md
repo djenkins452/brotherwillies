@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-04-22 - Actionable language + visual hierarchy + Why-This-Lost engine
+
+**Summary:** Three paired upgrades that make the system actively coach decisions instead of just describing them: actionable "Recommended Bet:" / "Model Lean:" CTA copy replacing passive "Model Pick" language, a sharper visual hierarchy between elite / strong / standard / not-recommended cards, and a full Why-This-Lost analysis engine that runs on every lost bet and aggregates into a Loss Breakdown widget on the analytics dashboard.
+
+### Phase 1 — Actionable language
+- `action_label(status)` helper + `Recommendation.action_label` property + `BettingRecommendation.action_label` DB-side property. Returns `'Recommended Bet'` when `status='recommended'`, `'Model Lean'` otherwise.
+- Templates updated:
+  - `templates/core/includes/model_pick_banner.html` — detail-page banner headline.
+  - `templates/core/value_board.html` — lobby tile inline pick line.
+  - `templates/mlb/_focus_banner.html` — MLB hub focus banner pick row (reads `focus.pick_action_label`).
+  - `templates/mlb/_tile_actions.html` — Best Bet chip now reads the recommendation's action label; the bet_placed chip is labeled "Your Bet".
+- `apps/mlb/services/prioritization.py::GameSignals` gains `pick_action_label` populated from the recommendation.
+
+### Phase 2 — Visual hierarchy
+- `.game-card-tier-elite` — 2px gold border + soft glow (`0 0 12px rgba(255,215,0,0.4)`).
+- `.game-card-tier-strong` — 2px accent-cyan border.
+- `.game-card-tier-standard` — 1px faint white border.
+- `.game-card-not_recommended` — opacity 0.7 + dashed border (still fully readable, restored on hover).
+- Status chip colors — `.gc-pick-status-recommended` solid `#16a34a` + `.gc-pick-status-not_recommended` solid `#6b7280`. Strong contrast for fast scan.
+- New `.gc-pick-action` / `.model-pick-action` accent on the "Recommended Bet:" prefix.
+
+### Phase 3-7 — Why This Lost engine
+**Service** — `apps/mockbets/services/loss_analysis.py`:
+- `analyze_loss(mock_bet)` classifies into one of: `variance` (Bad Luck), `model_error` (Model Miss), `market_movement` (Market Misread), `bad_edge` (Weak Edge), `unknown` (no snapshot).
+- Priority-ordered rule resolution (rules in the spec overlap):
+  1. `bad_edge` — edge < 4pp. The bet shouldn't have cleared decision rules.
+  2. `variance` — edge ≥ 5pp AND confidence ≥ 60. Strong call, just unlucky.
+  3. `market_movement` — market implied % > model confidence %. We bet against a correct market.
+  4. `model_error` — confidence ≥ 65 but not a variance case. Overconfident without edge.
+  5. fallback `model_error` for low-confidence losses that cleared the bad_edge check.
+- Returns `{primary_reason, details, confidence_miss, edge_miss}`. `confidence_miss` is signed: positive means we were more confident than market.
+- Never raises; missing snapshot → `unknown`.
+
+**Persistence** — `MockBet` gains three fields (migration `0005_mockbet_confidence_miss_mockbet_edge_miss_and_more`):
+- `loss_reason` — one of the reason keys.
+- `confidence_miss` — Decimal, signed pp gap between our confidence and market implied.
+- `edge_miss` — Decimal, pp edge we claimed.
+
+**Settlement hook** — `apps/mockbets/services/settlement.py::_apply_settlement` runs `analyze_loss` whenever the resolved result is `loss` and writes the three fields atomically with the rest of the settlement. Non-fatal — analyzer exceptions are logged; the settlement itself always succeeds.
+
+**UI**:
+- `templates/mockbets/my_bets.html` — each lost bet card now has a "Loss Reason: Bad Luck" badge plus confidence/miss/edge metrics inline.
+- `templates/mockbets/bet_detail.html` — "Why This Lost" section with the full explanation text and a data table (confidence, miss vs market, edge claimed). Color-coded left-stripe per reason.
+- `templates/mockbets/analytics.html` — new "Loss Breakdown" widget listing each reason with count + share, above the cumulative P/L chart.
+
+**Aggregate** — `compute_loss_breakdown(bets)` in `recommendation_performance.py` returns `{total_losses, rows: [{reason, label, count, pct}, ...]}` in a stable display order so the widget doesn't reshuffle between renders. Wired into `compute_all` so the existing dashboard view gets it for free.
+
+### Example loss analysis output
+```
+Loss Reason: Bad Luck (variance)
+  Model Confidence:    72%
+  Confidence vs Market: +22pp
+  Edge Claimed:        +7.0pp
+
+Loss Breakdown (across 18 settled losses):
+  Bad Luck        8  44.4%
+  Model Miss      5  27.8%
+  Market Misread  3  16.7%
+  Weak Edge       2  11.1%
+  Unknown         0   0.0%
+```
+
+### All games still visible
+Per the non-negotiable rules, nothing filters games out. `.game-card-not_recommended` reduces opacity and applies a dashed border, and the hover restores full opacity — the card is always clickable and readable.
+
+### Tests (14 new in `apps/mockbets/tests.py`)
+- `LossAnalysisRuleTests` (7): bad_edge wins over everything, variance beats model_error when edge strong, market_movement triggered when implied > confidence, model_error for high-confidence-no-edge, confidence_miss / edge_miss math, unknown when snapshot missing, non-loss safely returns unknown.
+- `SettlementLossHookTests` (2): settlement populates loss_reason + edge_miss on a loss; win leaves loss fields empty.
+- `LossBreakdownAggregateTests` (2): percentages + stable display order; empty losses returns zeros.
+- `ActionLabelTests` (3): recommended → "Recommended Bet", not_recommended → "Model Lean", unknown/empty → fallback.
+
+Full app suite: 228/229 (pre-existing `feedback.tests` import error unchanged). `python manage.py check` clean. Migration applied cleanly.
+
+---
+
 ## 2026-04-21 - MLB hub fixes: 3-up wrap grid, actual pick on banner + Bet Placed
 
 **Summary:** Fixed three defects on the MLB hub page spotted live:

@@ -165,6 +165,7 @@
                 </div>
                 <div>
                     <span class="gc-pick-icon">&#x1F3AF;</span>
+                    <span class="gc-pick-action">{{ g.recommendation.action_label }}:</span>
                     <strong>{{ g.recommendation.pick }} {{ g.recommendation.bet_type|title }}</strong>
                     <span class="gc-pick-line">({{ g.recommendation.line }})</span>
                     <span class="gc-pick-edge {% if g.recommendation.model_edge > 0 %}edge-positive{% elif g.recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">&middot; {{ g.recommendation.model_edge|floatformat:1 }}% edge</span>

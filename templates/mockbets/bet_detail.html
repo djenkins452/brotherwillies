@@ -92,6 +92,34 @@
     </table>
 </div>
 
+{% if bet.result == 'loss' and bet.loss_reason %}
+<p class="section-title mt-2">Why This Lost</p>
+<div class="card bet-loss-card bet-loss-reason-{{ bet.loss_reason }}">
+    <div class="bet-loss-badge-lg">{{ bet.loss_reason_label }}</div>
+    <p class="text-sm mt-1">{{ bet.loss_reason_details }}</p>
+    <table class="data-table mt-1">
+        {% if bet.recommendation_confidence is not None %}
+        <tr>
+            <td class="text-muted">Model Confidence</td>
+            <td>{{ bet.recommendation_confidence|floatformat:1 }}%</td>
+        </tr>
+        {% endif %}
+        {% if bet.confidence_miss is not None %}
+        <tr>
+            <td class="text-muted">Confidence vs Market</td>
+            <td>{% if bet.confidence_miss > 0 %}+{% endif %}{{ bet.confidence_miss|floatformat:1 }}pp</td>
+        </tr>
+        {% endif %}
+        {% if bet.edge_miss is not None %}
+        <tr>
+            <td class="text-muted">Edge Claimed</td>
+            <td>{{ bet.edge_miss|floatformat:1 }}pp</td>
+        </tr>
+        {% endif %}
+    </table>
+</div>
+{% endif %}
+
 {% if bet.notes %}
 <p class="section-title mt-2">Notes</p>
 <div class="card">

@@ -22,6 +22,7 @@ No logic here — tier + tier_label are decided in the service.
     </div>
     <div class="model-pick-headline" style="font-size:1.15rem;font-weight:700;">
         <span class="model-pick-icon">&#x1F3AF;</span>
+        <span class="model-pick-action">{{ recommendation.action_label }}:</span>
         {{ recommendation.pick }} {{ recommendation.bet_type|title }}
         (<span class="model-pick-line">{{ recommendation.line }}</span>)
     </div>

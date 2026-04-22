@@ -152,6 +152,11 @@ class BettingRecommendation(models.Model):
         return status_label(self.status)
 
     @property
+    def action_label(self):
+        from apps.core.services.recommendations import action_label
+        return action_label(self.status)
+
+    @property
     def status_reason_label(self):
         from apps.core.services.recommendations import status_reason_label
         return status_reason_label(self.status_reason)

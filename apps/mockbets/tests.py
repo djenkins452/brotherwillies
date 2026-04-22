@@ -494,6 +494,199 @@ class MLBSettlementTests(TestCase):
         self.assertEqual(counts['mlb'], 1)
 
 
+class LossAnalysisRuleTests(TestCase):
+    """Priority-ordered rules applied by analyze_loss. We build MockBet rows
+    directly (no settlement) so the rules are tested in isolation."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('loss_user', password='pw')
+
+    def _loss_bet(self, confidence, edge, odds=-110):
+        return MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=odds,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), result='loss',
+            recommendation_confidence=Decimal(str(confidence)),
+            expected_edge=Decimal(str(edge)),
+        )
+
+    def test_bad_edge_wins_over_everything(self):
+        """edge < 4pp → bad_edge even if confidence is high."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = self._loss_bet(confidence=90, edge=2.0)
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'bad_edge')
+
+    def test_variance_beats_model_error_when_edge_is_strong(self):
+        """edge >= 5 AND conf >= 60 → variance (the bet was good, just lost)."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = self._loss_bet(confidence=70, edge=7.0, odds=+150)
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'variance')
+
+    def test_market_movement_when_implied_exceeds_confidence(self):
+        """Market implied > our confidence → we bet against a market that was right."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        # Odds -300 implies 75% win; confidence 55 is lower. Edge 4.5 (clears bad_edge but below variance min of 5).
+        bet = self._loss_bet(confidence=55, edge=4.5, odds=-300)
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'market_movement')
+
+    def test_model_error_for_high_confidence_no_edge_cushion(self):
+        """Confidence >= 65 but edge < 5 (not variance territory) → model_error."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        # Odds +120 implies ~45%; confidence 72 > implied. Edge 4.5 avoids bad_edge AND variance.
+        bet = self._loss_bet(confidence=72, edge=4.5, odds=+120)
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'model_error')
+
+    def test_analysis_includes_confidence_miss_and_edge_miss(self):
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = self._loss_bet(confidence=70, edge=6.0, odds=+150)
+        r = analyze_loss(bet)
+        # +150 implied = 40%. confidence_miss = 70 - 40 = 30
+        self.assertEqual(r['confidence_miss'], Decimal('30'))
+        self.assertEqual(r['edge_miss'], Decimal('6'))
+
+    def test_unknown_when_snapshot_missing(self):
+        """Bets without snapshot fields (pre-migration) get 'unknown'."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), result='loss',
+            # no recommendation_confidence, no expected_edge
+        )
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'unknown')
+        self.assertIsNone(r['confidence_miss'])
+        self.assertIsNone(r['edge_miss'])
+
+    def test_non_loss_returns_unknown_without_raising(self):
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = self._loss_bet(confidence=70, edge=6.0)
+        bet.result = 'win'
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'unknown')
+
+
+class SettlementLossHookTests(TestCase):
+    """When the settlement engine flips a bet to loss, loss analysis runs
+    and persists the reason + miss metrics. This is the user-visible loop."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('hook_user', password='pw')
+        conf = Conference.objects.create(name='SEC', slug='sec-hook')
+        self.home = Team.objects.create(name='Alabama', slug='alabama-hook', conference=conf)
+        self.away = Team.objects.create(name='Auburn', slug='auburn-hook', conference=conf)
+
+    def test_settlement_populates_loss_reason(self):
+        game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            kickoff=timezone.now(), status='final',
+            home_score=10, away_score=28,  # Alabama loses
+        )
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=+120,
+            implied_probability=Decimal('0.454'),
+            stake_amount=Decimal('100'), cfb_game=game,
+            # Snapshot a strong edge + confidence so this is variance, not bad_edge
+            recommendation_confidence=Decimal('65'),
+            expected_edge=Decimal('6.0'),
+        )
+        settle_pending_bets(sport='cfb')
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'loss')
+        self.assertEqual(bet.loss_reason, 'variance')
+        self.assertIsNotNone(bet.edge_miss)
+
+    def test_settlement_on_win_leaves_loss_fields_empty(self):
+        game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            kickoff=timezone.now(), status='final',
+            home_score=28, away_score=10,  # Alabama wins
+        )
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=+120,
+            implied_probability=Decimal('0.454'),
+            stake_amount=Decimal('100'), cfb_game=game,
+            recommendation_confidence=Decimal('65'),
+            expected_edge=Decimal('6.0'),
+        )
+        settle_pending_bets(sport='cfb')
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')
+        self.assertEqual(bet.loss_reason, '')
+        self.assertIsNone(bet.edge_miss)
+
+
+class LossBreakdownAggregateTests(TestCase):
+    """compute_loss_breakdown groups losses across the user's bet history."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('agg_user', password='pw')
+
+    def _bet(self, result, reason=''):
+        return MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), result=result,
+            loss_reason=reason,
+        )
+
+    def test_percentages_sum_to_100_across_losses(self):
+        from apps.mockbets.services.recommendation_performance import compute_loss_breakdown
+        self._bet('loss', 'variance')
+        self._bet('loss', 'variance')
+        self._bet('loss', 'model_error')
+        self._bet('loss', 'bad_edge')
+        self._bet('win')  # wins ignored
+
+        result = compute_loss_breakdown(MockBet.objects.filter(user=self.user))
+        self.assertEqual(result['total_losses'], 4)
+        by_reason = {r['reason']: r for r in result['rows']}
+        self.assertEqual(by_reason['variance']['count'], 2)
+        self.assertEqual(by_reason['variance']['pct'], 50.0)
+        self.assertEqual(by_reason['model_error']['count'], 1)
+        self.assertEqual(by_reason['bad_edge']['count'], 1)
+        # Stable display order
+        self.assertEqual(
+            [r['reason'] for r in result['rows']],
+            ['variance', 'model_error', 'market_movement', 'bad_edge', 'unknown'],
+        )
+
+    def test_empty_losses_returns_zero_counts(self):
+        from apps.mockbets.services.recommendation_performance import compute_loss_breakdown
+        self._bet('win')
+        result = compute_loss_breakdown(MockBet.objects.filter(user=self.user))
+        self.assertEqual(result['total_losses'], 0)
+        for row in result['rows']:
+            self.assertEqual(row['count'], 0)
+            self.assertEqual(row['pct'], 0.0)
+
+
+class ActionLabelTests(TestCase):
+    """Phase 1 actionable language — 'Recommended Bet' vs 'Model Lean'."""
+
+    def test_recommended_bet_label(self):
+        from apps.core.services.recommendations import action_label, STATUS_RECOMMENDED
+        self.assertEqual(action_label(STATUS_RECOMMENDED), 'Recommended Bet')
+
+    def test_model_lean_label(self):
+        from apps.core.services.recommendations import action_label, STATUS_NOT_RECOMMENDED
+        self.assertEqual(action_label(STATUS_NOT_RECOMMENDED), 'Model Lean')
+
+    def test_unknown_status_falls_back_to_recommended(self):
+        """Defensive: a blank/unknown status shouldn't produce empty UI copy."""
+        from apps.core.services.recommendations import action_label
+        self.assertEqual(action_label(''), 'Recommended Bet')
+
+
 class StalePendingRegressionTests(TestCase):
     """Direct regression coverage for the shipped defect: game finalized but
     the corresponding MockBet stayed 'pending' because nothing ever ran

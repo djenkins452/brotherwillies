@@ -107,6 +107,18 @@
         </div>
         {% endif %}
     </div>
+    {% if bet.result == 'loss' and bet.loss_reason %}
+    <div class="bet-loss-reason bet-loss-reason-{{ bet.loss_reason }} mt-1">
+        <span class="bet-loss-badge">Loss Reason: {{ bet.loss_reason_label }}</span>
+        {% if bet.recommendation_confidence is not None or bet.confidence_miss is not None or bet.edge_miss is not None %}
+        <span class="bet-loss-metrics text-sm text-muted">
+            {% if bet.recommendation_confidence is not None %}Confidence: {{ bet.recommendation_confidence|floatformat:0 }}%{% endif %}
+            {% if bet.confidence_miss is not None %} &middot; Miss: {% if bet.confidence_miss > 0 %}+{% endif %}{{ bet.confidence_miss|floatformat:1 }}pp{% endif %}
+            {% if bet.edge_miss is not None %} &middot; Edge: {{ bet.edge_miss|floatformat:1 }}pp{% endif %}
+        </span>
+        {% endif %}
+    </div>
+    {% endif %}
     <div class="text-sm text-muted mt-1">
         {{ bet.placed_at|date:"M d, Y g:i A" }}
         {% if bet.review_flag %}

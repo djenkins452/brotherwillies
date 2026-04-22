@@ -6,7 +6,7 @@
     {% if a.type == 'bet_placed' %}
       <span class="mlb-action mlb-action--betplaced mlb-action--{{ a.strength }}"
             title="{% if s.user_bet_selection %}You bet {{ s.user_bet_selection }}{% if s.user_bet_odds %} at {% if s.user_bet_odds > 0 %}+{% endif %}{{ s.user_bet_odds }}{% endif %}{% else %}You have a pending mock bet on this game{% endif %}">
-        🎯 <span class="mlb-action__label">Bet Placed</span>
+        🎯 <span class="mlb-action__label">Your Bet</span>
         {% if s.user_bet_selection %}
           <span class="mlb-action__pick">&middot; {{ s.user_bet_selection }}{% if s.user_bet_odds %} ({% if s.user_bet_odds > 0 %}+{% endif %}{{ s.user_bet_odds }}){% endif %}</span>
         {% endif %}
@@ -16,7 +16,7 @@
             title="{{ a.reason|reason_label }} · Confidence {{ s.confidence_pct }}%"
             aria-label="{{ a.type|action_label }} — {{ a.reason|reason_label }}">
         {% if a.type == 'best_bet' %}💰{% elif a.type == 'watch_now' %}🔥{% endif %}
-        <span class="mlb-action__label">{{ a.type|action_label }}</span>
+        <span class="mlb-action__label">{% if a.type == 'best_bet' and s.pick_action_label %}{{ s.pick_action_label }}{% else %}{{ a.type|action_label }}{% endif %}</span>
         {% if a.type == 'best_bet' and s.pick_text %}
           <span class="mlb-action__pick">&middot; {{ s.pick_text }}</span>
         {% else %}
