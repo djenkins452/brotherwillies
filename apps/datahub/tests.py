@@ -197,3 +197,221 @@ class GolfOddsProviderPersistGateTests(TestCase):
         self.assertEqual(result['skipped'], 1)
         # Only the pre-seeded snapshot remains
         self.assertEqual(GolfOddsSnapshot.objects.count(), 1)
+
+
+class ScoreOnlyProviderTests(TestCase):
+    """Covers the new lightweight update path on MLB's schedule provider.
+
+    We mock the API call (fetch) so no network hits in tests. The test asserts
+    the provider writes only status/home_score/away_score — never odds, never
+    pitchers, never creating new rows.
+    """
+
+    def setUp(self):
+        import uuid as _uuid
+        from apps.mlb.models import Conference, Team, Game, StartingPitcher
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.home = Team.objects.create(
+            name='Yankees', slug='yankees', conference=conf,
+            source='mlb_stats_api', external_id='147',
+        )
+        self.away = Team.objects.create(
+            name='Royals', slug='royals', conference=conf,
+            source='mlb_stats_api', external_id='118',
+        )
+        # Pre-existing starting pitcher — the score-only path must NOT clear
+        # or overwrite the pitcher FK.
+        self.pitcher = StartingPitcher.objects.create(
+            team=self.home, name='Gerrit Cole',
+            source='mlb_stats_api', external_id='543037',
+        )
+        self.ext_id = str(_uuid.uuid4())
+        self.game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status='scheduled',
+            home_pitcher=self.pitcher,
+            source='mlb_stats_api', external_id=self.ext_id,
+        )
+
+    def _raw_game(self, status='Final', home_score=5, away_score=3, offset_hours=1):
+        """Shape matches what the MLB Stats API returns enough to pass normalize()."""
+        game_time = timezone.now() + timedelta(hours=offset_hours)
+        return {
+            'gamePk': self.ext_id,
+            'gameDate': game_time.isoformat(),
+            'status': {'detailedState': status},
+            'teams': {
+                'home': {'team': {'id': '147', 'name': 'Yankees'}, 'score': home_score},
+                'away': {'team': {'id': '118', 'name': 'Royals'}, 'score': away_score},
+            },
+            'venue': {},
+        }
+
+    def _patched_provider(self, raw_games):
+        """Instantiate MLB provider with fetch() mocked to return our shape."""
+        from apps.datahub.providers.mlb.schedule_provider import MLBScheduleProvider
+        prov = MLBScheduleProvider()
+        prov.fetch = lambda: raw_games
+        return prov
+
+    def test_updates_status_and_scores_only_on_real_change(self):
+        prov = self._patched_provider([self._raw_game(status='Final', home_score=5, away_score=3)])
+        stats = prov.update_scores_only()
+        self.assertEqual(stats['updated'], 1)
+        self.assertEqual(stats['skipped'], 0)
+        self.game.refresh_from_db()
+        self.assertEqual(self.game.status, 'final')
+        self.assertEqual(self.game.home_score, 5)
+        self.assertEqual(self.game.away_score, 3)
+        # Pitcher FK preserved — the score-only path must not touch unrelated fields.
+        self.assertEqual(self.game.home_pitcher_id, self.pitcher.id)
+
+    def test_is_idempotent_and_skips_unchanged(self):
+        """Second run after the score has settled must dirty-check and skip."""
+        prov = self._patched_provider([self._raw_game(home_score=5, away_score=3)])
+        prov.update_scores_only()
+        stats2 = prov.update_scores_only()
+        self.assertEqual(stats2['updated'], 0)
+        self.assertEqual(stats2['skipped'], 1)
+
+    def test_skips_games_outside_live_window(self):
+        # Game way in the future — window is now-1d to now+12h.
+        prov = self._patched_provider([self._raw_game(offset_hours=48)])
+        stats = prov.update_scores_only()
+        self.assertEqual(stats['updated'], 0)
+        self.assertEqual(stats['out_of_window'], 1)
+
+    def test_skips_unknown_games_without_creating_them(self):
+        """If the API returns a game we don't already have, we skip it — the
+        heavy 6-hour cron owns row creation."""
+        import uuid as _uuid
+        from apps.mlb.models import Game
+        raw = self._raw_game()
+        raw['gamePk'] = str(_uuid.uuid4())  # different external_id
+        prov = self._patched_provider([raw])
+        initial = Game.objects.count()
+        stats = prov.update_scores_only()
+        self.assertEqual(stats['not_found'], 1)
+        self.assertEqual(stats['updated'], 0)
+        self.assertEqual(Game.objects.count(), initial)  # no row created
+
+
+class RefreshScoresAndSettleCommandTests(TestCase):
+    """End-to-end: the 15-minute command flips a pending bet to 'win' after
+    the underlying MLB game reports final — with no odds/model recompute."""
+
+    def setUp(self):
+        import uuid as _uuid
+        from django.contrib.auth.models import User
+        from apps.mlb.models import Conference, Team, Game
+        from apps.mockbets.models import MockBet
+        from decimal import Decimal
+
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.home = Team.objects.create(
+            name='Yankees', slug='yankees', conference=conf,
+            source='mlb_stats_api', external_id='147',
+        )
+        self.away = Team.objects.create(
+            name='Royals', slug='royals', conference=conf,
+            source='mlb_stats_api', external_id='118',
+        )
+        self.ext_id = str(_uuid.uuid4())
+        self.game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status='scheduled',
+            source='mlb_stats_api', external_id=self.ext_id,
+        )
+        user = User.objects.create_user('bettor', password='pw')
+        self.bet = MockBet.objects.create(
+            user=user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-150,
+            implied_probability=Decimal('0.60'),
+            stake_amount=Decimal('100'), mlb_game=self.game,
+        )
+
+    def _mocked_api_payload(self, home=5, away=3):
+        return [{
+            'gamePk': self.ext_id,
+            'gameDate': (timezone.now() + timedelta(hours=1)).isoformat(),
+            'status': {'detailedState': 'Final'},
+            'teams': {
+                'home': {'team': {'id': '147', 'name': 'Yankees'}, 'score': home},
+                'away': {'team': {'id': '118', 'name': 'Royals'}, 'score': away},
+            },
+            'venue': {},
+        }]
+
+    def test_end_to_end_score_update_and_settle(self):
+        """Full dual-speed flow: game is scheduled → lightweight cron fires →
+        API reports Final → command updates status + settles the pending bet."""
+        from django.core.management import call_command
+        from io import StringIO
+        from apps.mockbets.models import MockBet
+        from decimal import Decimal
+
+        # Patch the MLB provider's fetch to avoid network.
+        with patch(
+            'apps.datahub.providers.mlb.schedule_provider.MLBScheduleProvider.fetch',
+            return_value=self._mocked_api_payload(home=5, away=3),
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            LIVE_COLLEGE_BASEBALL_ENABLED=False,
+        ):
+            call_command('refresh_scores_and_settle', sport='mlb', stdout=StringIO())
+
+        self.game.refresh_from_db()
+        self.bet.refresh_from_db()
+        self.assertEqual(self.game.status, 'final')
+        self.assertEqual(self.game.home_score, 5)
+        self.assertEqual(self.bet.result, 'win')
+        self.assertEqual(self.bet.simulated_payout, Decimal('66.67').quantize(Decimal('0.01')))
+
+    def test_second_run_does_not_double_settle(self):
+        """Idempotency guard: running the command twice must not re-settle or
+        flip the already-settled bet."""
+        from django.core.management import call_command
+        from io import StringIO
+        from apps.mockbets.models import MockBet, MockBetSettlementLog
+
+        with patch(
+            'apps.datahub.providers.mlb.schedule_provider.MLBScheduleProvider.fetch',
+            return_value=self._mocked_api_payload(home=5, away=3),
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            LIVE_COLLEGE_BASEBALL_ENABLED=False,
+        ):
+            call_command('refresh_scores_and_settle', sport='mlb', stdout=StringIO())
+            call_command('refresh_scores_and_settle', sport='mlb', stdout=StringIO())
+
+        # Exactly one settlement log row — the second run must no-op on bets.
+        self.assertEqual(MockBetSettlementLog.objects.filter(mock_bet=self.bet).count(), 1)
+
+    def test_skips_bets_for_games_still_in_progress(self):
+        """If the game is 'live' (not final), the command must leave the bet pending.
+        The score can update, but no settlement fires."""
+        from django.core.management import call_command
+        from io import StringIO
+
+        in_progress = self._mocked_api_payload(home=2, away=1)
+        in_progress[0]['status']['detailedState'] = 'In Progress'
+
+        with patch(
+            'apps.datahub.providers.mlb.schedule_provider.MLBScheduleProvider.fetch',
+            return_value=in_progress,
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            LIVE_COLLEGE_BASEBALL_ENABLED=False,
+        ):
+            call_command('refresh_scores_and_settle', sport='mlb', stdout=StringIO())
+
+        self.game.refresh_from_db()
+        self.bet.refresh_from_db()
+        self.assertEqual(self.game.status, 'live')
+        self.assertEqual(self.game.home_score, 2)
+        self.assertEqual(self.bet.result, 'pending')

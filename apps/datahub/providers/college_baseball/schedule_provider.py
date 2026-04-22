@@ -111,11 +111,33 @@ def _upsert_team(team_payload, conference, wins=None, losses=None):
 class CollegeBaseballScheduleProvider(AbstractProvider):
     sport = 'college_baseball'
     data_type = 'schedule'
+    supports_score_only = True
 
     def __init__(self):
         self.client = APIClient(
             base_url=settings.ESPN_BASEBALL_BASE_URL,
             rate_limit_delay=0.4,
+        )
+
+    # --- Score-only hooks (see base.AbstractProvider.update_scores_only) ---
+
+    def _find_existing_game(self, item):
+        ext = item.get('external_id')
+        if not ext:
+            return None
+        return Game.objects.filter(source=SOURCE, external_id=ext).first()
+
+    def _normalized_game_time(self, item):
+        dt = parse_datetime(item.get('start_date', '') or '')
+        if dt and timezone.is_naive(dt):
+            dt = timezone.make_aware(dt)
+        return dt
+
+    def _extract_score_fields(self, item):
+        return (
+            item.get('status'),
+            item.get('home_score'),
+            item.get('away_score'),
         )
 
     def fetch(self):

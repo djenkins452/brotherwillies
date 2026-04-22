@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-04-21 - Dual-speed pipeline: lightweight scores + settle every 15 minutes
+
+**Summary:** Introduced a narrow 15-minute cron that updates scores/status and settles pending mock bets without pulling odds or recomputing models. The heavy `refresh_data` pipeline (6-hour) is untouched and still owns schedule rebuilds, odds, injuries, pitcher stats, and snapshot capture.
+
+### Why
+After the previous stale-pending fix, settlement ran once per 6-hour cycle. That was enough to clear stragglers but still meant up to 6 hours between a game finalizing and a user's bet showing Win/Loss. The new lightweight path closes that gap to ~15 minutes without multiplying API cost or model recompute.
+
+### Files
+- `apps/datahub/providers/base.py` — `AbstractProvider` gains an opt-in score-only path (`update_scores_only` + three small hooks: `_find_existing_game`, `_normalized_game_time`, `_extract_score_fields`). Default for non-opted-in providers is a no-op returning `status='not_supported'`.
+- `apps/datahub/providers/mlb/schedule_provider.py` — opts in; reuses the existing `fetch()` (MLB Stats API) and `normalize()` shape.
+- `apps/datahub/providers/college_baseball/schedule_provider.py` — opts in; reuses the ESPN scoreboard payload.
+- `apps/datahub/services/scores.py` — new dispatcher `update_scores_only(sport='all')` that respects per-sport `LIVE_*_ENABLED` toggles and swallows provider-level errors so one sport's outage can't block others.
+- `apps/datahub/management/commands/refresh_scores_and_settle.py` — new command chaining: score-only update → `resolve_outcomes` → `settle_mockbets`.
+
+### What's narrow about the lightweight path
+- **No writes outside status/home_score/away_score** — pitcher FKs, odds, neutral_site, first_pitch timestamps, etc. are never touched.
+- **Dirty check** — unchanged rows skip the write entirely (zero DB traffic when nothing moved).
+- **Live window** — only games in `[now-1d, now+12h]` are eligible. Everything else is counted as `out_of_window` and skipped.
+- **No row creation** — if the API returns a game we haven't ingested yet, it's counted as `not_found` and skipped. The 6-hour heavy path owns creation.
+- **Sport-scoped + error-isolated** — provider failures are logged and reported per sport; other sports still run.
+
+### Tests (8 new in `apps/datahub/tests.py`)
+- `ScoreOnlyProviderTests` — updates only status+scores on real change; idempotent skip on re-run; skips games outside the live window; never creates unknown games.
+- `RefreshScoresAndSettleCommandTests` — end-to-end: scheduled game → mock bet placed → API reports Final → command flips game + settles bet to `win` with correct payout; running twice produces exactly one settlement log; in-progress games leave the bet pending.
+
+Full app suite: 194/196 (pre-existing `feedback.tests` import + `GolfOddsProviderPersistGateTests` flake unchanged).
+
+### Railway cron setup (ops note)
+Add a second cron job alongside the existing heavy one:
+- Every **15 minutes**: `python manage.py refresh_scores_and_settle`
+- Every **6 hours** (existing): `python manage.py refresh_data`
+
+The 15-minute command is safe to co-run with the 6-hour command — both settle idempotently and neither touches odds/models in the fast path.
+
+### Unsupported sports
+CBB and CFB schedule providers do not implement the score-only hooks in this PR. Rationale: their game cadence (weekday evenings for CBB, weekend-heavy for CFB) is already well-served by the 6-hour heavy cron, and their schedule providers key by `(home_slug, away_slug, date)` which would need a different lookup shape. Adding them later is ~10 lines per provider — the base class is structured for it.
+
+---
+
 ## 2026-04-21 - Elite Plays section + why-this-is-elite explanation
 
 **Summary:** The lobby now surfaces the day's strongest model picks in a dedicated "🔥 High Confidence Plays" section above the main board, with a short deterministic explanation (Win Probability / Market Implied / Edge) on each elite card. The full slate still renders below — this is a visual hierarchy, not a filter.

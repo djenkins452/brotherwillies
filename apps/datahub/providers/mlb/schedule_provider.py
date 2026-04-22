@@ -101,11 +101,33 @@ def _upsert_pitcher(pitcher_data, team):
 class MLBScheduleProvider(AbstractProvider):
     sport = 'mlb'
     data_type = 'schedule'
+    supports_score_only = True
 
     def __init__(self):
         self.client = APIClient(
             base_url=settings.MLB_STATSAPI_BASE_URL,
             rate_limit_delay=0.3,
+        )
+
+    # --- Score-only hooks (see base.AbstractProvider.update_scores_only) ---
+
+    def _find_existing_game(self, item):
+        try:
+            return Game.objects.get(source=SOURCE, external_id=item['external_id'])
+        except Game.DoesNotExist:
+            return None
+
+    def _normalized_game_time(self, item):
+        dt = parse_datetime(item.get('game_date', '') or '')
+        if dt and timezone.is_naive(dt):
+            dt = timezone.make_aware(dt)
+        return dt
+
+    def _extract_score_fields(self, item):
+        return (
+            _status_from_detailed(item.get('detailed_state', '')),
+            item.get('home_score'),
+            item.get('away_score'),
         )
 
     def fetch(self):
