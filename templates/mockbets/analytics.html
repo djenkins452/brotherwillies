@@ -67,10 +67,23 @@
                 <label class="text-sm" style="color:var(--accent);">To</label>
                 <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
             </div>
+            <div style="flex-basis:100%;display:flex;align-items:center;gap:6px;">
+                <label class="text-sm" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" name="current_rules_only" value="1" {% if current_rules_only %}checked{% endif %}>
+                    <span>Current-rules only</span>
+                </label>
+                <span class="text-sm text-muted">Excludes bets placed before the decision rules + tier system landed.</span>
+            </div>
             <button type="submit" class="btn btn-sm" style="font-size:0.8rem;padding:8px 16px;">Apply</button>
         </div>
     </form>
 </div>
+
+{% if current_rules_only %}
+<div class="card mb-1" style="background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.3);">
+    <div class="text-sm" style="color:#22c55e;">Showing only bets placed under the current decision rules ({{ kpis.total_bets }} bet{{ kpis.total_bets|pluralize }}).</div>
+</div>
+{% endif %}
 
 {# ===== KPI CARDS ===== #}
 <div class="stat-grid mb-2">

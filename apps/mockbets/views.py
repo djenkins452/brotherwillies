@@ -313,6 +313,15 @@ def analytics_dashboard(request):
     if date_to:
         bets = bets.filter(placed_at__date__lte=date_to)
 
+    # "Current rules only" — excludes bets placed before the decision-layer
+    # snapshot migration landed. `recommendation_status` was added by
+    # mockbets.0004; pre-migration bets have it blank. Using that as the
+    # marker lets us scope analytics to the post-rules era without a hard
+    # date cutoff that drifts with re-deploys.
+    current_rules_only = request.GET.get('current_rules_only') == '1'
+    if current_rules_only:
+        bets = bets.exclude(recommendation_status='')
+
     all_bets = list(bets)
     kpis = compute_kpis(all_bets)
     chart_data = compute_chart_data(all_bets)
@@ -339,6 +348,7 @@ def analytics_dashboard(request):
         'current_model_source': model_source or '',
         'current_date_from': date_from or '',
         'current_date_to': date_to or '',
+        'current_rules_only': current_rules_only,
         'help_key': 'mock_analytics',
         'nav_active': 'mockbets',
     })
