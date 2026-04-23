@@ -54,6 +54,65 @@ def american_to_prob(ml):
     return abs(ml) / (abs(ml) + 100.0)
 
 
+def _extract_moneyline(odds_entry, side):
+    """Pull the American moneyline for 'home' or 'away' out of an ESPN odds entry.
+
+    ESPN has used at least three shapes historically:
+      A. `{"homeTeamOdds": {"moneyLine": -131}, "awayTeamOdds": {"moneyLine": 113}}`
+      B. `{"moneyline": {"home": -131, "away": 113}}`
+      C. flat: `{"homeMoneyLine": -131, "awayMoneyLine": 113}`
+    Be tolerant of all three so a shape-drift on their side doesn't silently
+    break fallback coverage.
+    """
+    # Shape A
+    team_odds = odds_entry.get(f'{side}TeamOdds') or {}
+    ml = team_odds.get('moneyLine')
+    if ml is not None:
+        return ml
+    # Shape B
+    ml_dict = odds_entry.get('moneyline') or odds_entry.get('moneyLine') or {}
+    if isinstance(ml_dict, dict):
+        ml = ml_dict.get(side) or ml_dict.get(f'{side}Odds') or ml_dict.get(f'{side}Value')
+        if ml is not None:
+            return ml
+    # Shape C
+    flat = (
+        odds_entry.get(f'{side}MoneyLine')
+        or odds_entry.get(f'{side}Moneyline')
+        or odds_entry.get(f'{side}_moneyline')
+    )
+    return flat
+
+
+def _pick_best_odds_entry(odds_list):
+    """Return the first odds entry with both home + away moneylines set.
+
+    ESPN sometimes returns multiple entries per event (e.g. a spread-only
+    book first, then a moneyline book). Picking the first DraftKings entry
+    misses the moneyline when that entry is spread-only. Scan all entries,
+    prefer the preferred provider, and return the tuple (entry, home_ml, away_ml).
+    """
+    # Pass 1 — preferred provider with both moneylines present.
+    for o in odds_list or []:
+        if (o.get('provider') or {}).get('name') != PREFERRED_PROVIDER:
+            continue
+        h = _extract_moneyline(o, 'home')
+        a = _extract_moneyline(o, 'away')
+        if h is not None and a is not None:
+            return o, h, a
+    # Pass 2 — any provider with both moneylines.
+    for o in odds_list or []:
+        h = _extract_moneyline(o, 'home')
+        a = _extract_moneyline(o, 'away')
+        if h is not None and a is not None:
+            return o, h, a
+    # Pass 3 — fall back to the first entry so we still emit spread/total.
+    if odds_list:
+        first = odds_list[0]
+        return first, _extract_moneyline(first, 'home'), _extract_moneyline(first, 'away')
+    return None, None, None
+
+
 class MLBEspnOddsProvider(AbstractProvider):
     """Fallback MLB odds source via ESPN's public scoreboard JSON."""
     sport = 'mlb'
@@ -110,18 +169,31 @@ class MLBEspnOddsProvider(AbstractProvider):
             odds_list = comp.get('odds') or []
             if not odds_list:
                 continue
-            # Prefer DraftKings when available; otherwise first entry.
-            preferred = next(
-                (o for o in odds_list
-                 if (o.get('provider') or {}).get('name') == PREFERRED_PROVIDER),
-                odds_list[0],
-            )
+            # Scan ALL odds entries for one with both home+away moneylines, not
+            # just the first DraftKings entry — ESPN sometimes emits a spread-
+            # only entry before the moneyline entry under the same provider.
+            preferred, home_ml, away_ml = _pick_best_odds_entry(odds_list)
+            if preferred is None:
+                continue
 
             spread = preferred.get('spread')
             total = preferred.get('overUnder')
-            home_ml = (preferred.get('homeTeamOdds') or {}).get('moneyLine')
-            away_ml = (preferred.get('awayTeamOdds') or {}).get('moneyLine')
             provider_name = (preferred.get('provider') or {}).get('name') or 'ESPN'
+
+            # If we still have no moneyline after scanning, log the raw shape of
+            # the chosen entry once per fetch so operators can see exactly what
+            # ESPN sent — otherwise this failure is invisible in the log.
+            if home_ml is None:
+                import json as _json
+                sample = {k: v for k, v in preferred.items() if k != 'links'}
+                try:
+                    sample_str = _json.dumps(sample, default=str)[:800]
+                except Exception:
+                    sample_str = str(sample)[:800]
+                logger.warning(
+                    f"mlb_odds_espn_no_moneyline home={home_team} away={away_team} "
+                    f"entries={len(odds_list)} sample={sample_str}"
+                )
 
             normalized.append({
                 'home_team': home_team,
