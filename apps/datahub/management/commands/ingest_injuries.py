@@ -8,20 +8,24 @@ from apps.datahub.providers.registry import get_provider
 SPORT_TOGGLES = {
     'cbb': 'LIVE_CBB_ENABLED',
     'cfb': 'LIVE_CFB_ENABLED',
+    'mlb': 'LIVE_MLB_ENABLED',
 }
 
-SUPPORTED_SPORTS = ['cbb', 'cfb']
+# Must match which (sport, 'injuries') tuples are registered in
+# apps/datahub/providers/registry.py. Out of sync = runtime argparse error
+# that aborts the whole refresh_data cycle for the affected sport.
+SUPPORTED_SPORTS = ['cbb', 'cfb', 'mlb']
 
 
 class Command(BaseCommand):
-    help = 'Ingest injury data from external APIs (CFB and CBB only)'
+    help = 'Ingest injury data from external APIs (CFB, CBB, MLB)'
 
     def add_arguments(self, parser):
         parser.add_argument(
             '--sport',
             required=True,
             choices=SUPPORTED_SPORTS,
-            help='Sport to ingest (cbb, cfb)',
+            help='Sport to ingest (cbb, cfb, mlb)',
         )
         parser.add_argument(
             '--force',

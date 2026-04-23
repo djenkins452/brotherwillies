@@ -107,22 +107,36 @@ class Command(BaseCommand):
                 raise
 
         # --- ESPN fallback for MLB ---------------------------------------
-        # When the primary provider (The Odds API) gets zero rows we try the
-        # ESPN scoreboard feed, which embeds DraftKings odds and needs no
-        # API key. Any coverage > 0 is better than silently empty.
-        if sport == 'mlb' and (stats or {}).get('created', 0) == 0:
+        # Triggered on either of two conditions:
+        #   1. Primary returned 0 rows (original intent).
+        #   2. Primary created rows but TODAY's games specifically still have
+        #      zero odds — this happens when The Odds API covers a week-ahead
+        #      window but not today's already-started matchups. ESPN's
+        #      scoreboard is today-focused and often fills that gap.
+        today_count_after_primary = _current_day_snapshot_count(sport) if sport == 'mlb' else None
+        primary_created = (stats or {}).get('created', 0)
+        should_fall_back = sport == 'mlb' and (
+            primary_created == 0
+            or (today_count_after_primary is not None and today_count_after_primary == 0)
+        )
+        if should_fall_back:
             try:
                 from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
-                self.stdout.write("Primary odds source returned zero — trying ESPN fallback...")
+                reason = (
+                    'primary returned zero rows' if primary_created == 0
+                    else f'primary created {primary_created} rows but today has 0 snapshots'
+                )
+                self.stdout.write(f"ESPN fallback triggered: {reason}")
                 fallback_stats = MLBEspnOddsProvider().run()
                 self.stdout.write(self.style.SUCCESS(f"ESPN fallback: {fallback_stats}"))
-                # Merge the fallback stats into `stats` so the fail-fast
-                # check below uses the combined create count.
+                # Combine with primary so the fail-fast check sees the full picture.
+                # Additive on created/skipped; keep 'source' as espn_fallback for tracing.
+                fallback_created = fallback_stats.get('created', 0)
                 stats = {
-                    'status': fallback_stats.get('status', 'empty'),
-                    'created': fallback_stats.get('created', 0),
+                    'status': 'ok' if (primary_created + fallback_created) else 'empty',
+                    'created': primary_created + fallback_created,
                     'skipped': (stats or {}).get('skipped', 0) + fallback_stats.get('skipped', 0),
-                    'source': 'espn_fallback',
+                    'source': 'primary+espn_fallback',
                 }
             except Exception as e:
                 logger.error(f"mlb_odds_espn_fallback_failed err={e}")
