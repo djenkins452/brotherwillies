@@ -54,6 +54,14 @@ class MLBOddsProvider(AbstractProvider):
         self.client = APIClient(base_url=ODDS_API_BASE, rate_limit_delay=1.0)
 
     def fetch(self):
+        # Explicit commence_time window. Without this, The Odds API's default
+        # behavior can omit games that are close to first pitch (moneyline
+        # often drops to their live-endpoint once games are near-start), which
+        # silently leaves today's slate without odds. Asking explicitly for
+        # [now-2h, now+72h] forces near-term games back into the response.
+        now = timezone.now()
+        commence_from = (now - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        commence_to = (now + timedelta(hours=72)).strftime('%Y-%m-%dT%H:%M:%SZ')
         data = self.client.get(
             f'/v4/sports/{MLB_SPORT_KEY}/odds/',
             params={
@@ -61,19 +69,32 @@ class MLBOddsProvider(AbstractProvider):
                 'regions': 'us',
                 'markets': 'h2h,spreads,totals',
                 'oddsFormat': 'american',
+                'commenceTimeFrom': commence_from,
+                'commenceTimeTo': commence_to,
             },
         )
-        # Log a sample so deploy logs can diagnose unexpected shapes.
-        if data:
-            first = data[0] if isinstance(data, list) else data
+        # Log a sample so deploy logs can diagnose unexpected shapes, plus
+        # the commence_time distribution so we can see on sight whether
+        # today's games are even being returned.
+        if data and isinstance(data, list):
+            first = data[0] if data else {}
             bm_count = len((first or {}).get('bookmakers') or [])
+            # Count events per UTC date in the response — if today's date
+            # shows zero, it's upstream, not us.
+            date_buckets: dict[str, int] = {}
+            for e in data:
+                ct = (e.get('commence_time') or '')[:10]  # YYYY-MM-DD
+                if ct:
+                    date_buckets[ct] = date_buckets.get(ct, 0) + 1
             logger.info(
-                f"mlb_odds_fetch_sample events={len(data) if isinstance(data, list) else 1} "
+                f"mlb_odds_fetch_sample events={len(data)} "
                 f"first_home={first.get('home_team')!r} first_away={first.get('away_team')!r} "
-                f"first_commence={first.get('commence_time')!r} first_bookmaker_count={bm_count}"
+                f"first_commence={first.get('commence_time')!r} first_bookmaker_count={bm_count} "
+                f"date_distribution={date_buckets} "
+                f"window={commence_from}..{commence_to}"
             )
-        else:
-            logger.warning("mlb_odds_fetch_empty payload")
+        elif not data:
+            logger.warning(f"mlb_odds_fetch_empty payload window={commence_from}..{commence_to}")
         return data
 
     def normalize(self, raw):
