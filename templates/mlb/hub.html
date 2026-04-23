@@ -17,6 +17,55 @@
     {% include "mlb/_focus_banner.html" with focus=focus %}
   {% endif %}
 
+  {% if diag_rows %}
+  <details class="card mb-2" style="border-color:#facc15;" open>
+    <summary style="cursor:pointer;font-weight:700;color:#facc15;">
+      &#x1F50D; Staff diagnostic ({{ diag_rows|length }} games) &mdash; why sections are what they are
+    </summary>
+    <div style="overflow-x:auto;margin-top:12px;">
+      <table class="data-table" style="font-size:0.8rem;white-space:nowrap;">
+        <thead>
+          <tr>
+            <th>Matchup</th>
+            <th>Odds?</th>
+            <th>ML?</th>
+            <th>ML H/A</th>
+            <th>Mkt %</th>
+            <th>House %</th>
+            <th>Pick</th>
+            <th>Edge pp</th>
+            <th>Conf %</th>
+            <th>Tier</th>
+            <th>Status</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in diag_rows %}
+          <tr>
+            <td>{{ r.matchup }}</td>
+            <td>{% if r.has_odds %}&#10003;{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.has_moneyline %}&#10003;{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.ml_home %}{{ r.ml_home }} / {{ r.ml_away }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.market_prob %}{{ r.market_prob }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.house_prob %}{{ r.house_prob }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ r.rec_pick }}</td>
+            <td>{% if r.rec_edge is not None %}{{ r.rec_edge|floatformat:1 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.rec_confidence is not None %}{{ r.rec_confidence|floatformat:1 }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ r.rec_tier }}</td>
+            <td class="{% if r.rec_status == 'recommended' %}text-green{% elif r.rec_status == 'not_recommended' %}text-red{% endif %}">{{ r.rec_status }}</td>
+            <td class="text-muted">{{ r.rec_reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-sm text-muted" style="margin-top:8px;">
+      Access: <code>/mlb/?diag=1</code> (staff only). Remove the param to hide.
+    </p>
+  </details>
+  {% endif %}
+
   {% if not elite_games and not recommended_games and not not_recommended_games and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>

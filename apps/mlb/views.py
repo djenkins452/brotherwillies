@@ -68,6 +68,12 @@ def mlb_hub(request):
     # meets the bar — the banner is simply omitted rather than forced.
     focus = get_focus_game(all_tiles)
 
+    # Staff diagnostic — ?diag=1 dumps per-game rec state so operators can
+    # see why sections are empty without shelling into the DB.
+    diag_rows = None
+    if request.GET.get('diag') == '1' and request.user.is_staff:
+        diag_rows = _build_diag_rows(all_tiles)
+
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
         'today_tiles': today_tiles,
@@ -76,10 +82,46 @@ def mlb_hub(request):
         'not_recommended_games': decision_sections['not_recommended'],
         'future_games': future_upcoming,
         'focus': focus,
+        'diag_rows': diag_rows,
         'teams': Team.objects.select_related('conference').all(),
         'nav_active': 'mlb',
         'help_key': 'mlb_hub',
     })
+
+
+def _build_diag_rows(signals):
+    """Per-game recommendation diagnostics for the staff-only ?diag=1 panel.
+
+    Emits one row per today's-slate game with: whether odds exist, whether
+    moneyline prices exist, raw market/house probs, edge, tier, status, reason.
+    Helps pinpoint why the decision sections are empty on any given slate.
+    """
+    rows = []
+    for s in signals:
+        game = s.game
+        odds = getattr(s, 'latest_odds', None)
+        rec = s.recommendation
+        row = {
+            'matchup': f"{game.away_team.name} @ {game.home_team.name}",
+            'status_label': game.status,
+            'has_odds': odds is not None,
+            'has_moneyline': bool(
+                odds and odds.moneyline_home is not None
+                and odds.moneyline_away is not None
+            ),
+            'ml_home': odds.moneyline_home if odds else None,
+            'ml_away': odds.moneyline_away if odds else None,
+            'market_prob': round(odds.market_home_win_prob * 100, 1) if odds else None,
+            'house_prob': round(s.house_prob * 100, 1) if s.house_prob is not None else None,
+            'rec_pick': rec.pick if rec else '—',
+            'rec_edge': float(rec.model_edge) if rec else None,
+            'rec_confidence': float(rec.confidence_score) if rec else None,
+            'rec_tier': rec.tier if rec else '—',
+            'rec_status': rec.status if rec else 'no_rec',
+            'rec_reason': rec.status_reason if rec else 'no_odds_or_no_moneyline',
+        }
+        rows.append(row)
+    return rows
 
 
 def game_detail(request, game_id):
