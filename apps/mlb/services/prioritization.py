@@ -106,6 +106,11 @@ class GameSignals:
     # or None when no odds are available. Held so the hub view can partition
     # games by tier/status without re-computing.
     recommendation: object | None = None
+    # Confidence % shown on the focus banner. Prefers the recommendation's
+    # confidence_score (the model's win probability for the pick) over the
+    # prioritization-layer signal score, which measured "how much does this
+    # game matter" rather than "how sure are we in the bet."
+    display_confidence_pct: int = 0
 
     # Display context
     home_record: str | None = None
@@ -518,6 +523,15 @@ def build_signals(game, *, user=None, streaks=None, user_bet_by_game=None) -> Ga
     signals.confidence = compute_confidence(signals)
     signals.confidence_pct = int(round(signals.confidence * 100))
     signals.actions = resolve_actions(signals)
+
+    # Display-time confidence: when a decision-layer recommendation exists,
+    # use its model win probability (what the user actually cares about for
+    # a bet). Falls back to the signals-layer score so pages that rely on
+    # a numeric still get one when no odds are available.
+    if recommendation is not None and getattr(recommendation, 'confidence_score', None):
+        signals.display_confidence_pct = int(round(float(recommendation.confidence_score)))
+    else:
+        signals.display_confidence_pct = signals.confidence_pct
     return signals
 
 
@@ -594,36 +608,81 @@ def mark_top_opportunities(signals_list: list[GameSignals], *, n: int | None = N
     return signals_list
 
 
+# Minimum prioritization-layer confidence required for a watch_now / best_bet
+# candidate to be promoted to Focus when no actionable recommendation exists.
+# Below this floor, the banner is omitted — a 20% signal game should never
+# read as "FOCUS RIGHT NOW".
+_FOCUS_SIGNAL_FLOOR = 0.35
+
+
 def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
-    """Pick the single game most worth the user's attention right now.
+    """Pick the single most actionable game for the user's attention.
 
-    Selection rule:
-        1. Must have a PRIMARY action (best_bet, watch_now, or bet_placed).
-        2. Prefer Best Bet over Watch Now. bet_placed is user-owned and is
-           handled by the user-state layer, not the global focus.
-        3. Higher confidence wins.
-        4. Live games tiebreak over upcoming when confidence is close.
+    Priority order (first hit wins):
+      1. Highest-edge elite-tier recommendation (slate cap already applied).
+      2. Highest-edge recommended-status recommendation.
+      3. Legacy fallback: primary action (best_bet > watch_now) above the
+         `_FOCUS_SIGNAL_FLOOR`. This covers games with signal-layer flags
+         (ace matchup, close spread) but no actionable decision — we don't
+         want Focus blank, but we also don't want a 20%-confidence game to
+         read as the headline.
 
-    Returns None when no game qualifies — the hub banner is simply omitted.
-    Never fabricates a focus from a weak field.
+    Games where the user has already placed a bet are skipped at every
+    layer — Focus exists to surface a *new* opportunity, not restate a
+    user's action. Their bet is visible on the tile itself.
+
+    Returns None when nothing clears the bar; the banner is simply omitted.
     """
+    def _no_user_bet(s):
+        return not getattr(s, 'has_user_bet', False) and not s.user_bet_id
+
+    def _edge_key(s):
+        """Sort by edge DESC, confidence DESC, live first, earliest first_pitch."""
+        rec = s.recommendation
+        is_live = getattr(s.game, 'status', '') == 'live'
+        return (
+            -float(getattr(rec, 'model_edge', 0) or 0),
+            -float(getattr(rec, 'confidence_score', 0) or 0),
+            -0.0001 if is_live else 0.0,
+            getattr(s.game, 'first_pitch', None),
+            str(s.game.id),
+        )
+
+    # Layer 1 — elite-tier recommendation (slate cap already enforced upstream)
+    elites = [s for s in signals_list
+              if s.recommendation is not None
+              and getattr(s.recommendation, 'tier', '') == 'elite'
+              and _no_user_bet(s)]
+    if elites:
+        elites.sort(key=_edge_key)
+        return elites[0]
+
+    # Layer 2 — any recommended-status pick (strong/standard but decision rules said bet)
+    recommended = [s for s in signals_list
+                   if s.recommendation is not None
+                   and getattr(s.recommendation, 'status', '') == 'recommended'
+                   and _no_user_bet(s)]
+    if recommended:
+        recommended.sort(key=_edge_key)
+        return recommended[0]
+
+    # Layer 3 — legacy fallback: primary actions above the signal floor. This
+    # keeps the old behavior alive for games with strong signals (ace matchup,
+    # tight spread) but lacking a Recommended-status pick.
     candidates = []
     for s in signals_list:
         primary = next((a for a in s.actions if a['strength'] == 'primary'), None)
-        if primary is None:
+        if primary is None or primary['type'] == 'bet_placed':
             continue
-        if primary['type'] == 'bet_placed':
-            # The user already has a bet here; focus should surface a *new*
-            # opportunity, not a restatement of their own action.
+        if s.confidence < _FOCUS_SIGNAL_FLOOR:
             continue
         candidates.append((s, primary))
     if not candidates:
         return None
 
-    # Action-type preference: best_bet beats watch_now.
     type_rank = {'best_bet': 0, 'watch_now': 1}
-    # Live games get a small confidence bump when it's close.
-    def _key(pair):
+
+    def _legacy_key(pair):
         s, primary = pair
         is_live = getattr(s.game, 'status', '') == 'live'
         return (
@@ -633,7 +692,8 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
             s.game.first_pitch,
             str(s.game.id),
         )
-    candidates.sort(key=_key)
+
+    candidates.sort(key=_legacy_key)
     return candidates[0][0]
 
 

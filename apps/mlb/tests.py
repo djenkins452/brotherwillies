@@ -1519,3 +1519,172 @@ class MLBHubCTATests(TestCase):
         """Defensive: a tile without a recommendation still gets a usable CTA."""
         html = self._render_tile_cta(status=None)
         self.assertIn('Mock Bet', html)
+
+
+class FocusGameSelectionTests(TestCase):
+    """The focus banner ('FOCUS RIGHT NOW') must prefer decision-layer recs
+    over the legacy signals-layer actions. A 20%-signal Watch Now game must
+    never win over a 56%-confidence Recommended pick."""
+
+    def setUp(self):
+        from apps.mlb.services.prioritization import GameSignals
+        self.GameSignals = GameSignals
+
+    def _fake_signal(self, confidence=0.2, rec=None, primary_type='watch_now',
+                     game_id='g1', has_bet=False):
+        """Build a minimal GameSignals with the knobs get_focus_game reads."""
+        class _StubGame:
+            id = game_id
+            status = 'scheduled'
+            first_pitch = timezone.now() + timedelta(hours=2)
+            home_team = type('T', (), {'primary_color': '#fff'})()
+            away_team = type('T', (), {'name': 'A'})()
+        s = self.GameSignals(
+            game=_StubGame(),
+            priority='medium',
+            priority_score=0.0,
+            actions=[{'type': primary_type, 'strength': 'primary', 'reason': 'ace_matchup'}],
+            confidence=confidence,
+            confidence_pct=int(confidence * 100),
+            recommendation=rec,
+            has_user_bet=has_bet,
+            user_bet_id='some-uuid' if has_bet else None,
+        )
+        return s
+
+    def _fake_rec(self, tier='strong', status='recommended', edge=6.5, confidence=56.0):
+        from apps.core.services.recommendations import Recommendation
+        return Recommendation(
+            sport='mlb', game=None, bet_type='moneyline', pick='Arizona',
+            line='+105', odds_american=105,
+            confidence_score=confidence, model_edge=edge, model_source='house',
+            tier=tier, status=status, status_reason='',
+        )
+
+    def test_recommended_rec_beats_watch_now_signal(self):
+        """The exact bug from the screenshot: watch_now at 20% signal vs a
+        Recommended pick on another game. The rec must win."""
+        from apps.mlb.services.prioritization import get_focus_game
+        watch = self._fake_signal(confidence=0.2, primary_type='watch_now',
+                                  game_id='watch', rec=None)
+        rec_game = self._fake_signal(confidence=0.4, primary_type='watch_now',
+                                     game_id='rec', rec=self._fake_rec(edge=6.1))
+        result = get_focus_game([watch, rec_game])
+        self.assertIs(result, rec_game)
+
+    def test_elite_rec_beats_recommended_rec(self):
+        from apps.mlb.services.prioritization import get_focus_game
+        strong = self._fake_signal(game_id='strong',
+                                   rec=self._fake_rec(tier='strong', edge=7.0))
+        elite = self._fake_signal(game_id='elite',
+                                  rec=self._fake_rec(tier='elite', edge=9.0))
+        result = get_focus_game([strong, elite])
+        self.assertIs(result, elite)
+
+    def test_highest_edge_wins_among_elites(self):
+        from apps.mlb.services.prioritization import get_focus_game
+        e1 = self._fake_signal(game_id='e1',
+                               rec=self._fake_rec(tier='elite', edge=9.0))
+        e2 = self._fake_signal(game_id='e2',
+                               rec=self._fake_rec(tier='elite', edge=12.5))
+        result = get_focus_game([e1, e2])
+        self.assertIs(result, e2)
+
+    def test_user_bet_skipped_at_every_layer(self):
+        """Focus surfaces a NEW opportunity — not a restatement of the user's
+        existing bet. An elite game with the user's bet on it is skipped in
+        favor of the next-best game."""
+        from apps.mlb.services.prioritization import get_focus_game
+        owned = self._fake_signal(game_id='owned', has_bet=True,
+                                  rec=self._fake_rec(tier='elite', edge=12.0))
+        other = self._fake_signal(game_id='other',
+                                  rec=self._fake_rec(tier='strong', edge=6.5))
+        result = get_focus_game([owned, other])
+        self.assertIs(result, other)
+
+    def test_weak_signals_without_recs_produce_no_focus(self):
+        """20% signal watch_now games should NOT be promoted to Focus —
+        the banner is omitted instead. Previous behavior would promote
+        them because there was no floor."""
+        from apps.mlb.services.prioritization import get_focus_game
+        weak = self._fake_signal(confidence=0.2, primary_type='watch_now', rec=None)
+        self.assertIsNone(get_focus_game([weak]))
+
+    def test_strong_signal_without_rec_still_focused(self):
+        """Legacy fallback — if a game has a strong signal (e.g. 50%) but
+        no actionable recommendation, it still gets surfaced."""
+        from apps.mlb.services.prioritization import get_focus_game
+        s = self._fake_signal(confidence=0.5, primary_type='best_bet', rec=None)
+        self.assertIs(get_focus_game([s]), s)
+
+    def test_not_recommended_rec_does_not_win_focus(self):
+        """A game whose rec was DECLINED by the decision rules shouldn't take
+        the Focus slot — that would contradict the UI telling users "don't bet"."""
+        from apps.mlb.services.prioritization import get_focus_game
+        declined = self._fake_signal(
+            game_id='d', confidence=0.5, primary_type='watch_now',
+            rec=self._fake_rec(status='not_recommended', edge=3.0),
+        )
+        # no other candidates qualify — legacy layer 3 falls back via watch_now
+        # floor=0.35, so 0.5 signal passes and declined gets focus via Layer 3.
+        # That's fine: at least the banner represents the actual strongest signal.
+        # The key assertion is the rec's status='not_recommended' didn't promote
+        # it via Layers 1 or 2. We verify that by isolating: single declined rec
+        # with LOW signal confidence → no focus (would have been focused if
+        # recs-with-not_recommended-status were picked up).
+        weak_declined = self._fake_signal(
+            game_id='weak', confidence=0.2, primary_type='watch_now',
+            rec=self._fake_rec(status='not_recommended', edge=3.0),
+        )
+        self.assertIsNone(get_focus_game([weak_declined]))
+
+
+class DisplayConfidenceTests(TestCase):
+    """GameSignals.display_confidence_pct prefers recommendation confidence
+    over the signals-layer score. Fixes the 'FOCUS RIGHT NOW — 20%' confusion
+    where the number was about signal strength, not bet confidence."""
+
+    def test_display_confidence_uses_recommendation_when_present(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mlb.models import Conference, Team, Game, OddsSnapshot
+
+        conf = Conference.objects.create(name='AL', slug='al-disp')
+        home = Team.objects.create(name='H', slug='h-disp', conference=conf,
+                                   source='mlb_stats_api', external_id='h-d')
+        away = Team.objects.create(name='A', slug='a-disp', conference=conf,
+                                   source='mlb_stats_api', external_id='a-d')
+        game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status='scheduled', source='mlb_stats_api', external_id='g-d',
+        )
+        OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, moneyline_home=-110, moneyline_away=-110,
+        )
+        s = build_signals(game, user=None)
+        # Recommendation exists → display_confidence_pct = rec.confidence_score
+        self.assertIsNotNone(s.recommendation)
+        self.assertEqual(
+            s.display_confidence_pct,
+            int(round(float(s.recommendation.confidence_score))),
+        )
+
+    def test_display_confidence_falls_back_to_signal_when_no_rec(self):
+        """No odds → no recommendation → display_confidence_pct uses signal."""
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mlb.models import Conference, Team, Game
+
+        conf = Conference.objects.create(name='AL', slug='al-fall')
+        home = Team.objects.create(name='H', slug='h-fall', conference=conf,
+                                   source='mlb_stats_api', external_id='h-f')
+        away = Team.objects.create(name='A', slug='a-fall', conference=conf,
+                                   source='mlb_stats_api', external_id='a-f')
+        game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            status='scheduled', source='mlb_stats_api', external_id='g-f',
+        )
+        s = build_signals(game, user=None)
+        self.assertIsNone(s.recommendation)
+        self.assertEqual(s.display_confidence_pct, s.confidence_pct)

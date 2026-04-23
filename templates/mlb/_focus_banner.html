@@ -32,16 +32,28 @@ top of the hub when get_focus_game() returns non-None. `focus.recommendation`
     </div>
     {% endif %}
     <div class="mlb-focus__meta">
-      <span class="mlb-focus__action mlb-focus__action--{{ primary.type|cut:'_' }}">
-        {% if primary.type == 'best_bet' %}💰{% elif primary.type == 'watch_now' %}🔥{% endif %}
-        {{ primary.type|action_label }}
-      </span>
-      <span class="mlb-focus__reason">{{ primary.reason|reason_label }}</span>
-      <span class="mlb-focus__confidence" title="Confidence {{ focus.confidence }}">
-        <span class="mlb-focus__conf-bar">
-          <span class="mlb-focus__conf-fill" style="width: {{ focus.confidence_pct }}%"></span>
+      {% if focus.recommendation and focus.recommendation.status == 'recommended' %}
+        {# Recommendation-driven: show the action label ("Recommended Bet" or
+           "Elite Play" for elite tier) + edge number instead of the old
+           signal-layer chip (which could say "Watch Now — Ace matchup" on a
+           game where the real story is the betting edge). #}
+        <span class="mlb-focus__action mlb-focus__action--best_bet">
+          {% if focus.recommendation.tier == 'elite' %}&#x1F525;{% else %}&#x1F4B0;{% endif %}
+          {{ focus.pick_action_label }}
         </span>
-        <span class="mlb-focus__conf-num">{{ focus.confidence_pct }}%</span>
+        <span class="mlb-focus__reason">+{{ focus.recommendation.model_edge|floatformat:1 }}% edge</span>
+      {% else %}
+        <span class="mlb-focus__action mlb-focus__action--{{ primary.type|cut:'_' }}">
+          {% if primary.type == 'best_bet' %}💰{% elif primary.type == 'watch_now' %}🔥{% endif %}
+          {{ primary.type|action_label }}
+        </span>
+        <span class="mlb-focus__reason">{{ primary.reason|reason_label }}</span>
+      {% endif %}
+      <span class="mlb-focus__confidence" title="Model win probability {{ focus.display_confidence_pct }}%">
+        <span class="mlb-focus__conf-bar">
+          <span class="mlb-focus__conf-fill" style="width: {{ focus.display_confidence_pct }}%"></span>
+        </span>
+        <span class="mlb-focus__conf-num">{{ focus.display_confidence_pct }}%</span>
       </span>
     </div>
   </div>
