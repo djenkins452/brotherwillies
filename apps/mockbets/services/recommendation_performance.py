@@ -33,6 +33,11 @@ def _group_stats(bets):
     edge_sum = Decimal('0')
     edge_count = 0
     wins = losses = pushes = 0
+    # CLV aggregation — only bets with closing_odds_american populated contribute.
+    # Most bets placed before CLV tracking landed will have None and are skipped.
+    clv_sum = 0.0
+    clv_count = 0
+    clv_positive = 0
     for b in bets:
         stake += b.stake_amount
         if b.result == 'win':
@@ -46,6 +51,11 @@ def _group_stats(bets):
         if b.expected_edge is not None:
             edge_sum += b.expected_edge
             edge_count += 1
+        if b.clv_cents is not None:
+            clv_sum += b.clv_cents
+            clv_count += 1
+            if b.clv_direction == 'positive':
+                clv_positive += 1
     net_pl = winnings - stake
     total = wins + losses + pushes
     # ROI excludes pushes from the denominator since a push is a return-of-stake
@@ -62,6 +72,11 @@ def _group_stats(bets):
         'win_rate': (wins / decisive * 100.0) if decisive else 0.0,
         'roi': (float(net_pl) / float(stake) * 100.0) if stake else 0.0,
         'avg_edge': (float(edge_sum) / edge_count) if edge_count else 0.0,
+        # CLV is the professional signal — resolves at game start, not settlement,
+        # and beats raw win-rate as an indicator of bet-selection quality.
+        'clv_sample': clv_count,
+        'avg_clv': round(clv_sum / clv_count, 4) if clv_count else 0.0,
+        'positive_clv_rate': (clv_positive / clv_count * 100.0) if clv_count else 0.0,
     }
 
 

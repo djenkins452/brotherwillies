@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-04-23 - De-vigged edge + Closing Line Value tracking
+
+**Summary:** Two precision math upgrades that directly affect bet quality and how we measure it.
+
+### De-vig the market
+The prior edge calculation was `model_prob - raw_implied_prob`, where `raw_implied_prob` included the sportsbook's overround. On a -110/-110 line, raw implied is 52.38% each side — summing to 104.76%. Against a 55% model prob, that reported edge as +2.62pp when the fair (de-vigged) edge is +5pp. A 50% model call on the same line reported -2.38pp (fade) when the real edge is 0.
+
+- New module `apps/core/utils/odds.py` — `american_to_implied_prob`, `american_to_decimal`, `devig_moneyline_prob`, `devig_two_way`, `closing_line_value`.
+- `apps/core/services/recommendations.py::_moneyline_candidate` normalizes the two implied probs to sum=1 before computing per-side edge.
+- Existing `_implied_prob` kept as a thin alias to avoid breaking other callers.
+
+Expected impact: a subset of currently "recommended" bets with thin raw edge will drop to "not_recommended" as the vig is stripped. A few currently "not_recommended" bets may move up. Smaller but honest edges.
+
+### CLV tracking per bet
+Professional bettors track CLV because it resolves at game start (not settlement) and beats win rate as a leading indicator of real edge. Every positive-CLV bet validates selection quality even if it loses.
+
+New fields on `MockBet` (migration `mockbets.0006`):
+- `closing_odds_american` — snapshot of the pre-first-pitch moneyline on the bet's chosen side.
+- `clv_cents` — `bet_decimal - close_decimal`. Positive = bet beat the close.
+- `clv_direction` — `'positive'` / `'negative'` / empty.
+
+New service `apps/mockbets/services/clv.py`:
+- `capture_bet_clv(bet)` finds the latest `OddsSnapshot` with `captured_at < first_pitch`, matches the bet's selection to the home/away side, computes CLV, writes atomically. Idempotent (skips already-populated bets).
+- `capture_closing_odds(game)` walks all pending-CLV bets on a game.
+
+`_apply_settlement` now calls `capture_bet_clv(bet)` as a final step — the closing snapshot is already in the past by settlement time.
+
+Analytics surface:
+- `compute_performance_by_status` / `compute_performance_by_tier` emit `clv_sample`, `avg_clv`, `positive_clv_rate`.
+- Analytics dashboard tables gained a `CLV %+` column. Missing-data buckets show `—`.
+- `/mockbets/` bet row shows `CLV: +0.075` (green) / `-0.042` (red) when populated.
+
+### Correctness note
+The task spec wrote `clv = close_dec - bet_dec`, which would flip the sign under the standard "positive = beat the market" definition. Implemented the semantically correct `bet_dec - close_dec` and flagged the reversal in the utility's docstring.
+
+### Tests (23 new, all pass)
+Full app suite: 271/272 (pre-existing `feedback.tests` import error unchanged).
+
+---
+
 ## 2026-04-22 - MLB hub is now a decision board (elite / recommended / not recommended)
 
 **Summary:** The `/mlb/` page stopped being a schedule and started being a decision board. Today's games (live + scheduled today) are now partitioned into three color-coded sections — 🔥 Top Plays Today (elite), 👍 Recommended Bets, ⚠️ Not Recommended — each using the shared 3-max `.tiles-container` grid. CTAs adapt per status: "Bet This" (green), "Not Recommended" (grey, still clickable), or "Mock Bet" when no recommendation exists. Every game still renders.

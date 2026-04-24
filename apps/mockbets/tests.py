@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
@@ -874,3 +875,178 @@ class BankrollKPIsTests(TestCase):
         # net = (stake returned on wins + wins payout + push stake) - total stake
         #     = (100+120 + 50+40 + 40) - 265 = 350 - 265 = 85
         self.assertEqual(kpis['net_pl'], Decimal('85'))
+
+
+class CLVCaptureTests(TestCase):
+    """Closing-line-value capture on bet settlement.
+
+    Each test drives a minimal full path: make a game, snapshot pre-game odds,
+    place a mock bet, flip game final, verify CLV populates correctly.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+
+        self.user = User.objects.create_user('clv_user', password='pw')
+        conf = MLBConf.objects.create(name='AL East', slug='clv-al-east')
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='yankees-clv', conference=conf,
+            source='mlb_stats_api', external_id='clv-147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='royals-clv', conference=conf,
+            source='mlb_stats_api', external_id='clv-118',
+        )
+
+    def _game_with_closing_odds(self, home_close=-150, away_close=130, status='final',
+                                home_score=5, away_score=3):
+        from apps.mlb.models import Game as MLBGame, OddsSnapshot
+        game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=3),
+            status=status,
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        OddsSnapshot.objects.create(
+            game=game,
+            captured_at=game.first_pitch - timedelta(minutes=10),  # pre-game
+            market_home_win_prob=0.60,
+            moneyline_home=home_close,
+            moneyline_away=away_close,
+        )
+        return game
+
+    def _place_bet(self, game, selection='Yankees', odds=-130):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection=selection, odds_american=odds,
+            implied_probability=Decimal('0.565'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+
+    def test_positive_clv_for_bet_that_beat_the_line(self):
+        """Bet at -130, closed at -150 — bet got less juice, positive CLV."""
+        from apps.mockbets.services.clv import capture_bet_clv
+        game = self._game_with_closing_odds(home_close=-150)
+        bet = self._place_bet(game, odds=-130)
+        self.assertTrue(capture_bet_clv(bet))
+        bet.refresh_from_db()
+        self.assertEqual(bet.closing_odds_american, -150)
+        self.assertGreater(bet.clv_cents, 0)
+        self.assertEqual(bet.clv_direction, 'positive')
+
+    def test_negative_clv_when_line_moved_against_pick(self):
+        """Bet at -130, closed at -110 — close offered better price, negative CLV."""
+        from apps.mockbets.services.clv import capture_bet_clv
+        game = self._game_with_closing_odds(home_close=-110)
+        bet = self._place_bet(game, odds=-130)
+        self.assertTrue(capture_bet_clv(bet))
+        bet.refresh_from_db()
+        self.assertLess(bet.clv_cents, 0)
+        self.assertEqual(bet.clv_direction, 'negative')
+
+    def test_capture_is_idempotent(self):
+        """Running capture twice must not double-write or clobber the value."""
+        from apps.mockbets.services.clv import capture_bet_clv
+        game = self._game_with_closing_odds(home_close=-150)
+        bet = self._place_bet(game, odds=-130)
+        self.assertTrue(capture_bet_clv(bet))
+        bet.refresh_from_db()
+        first_clv = bet.clv_cents
+        # Second call: bet already has closing_odds, should no-op.
+        self.assertFalse(capture_bet_clv(bet))
+        bet.refresh_from_db()
+        self.assertEqual(bet.clv_cents, first_clv)
+
+    def test_capture_picks_away_side_closing_odds(self):
+        """When the bet's selection matches the away team, pull away moneyline."""
+        from apps.mockbets.services.clv import capture_bet_clv
+        game = self._game_with_closing_odds(home_close=-150, away_close=130)
+        bet = self._place_bet(game, selection='Royals', odds=120)
+        capture_bet_clv(bet)
+        bet.refresh_from_db()
+        self.assertEqual(bet.closing_odds_american, 130)
+
+    def test_no_pregame_snapshot_leaves_clv_null(self):
+        """If no OddsSnapshot exists before first_pitch, CLV stays null."""
+        from apps.mlb.models import Game as MLBGame
+        from apps.mockbets.services.clv import capture_bet_clv
+        # Game with no odds_snapshots at all
+        game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=1),
+            status='final', home_score=5, away_score=3,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        bet = self._place_bet(game, odds=-130)
+        result = capture_bet_clv(bet)
+        self.assertFalse(result)
+        bet.refresh_from_db()
+        self.assertIsNone(bet.clv_cents)
+
+    def test_non_moneyline_bet_skipped(self):
+        """Spread / total CLV not defined in v1 — skip cleanly."""
+        from apps.mockbets.services.clv import capture_bet_clv
+        game = self._game_with_closing_odds()
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='spread',
+            selection='Yankees -1.5', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), mlb_game=game,
+        )
+        self.assertFalse(capture_bet_clv(bet))
+
+    def test_settlement_populates_clv_automatically(self):
+        """End-to-end: run settle_pending_bets → CLV lands on the bet."""
+        from apps.mockbets.services.settlement import settle_pending_bets
+        game = self._game_with_closing_odds(home_close=-150)
+        bet = self._place_bet(game, odds=-130)
+        self.assertEqual(bet.result, 'pending')
+        settle_pending_bets(sport='mlb')
+        bet.refresh_from_db()
+        self.assertEqual(bet.result, 'win')  # Yankees won 5-3
+        self.assertEqual(bet.closing_odds_american, -150)
+        self.assertEqual(bet.clv_direction, 'positive')
+
+
+class CLVAnalyticsTests(TestCase):
+    """recommendation_performance should surface avg_clv + positive_clv_rate."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('clv_analytics', password='pw')
+
+    def _bet(self, result, clv=None, direction=None):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=+100,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('100') if result == 'win' else None,
+            result=result,
+            recommendation_status='recommended',
+            recommendation_tier='strong',
+            clv_cents=clv,
+            clv_direction=direction or '',
+        )
+
+    def test_avg_clv_computed_only_from_bets_with_data(self):
+        """Bets without CLV don't dilute the average."""
+        from apps.mockbets.services.recommendation_performance import (
+            compute_performance_by_status,
+        )
+        self._bet('win', clv=0.10, direction='positive')
+        self._bet('loss', clv=-0.05, direction='negative')
+        self._bet('loss')  # no CLV captured
+        result = compute_performance_by_status(MockBet.objects.filter(user=self.user))
+        stats = result['recommended']
+        self.assertEqual(stats['clv_sample'], 2)
+        self.assertAlmostEqual(stats['avg_clv'], 0.025, places=3)
+        self.assertAlmostEqual(stats['positive_clv_rate'], 50.0, places=1)
+
+    def test_clv_fields_zero_when_no_data(self):
+        from apps.mockbets.services.recommendation_performance import compute_all
+        bundle = compute_all(MockBet.objects.filter(user=self.user))
+        self.assertEqual(bundle['by_status']['recommended']['clv_sample'], 0)
+        self.assertEqual(bundle['by_status']['recommended']['avg_clv'], 0.0)
+        self.assertEqual(bundle['by_status']['recommended']['positive_clv_rate'], 0.0)

@@ -382,6 +382,16 @@ def _apply_settlement(bet, result, reason):
 
         bet.save()
 
+        # CLV capture piggybacks on settlement — by the time a bet settles,
+        # the game has finished, so the pre-game "closing" odds are in the
+        # past and any OddsSnapshot with captured_at < first_pitch IS the
+        # closing snapshot. Idempotent; non-fatal.
+        try:
+            from .clv import capture_bet_clv
+            capture_bet_clv(bet)
+        except Exception as e:
+            logger.error(f'clv_capture failed for bet {bet.id}: {e}')
+
         MockBetSettlementLog.objects.create(
             mock_bet=bet,
             result=result,

@@ -213,10 +213,13 @@ def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendatio
 
 
 def _implied_prob(american: int) -> float:
-    """American odds → implied probability in [0, 1]."""
-    if american > 0:
-        return 100.0 / (american + 100.0)
-    return abs(american) / (abs(american) + 100.0)
+    """American odds → implied probability in [0, 1].
+
+    Kept as a thin wrapper so existing callers/tests don't break. The
+    canonical implementation now lives in apps.core.utils.odds.
+    """
+    from apps.core.utils.odds import american_to_implied_prob
+    return american_to_implied_prob(american)
 
 
 def _format_american(odds: int) -> str:
@@ -235,8 +238,17 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         model_source = 'house'
     away_prob = 1.0 - home_prob
 
-    home_edge = home_prob - _implied_prob(odds.moneyline_home)
-    away_edge = away_prob - _implied_prob(odds.moneyline_away)
+    # De-vig the market BEFORE computing edge. The raw implied probabilities
+    # sum to > 1.0 (the overround); using them directly inflates apparent
+    # edge by the vig amount. Fair probs normalize to sum = 1 and give the
+    # true EV-relevant baseline for the bet.
+    from apps.core.utils.odds import devig_two_way
+    raw_home_implied = _implied_prob(odds.moneyline_home)
+    raw_away_implied = _implied_prob(odds.moneyline_away)
+    fair_home, fair_away = devig_two_way(raw_home_implied, raw_away_implied)
+
+    home_edge = home_prob - fair_home
+    away_edge = away_prob - fair_away
 
     if home_edge >= away_edge:
         pick_name = game.home_team.name

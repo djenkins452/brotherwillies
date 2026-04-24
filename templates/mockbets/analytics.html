@@ -141,7 +141,7 @@
     <h4 class="text-sm" style="margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);">By Recommendation Status</h4>
     <table class="data-table rec-perf-table">
         <thead>
-            <tr><th>Status</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th></tr>
+            <tr><th>Status</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th><th title="Closing Line Value: positive means the bet's price beat the market's final close. Leading indicator of edge.">CLV %+</th></tr>
         </thead>
         <tbody>
             {% for key, stats in rec_performance.by_status.items %}
@@ -151,6 +151,7 @@
                 <td>{{ stats.win_rate|floatformat:1 }}</td>
                 <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
                 <td class="{% if stats.net_pl > 0 %}text-green{% elif stats.net_pl < 0 %}text-red{% endif %}">${{ stats.net_pl|floatformat:2 }}</td>
+                <td title="Sample: {{ stats.clv_sample }} bets with closing odds captured">{% if stats.clv_sample %}{{ stats.positive_clv_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -159,7 +160,7 @@
     <h4 class="text-sm" style="margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);">By Tier</h4>
     <table class="data-table rec-perf-table">
         <thead>
-            <tr><th>Tier</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th></tr>
+            <tr><th>Tier</th><th>Bets</th><th>Win %</th><th>ROI %</th><th>Net P/L</th><th title="Closing Line Value: positive means the bet's price beat the market's final close. Leading indicator of edge.">CLV %+</th></tr>
         </thead>
         <tbody>
             {% for key, stats in rec_performance.by_tier.items %}
@@ -169,11 +170,12 @@
                 <td>{{ stats.win_rate|floatformat:1 }}</td>
                 <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
                 <td class="{% if stats.net_pl > 0 %}text-green{% elif stats.net_pl < 0 %}text-red{% endif %}">${{ stats.net_pl|floatformat:2 }}</td>
+                <td title="Sample: {{ stats.clv_sample }} bets with closing odds captured">{% if stats.clv_sample %}{{ stats.positive_clv_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
-    <p class="text-sm text-muted mt-1">Target signal: Recommended should outperform Not Recommended, and Elite should outperform Strong. If not, the rules are wrong — update them.</p>
+    <p class="text-sm text-muted mt-1">Target signal: Recommended should outperform Not Recommended, Elite should outperform Strong, and positive CLV % should be &gt; 50% in all recommended rows. CLV resolves at game start — it&rsquo;s the earliest honest signal of bet quality.</p>
 </div>
 
 {# ===== WHY LOSSES HAPPEN ===== #}

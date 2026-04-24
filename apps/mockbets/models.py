@@ -166,6 +166,23 @@ class MockBet(models.Model):
         help_text='Snapshot edge (pp) that did not pay off',
     )
 
+    # Closing Line Value — the professional's signal. Captured at game start
+    # by apps.mockbets.services.clv.capture_closing_odds. Positive value means
+    # the bet's price beat the final market close.
+    CLV_DIRECTION_CHOICES = [
+        ('', ''),
+        ('positive', 'Positive'),
+        ('negative', 'Negative'),
+    ]
+    closing_odds_american = models.IntegerField(null=True, blank=True)
+    clv_cents = models.FloatField(
+        null=True, blank=True,
+        help_text='Decimal-odds delta (bet_dec - close_dec). Positive = beat close.',
+    )
+    clv_direction = models.CharField(
+        max_length=10, choices=CLV_DIRECTION_CHOICES, blank=True, default='',
+    )
+
     class Meta:
         ordering = ['-placed_at']
 
