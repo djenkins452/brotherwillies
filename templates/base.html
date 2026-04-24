@@ -28,6 +28,9 @@
                     <div class="profile-dropdown" id="profile-dropdown">
                         <a href="/profile/" class="profile-dropdown-item">Profile</a>
                         <a href="/profile/preferences/" class="profile-dropdown-item">Preferences</a>
+                        {% if user.is_staff %}
+                        <a href="/mlb/?diag=1" class="profile-dropdown-item">MLB Diagnostic</a>
+                        {% endif %}
                         <a href="/mockbets/" class="profile-dropdown-item">My Mock Bets</a>
                         <a href="/profile/user-guide/" class="profile-dropdown-item">User Guide</a>
                         <a href="/profile/whats-new/" class="profile-dropdown-item">What's New</a>
