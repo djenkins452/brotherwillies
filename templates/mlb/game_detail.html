@@ -22,7 +22,7 @@
         {% endif %}
         <span>{{ game.first_pitch|date:"D M d, g:i A" }} {% tz_abbr %}</span>
         {% if game.neutral_site %}<span class="badge">Neutral</span>{% endif %}
-        <span class="badge badge-{{ data.confidence_class }}">{{ data.confidence }}</span>
+        <span class="badge badge-{{ data.confidence_class }}" title="Data-input quality: how fresh our odds are and whether both starting pitchers are known. This is NOT a measure of whether to bet — see the Model Pick card below for the decision-layer recommendation.">Data: {{ data.confidence|title }}</span>
     </div>
     {% if data.line_movement %}
     <div class="text-sm mt-1 {% if data.line_movement == 'up' %}line-up{% else %}line-down{% endif %}">Line moved</div>

@@ -117,7 +117,7 @@
                 {% else %}
                 <span>{{ g.game.tipoff|date:"D M d, g:i A" }} {% tz_abbr %}</span>
                 {% endif %}
-                <span class="badge badge-{{ g.confidence_class }}">{{ g.confidence }}</span>
+                <span class="badge badge-{{ g.confidence_class }}" title="Data-input quality (odds freshness + pitcher/injury data). Not a bet recommendation.">Data: {{ g.confidence|title }}</span>
             </div>
             {% endif %}
             {# ── Compact data grid: all values visible ── #}
