@@ -251,6 +251,40 @@ class MockBet(models.Model):
         from apps.core.utils.odds import format_line_movement
         return format_line_movement(self.odds_american, self.closing_odds_american)
 
+    # --- Cancellation eligibility -------------------------------------------
+    # A user can cancel (delete) a pending mock bet IF and only IF the
+    # underlying game has not started yet. Once a game is live or final,
+    # cancellation would distort analytics and CLV tracking.
+
+    @property
+    def can_cancel(self):
+        """True when the user is still allowed to cancel this bet."""
+        if self.result != 'pending':
+            return False
+        game = self.game
+        if game is not None:
+            # Team sports: live/final = locked
+            if getattr(game, 'status', None) in ('live', 'final', 'postponed', 'cancelled'):
+                return False
+            # Time check — the cron may not have flipped status to 'live' yet
+            # even if first pitch has passed. Use the time field as the
+            # authoritative gate.
+            from django.utils import timezone
+            start = (
+                getattr(game, 'first_pitch', None)
+                or getattr(game, 'kickoff', None)
+                or getattr(game, 'tipoff', None)
+            )
+            if start and start <= timezone.now():
+                return False
+            return True
+        # Golf: cancel-ok until the event's start_date arrives
+        if self.golf_event is not None:
+            from django.utils import timezone
+            return self.golf_event.start_date > timezone.now().date()
+        # No game + no event → no way to verify → safer to allow cancel
+        return True
+
     @property
     def net_result(self):
         """Net P/L for this bet (payout minus stake, or None if pending)."""

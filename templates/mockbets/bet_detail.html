@@ -194,6 +194,54 @@ function saveReview() {
 {% endfor %}
 {% endif %}
 
+{% if bet.can_cancel %}
+<div class="card mb-2" style="border-color: rgba(220, 38, 38, 0.35);">
+    <div class="text-sm text-muted" style="margin-bottom:8px;">
+        This bet hasn't locked in yet — the game is still scheduled. You can cancel it without penalty.
+    </div>
+    <button type="button" class="btn btn-sm" id="cancel-bet-btn"
+            style="background:#dc2626; color:#fff; border-color:#dc2626;"
+            onclick="cancelBet()">Cancel This Bet</button>
+    <span id="cancel-bet-msg" class="text-sm mt-1" style="display:none;margin-left:10px;"></span>
+</div>
+<script>
+function cancelBet() {
+    if (!window.confirm('Cancel this mock bet? This cannot be undone — the bet record will be removed.')) {
+        return;
+    }
+    var btn = document.getElementById('cancel-bet-btn');
+    var msg = document.getElementById('cancel-bet-msg');
+    btn.disabled = true;
+    btn.textContent = 'Cancelling…';
+    fetch('{% url "mockbets:cancel_bet" bet.id %}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+        credentials: 'same-origin',
+    })
+    .then(function(r) { return r.json().then(function(data) { return [r, data]; }); })
+    .then(function(arr) {
+        var r = arr[0], data = arr[1];
+        if (r.ok && data.success) {
+            window.location.href = '{% url "mockbets:my_bets" %}';
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Cancel This Bet';
+            msg.style.display = 'inline';
+            msg.style.color = 'var(--red)';
+            msg.textContent = (data && data.error) || 'Cancel failed.';
+        }
+    })
+    .catch(function() {
+        btn.disabled = false;
+        btn.textContent = 'Cancel This Bet';
+        msg.style.display = 'inline';
+        msg.style.color = 'var(--red)';
+        msg.textContent = 'Network error. Try again.';
+    });
+}
+</script>
+{% endif %}
+
 <div class="mt-2">
     <a href="{% url 'mockbets:my_bets' %}" class="btn btn-secondary btn-sm">Back to My Bets</a>
 </div>

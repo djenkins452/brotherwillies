@@ -1010,6 +1010,126 @@ class CLVCaptureTests(TestCase):
         self.assertEqual(bet.clv_direction, 'positive')
 
 
+class CancelBetTests(TestCase):
+    """Cancellation workflow: allowed pre-game, rejected when game has
+    started or the bet has already settled, and ownership-gated."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        self.user = User.objects.create_user('canceller', password='pw')
+        self.other = User.objects.create_user('other', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+        conf = MLBConf.objects.create(name='AL East', slug='cancel-al-east')
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='yankees-cancel', conference=conf,
+            source='mlb_stats_api', external_id='cxl-147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='royals-cancel', conference=conf,
+            source='mlb_stats_api', external_id='cxl-118',
+        )
+
+    def _game(self, status='scheduled', first_pitch_offset_hours=2,
+              home_score=None, away_score=None):
+        from apps.mlb.models import Game as MLBGame
+        return MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=first_pitch_offset_hours),
+            status=status,
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+
+    def _bet(self, game, user=None, result='pending', selection='Yankees'):
+        return MockBet.objects.create(
+            user=user or self.user, sport='mlb', bet_type='moneyline',
+            selection=selection, odds_american=-130,
+            implied_probability=Decimal('0.565'),
+            stake_amount=Decimal('100'),
+            result=result, mlb_game=game,
+        )
+
+    # --- can_cancel property ------------------------------------------------
+
+    def test_can_cancel_scheduled_future_game(self):
+        bet = self._bet(self._game(first_pitch_offset_hours=2))
+        self.assertTrue(bet.can_cancel)
+
+    def test_cannot_cancel_when_game_is_live(self):
+        bet = self._bet(self._game(status='live', first_pitch_offset_hours=-1))
+        self.assertFalse(bet.can_cancel)
+
+    def test_cannot_cancel_when_game_is_final(self):
+        bet = self._bet(
+            self._game(status='final', first_pitch_offset_hours=-3,
+                       home_score=5, away_score=3),
+        )
+        self.assertFalse(bet.can_cancel)
+
+    def test_cannot_cancel_after_first_pitch_even_if_status_stale(self):
+        """Defensive: status might still be 'scheduled' if the cron is late,
+        but if first_pitch has passed the bet is already locked."""
+        bet = self._bet(self._game(status='scheduled', first_pitch_offset_hours=-1))
+        self.assertFalse(bet.can_cancel)
+
+    def test_cannot_cancel_settled_bet_even_with_future_game(self):
+        """Edge case: bet somehow settled while game is still scheduled
+        (shouldn't happen, but the guard holds)."""
+        bet = self._bet(self._game(first_pitch_offset_hours=2), result='win')
+        self.assertFalse(bet.can_cancel)
+
+    # --- cancel_bet endpoint ------------------------------------------------
+
+    def test_cancel_endpoint_deletes_pending_pregame_bet(self):
+        bet = self._bet(self._game(first_pitch_offset_hours=2))
+        bet_id = bet.id
+        resp = self.client.post(
+            f'/mockbets/{bet_id}/cancel/',
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['success'])
+        self.assertFalse(MockBet.objects.filter(id=bet_id).exists())
+
+    def test_cancel_endpoint_rejects_live_game(self):
+        bet = self._bet(self._game(status='live', first_pitch_offset_hours=-1))
+        resp = self.client.post(
+            f'/mockbets/{bet.id}/cancel/',
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('error', resp.json())
+        self.assertTrue(MockBet.objects.filter(id=bet.id).exists())
+
+    def test_cancel_endpoint_rejects_other_users_bet(self):
+        """Ownership gate: user A cannot cancel user B's bet (404 via qs filter)."""
+        bet = self._bet(self._game(first_pitch_offset_hours=2), user=self.other)
+        resp = self.client.post(
+            f'/mockbets/{bet.id}/cancel/',
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(MockBet.objects.filter(id=bet.id).exists())
+
+    def test_cancel_endpoint_requires_login(self):
+        bet = self._bet(self._game(first_pitch_offset_hours=2))
+        anon = Client()
+        resp = anon.post(
+            f'/mockbets/{bet.id}/cancel/',
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 302)  # redirect to login
+
+    def test_cancel_endpoint_rejects_get(self):
+        bet = self._bet(self._game(first_pitch_offset_hours=2))
+        resp = self.client.get(f'/mockbets/{bet.id}/cancel/')
+        # @require_POST returns 405 Method Not Allowed
+        self.assertEqual(resp.status_code, 405)
+        self.assertTrue(MockBet.objects.filter(id=bet.id).exists())
+
+
 class CLVAnalyticsTests(TestCase):
     """recommendation_performance should surface avg_clv + positive_clv_rate."""
 

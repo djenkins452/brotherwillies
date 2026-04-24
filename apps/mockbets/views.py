@@ -278,6 +278,28 @@ def review_bet(request, bet_id):
 
 
 @login_required
+@require_POST
+def cancel_bet(request, bet_id):
+    """Cancel (delete) a pending mock bet — only allowed pre-game.
+
+    The `can_cancel` property is the single source of truth for eligibility
+    (pending result AND underlying game hasn't started). We re-check here
+    rather than trusting any client-side state.
+    """
+    bet = get_object_or_404(MockBet, id=bet_id, user=request.user)
+    if not bet.can_cancel:
+        return JsonResponse(
+            {
+                'error': 'This bet can no longer be cancelled — the game has '
+                         'started or the bet has already settled.',
+            },
+            status=400,
+        )
+    bet.delete()
+    return JsonResponse({'success': True, 'message': 'Mock bet cancelled.'})
+
+
+@login_required
 def analytics_dashboard(request):
     """Phase 2-4 analytics dashboard with charts, comparison, and advanced analytics."""
     bets = MockBet.objects.filter(user=request.user).select_related(

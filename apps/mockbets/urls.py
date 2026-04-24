@@ -12,4 +12,5 @@ urlpatterns = [
     path('ai-commentary/', views.ai_commentary, name='ai_commentary'),
     path('<uuid:bet_id>/', views.bet_detail, name='bet_detail'),
     path('<uuid:bet_id>/review/', views.review_bet, name='review_bet'),
+    path('<uuid:bet_id>/cancel/', views.cancel_bet, name='cancel_bet'),
 ]
