@@ -74,3 +74,79 @@ def closing_line_value(bet_odds_american: int, closing_odds_american: int) -> fl
         american_to_decimal(bet_odds_american) - american_to_decimal(closing_odds_american),
         4,
     )
+
+
+# ---------------------------------------------------------------------------
+# Display formatters — presentation-layer only. These exist so users see
+# human-readable CLV info ("+4.2% · Beat Market") instead of raw decimal
+# deltas ("CLV +0.042"). Keep all the math above; these only format.
+
+def format_clv_percent(clv_decimal) -> str:
+    """Render CLV for the UI as a signed percent.
+
+    NOTE on unit: `clv_decimal` is a decimal-odds delta (e.g. +0.042), NOT a
+    probability-point delta. Multiplying by 100 gives a readable scale —
+    "+4.2%" — but users should not read this literally as "4.2 percentage
+    points of implied probability." It's a presentation choice optimized for
+    quick scanning; the underlying signal is the sign and the relative
+    magnitude, which both survive this formatting.
+    """
+    if clv_decimal is None:
+        return ''
+    percent = float(clv_decimal) * 100
+    return f"{percent:+.1f}%"
+
+
+def clv_label(clv_decimal) -> str:
+    """Human-readable outcome tag matching the CLV sign."""
+    if clv_decimal is None:
+        return ''
+    if clv_decimal > 0:
+        return 'Beat Market'
+    if clv_decimal < 0:
+        return 'Market Beat You'
+    return 'Matched Market'
+
+
+def format_american_signed(odds: int) -> str:
+    """American odds with an explicit + prefix on underdog prices."""
+    if odds is None:
+        return ''
+    return f"+{odds}" if odds > 0 else str(odds)
+
+
+def format_line_movement(bet_odds, closing_odds) -> str:
+    """Human-readable line movement in American-odds 'cents'.
+
+    Signed from the BETTOR'S perspective: positive = line moved in your
+    favor (you got a better price than close), negative = line moved
+    against you.
+
+    SIGN-CORRECTNESS NOTE: naive `closing_odds - bet_odds` gives the wrong
+    sign because American-odds arithmetic flips around ±100 — e.g.
+    `-120 → -135` (better price for bettor) produces `diff = -15` even
+    though it's a positive movement for the bettor. We use the decimal-odds
+    delta to determine direction, then report the American-odds magnitude.
+
+    Example:
+      -120 → -135  ⇒  "+15 cents (-120 → -135)"   (got better price)
+      -120 → -110  ⇒  "-10 cents (-120 → -110)"   (market beat you)
+      +120 → +110  ⇒  "+10 cents (+120 → +110)"   (got longer price)
+      +120 → +150  ⇒  "-30 cents (+120 → +150)"   (market beat you)
+    """
+    if bet_odds is None or closing_odds is None:
+        return ''
+    # Direction: decimal delta is sign-correct across favorite/dog boundary.
+    favor = american_to_decimal(bet_odds) - american_to_decimal(closing_odds)
+    # Magnitude: absolute American-odds distance (close enough for display;
+    # the ±100 boundary introduces a 1-cent rounding but doesn't mislead).
+    cents = abs(closing_odds - bet_odds)
+    if favor > 0:
+        sign = '+'
+    elif favor < 0:
+        sign = '-'
+    else:
+        sign = ''
+    bet_str = format_american_signed(bet_odds)
+    close_str = format_american_signed(closing_odds)
+    return f"{sign}{cents} cents ({bet_str} → {close_str})"

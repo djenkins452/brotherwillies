@@ -107,11 +107,15 @@
         </div>
         {% endif %}
         {% if bet.clv_cents is not None %}
-        <div class="bet-money-cell" title="Closing Line Value — positive means you beat the market's final price.">
+        <div class="bet-money-cell bet-clv-cell {% if bet.clv_direction == 'positive' %}clv-positive{% elif bet.clv_direction == 'negative' %}clv-negative{% else %}clv-neutral{% endif %}"
+             title="Closing Line Value — positive means you beat the market's final price.">
             <span class="bet-money-label">CLV</span>
-            <span class="bet-money-value {% if bet.clv_direction == 'positive' %}text-green{% elif bet.clv_direction == 'negative' %}text-red{% endif %}">
-                {% if bet.clv_cents > 0 %}+{% endif %}{{ bet.clv_cents|floatformat:3 }}
+            <span class="bet-money-value">
+                {{ bet.clv_percent_display }} &middot; {{ bet.clv_outcome_label }}
             </span>
+            {% if bet.closing_odds_american is not None %}
+            <span class="bet-clv-line-move text-sm text-muted">{{ bet.line_movement_display }}</span>
+            {% endif %}
         </div>
         {% endif %}
     </div>

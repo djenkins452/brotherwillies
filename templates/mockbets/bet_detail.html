@@ -79,6 +79,17 @@
             <td class="{% if bet.expected_edge > 0 %}edge-positive{% elif bet.expected_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ bet.expected_edge|floatformat:1 }}%</td>
         </tr>
         {% endif %}
+        {% if bet.clv_cents is not None %}
+        <tr>
+            <td class="text-muted" title="Closing Line Value: did your price beat the market's final close?">CLV</td>
+            <td class="{% if bet.clv_direction == 'positive' %}clv-positive{% elif bet.clv_direction == 'negative' %}clv-negative{% else %}clv-neutral{% endif %}">
+                <strong>{{ bet.clv_percent_display }}</strong> &middot; {{ bet.clv_outcome_label }}
+                {% if bet.closing_odds_american is not None %}
+                <div class="text-sm text-muted">{{ bet.line_movement_display }}</div>
+                {% endif %}
+            </td>
+        </tr>
+        {% endif %}
         <tr>
             <td class="text-muted">Placed</td>
             <td>{{ bet.placed_at|date:"M d, Y g:i A" }} {% tz_abbr %}</td>

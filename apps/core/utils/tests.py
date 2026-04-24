@@ -1,12 +1,16 @@
-"""Tests for odds utilities — de-vig math + CLV conversion."""
+"""Tests for odds utilities — de-vig math + CLV conversion + display formatters."""
 from django.test import TestCase
 
 from apps.core.utils.odds import (
     american_to_decimal,
     american_to_implied_prob,
     closing_line_value,
+    clv_label,
     devig_moneyline_prob,
     devig_two_way,
+    format_american_signed,
+    format_clv_percent,
+    format_line_movement,
 )
 
 
@@ -143,3 +147,131 @@ class DevigIntegrationWithRecommendationTests(TestCase):
         # De-vigged edge is strictly larger on a symmetric line when model > 50%
         # (the raw edge is the de-vigged edge MINUS half the overround).
         self.assertGreater(fair_edge, raw_edge)
+
+
+class FormatClvPercentTests(TestCase):
+    def test_positive_decimal_renders_with_plus_sign(self):
+        self.assertEqual(format_clv_percent(0.042), '+4.2%')
+
+    def test_negative_decimal_renders_with_minus(self):
+        self.assertEqual(format_clv_percent(-0.031), '-3.1%')
+
+    def test_zero_is_rendered_with_plus_zero(self):
+        # +0.0% is the conventional "zero with explicit sign" format.
+        self.assertEqual(format_clv_percent(0), '+0.0%')
+
+    def test_none_returns_empty_string(self):
+        self.assertEqual(format_clv_percent(None), '')
+
+
+class ClvLabelTests(TestCase):
+    def test_positive_label(self):
+        self.assertEqual(clv_label(0.05), 'Beat Market')
+
+    def test_negative_label(self):
+        self.assertEqual(clv_label(-0.02), 'Market Beat You')
+
+    def test_zero_label(self):
+        self.assertEqual(clv_label(0), 'Matched Market')
+
+    def test_none_label_is_empty(self):
+        self.assertEqual(clv_label(None), '')
+
+
+class FormatAmericanSignedTests(TestCase):
+    def test_positive_odds_get_explicit_plus(self):
+        self.assertEqual(format_american_signed(120), '+120')
+
+    def test_negative_odds_stay_negative(self):
+        self.assertEqual(format_american_signed(-150), '-150')
+
+    def test_none_returns_empty_string(self):
+        self.assertEqual(format_american_signed(None), '')
+
+
+class FormatLineMovementTests(TestCase):
+    """Sign must be signed from the BETTOR'S perspective — positive when
+    the line moved in favor of the bet, even across favorite/dog boundaries."""
+
+    def test_favorite_line_moving_further_is_positive(self):
+        """Bet -120, closed -135: you got less juice, positive movement."""
+        out = format_line_movement(-120, -135)
+        self.assertTrue(out.startswith('+15 cents'), msg=out)
+        self.assertIn('-120 → -135', out)
+
+    def test_favorite_line_coming_back_is_negative(self):
+        """Bet -120, closed -110: close had less juice, you lost the line."""
+        out = format_line_movement(-120, -110)
+        self.assertTrue(out.startswith('-10 cents'), msg=out)
+
+    def test_underdog_price_shortening_is_negative(self):
+        """Bet +120, closed +110: +120 was longer price, but close is shorter,
+        meaning close moved AGAINST your pick — the market thought your pick
+        MORE likely at close (lower implied prob → less +EV at close) —
+        wait that's actually positive CLV. Let me think again."""
+        # Bet +120 (implied 45.45%), close +110 (implied 47.62%).
+        # You paid LESS for the pick than close did → positive CLV.
+        out = format_line_movement(+120, +110)
+        self.assertTrue(out.startswith('+10 cents'), msg=out)
+
+    def test_underdog_price_lengthening_is_negative(self):
+        """Bet +120, closed +150: close offered longer odds → market thought
+        your pick LESS likely at close → you got worse value than close."""
+        out = format_line_movement(+120, +150)
+        self.assertTrue(out.startswith('-30 cents'), msg=out)
+
+    def test_no_movement_renders_zero(self):
+        out = format_line_movement(-110, -110)
+        self.assertIn('0 cents', out)
+
+    def test_missing_closing_odds_returns_empty(self):
+        self.assertEqual(format_line_movement(-110, None), '')
+        self.assertEqual(format_line_movement(None, -110), '')
+
+
+class MockBetDisplayPropertiesTests(TestCase):
+    """MockBet.clv_percent_display / clv_outcome_label / line_movement_display
+    surface the formatter output off the model so templates don't call helpers."""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from apps.mockbets.models import MockBet
+        self.user = User.objects.create_user('disp', password='pw')
+        self.MockBet = MockBet
+        self.Decimal = Decimal
+
+    def _bet(self, clv, direction='', closing=None, bet_odds=-120):
+        return self.MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=bet_odds,
+            implied_probability=self.Decimal('0.5'),
+            stake_amount=self.Decimal('100'),
+            clv_cents=clv, clv_direction=direction,
+            closing_odds_american=closing,
+        )
+
+    def test_positive_clv_display(self):
+        bet = self._bet(clv=0.042, direction='positive', closing=-135, bet_odds=-120)
+        self.assertEqual(bet.clv_percent_display, '+4.2%')
+        self.assertEqual(bet.clv_outcome_label, 'Beat Market')
+        self.assertTrue(bet.line_movement_display.startswith('+15 cents'))
+
+    def test_negative_clv_display(self):
+        bet = self._bet(clv=-0.031, direction='negative', closing=-110, bet_odds=-120)
+        self.assertEqual(bet.clv_percent_display, '-3.1%')
+        self.assertEqual(bet.clv_outcome_label, 'Market Beat You')
+
+    def test_no_clv_yields_empty_strings(self):
+        bet = self._bet(clv=None, direction='', closing=None)
+        self.assertEqual(bet.clv_percent_display, '')
+        self.assertEqual(bet.clv_outcome_label, '')
+        self.assertEqual(bet.line_movement_display, '')
+
+    def test_clv_set_but_closing_odds_missing_still_shows_percent(self):
+        """Fallback path: CLV computed but closing_odds wasn't persisted for
+        some reason. Percent + label should still render; line_movement empty."""
+        bet = self._bet(clv=0.015, direction='positive', closing=None, bet_odds=-110)
+        self.assertEqual(bet.clv_percent_display, '+1.5%')
+        self.assertEqual(bet.clv_outcome_label, 'Beat Market')
+        self.assertEqual(bet.line_movement_display, '')

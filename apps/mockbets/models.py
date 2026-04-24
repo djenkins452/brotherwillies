@@ -229,6 +229,28 @@ class MockBet(models.Model):
         from apps.mockbets.services.loss_analysis import reason_details
         return reason_details(self.loss_reason)
 
+    # --- CLV display helpers -------------------------------------------------
+    # Computed in the model (not the view) so every template that renders a
+    # MockBet gets the same human-readable CLV surface without needing to
+    # remember to decorate instances. Keeps logic out of templates per the
+    # spec, and out of per-view boilerplate.
+    @property
+    def clv_percent_display(self):
+        from apps.core.utils.odds import format_clv_percent
+        return format_clv_percent(self.clv_cents)
+
+    @property
+    def clv_outcome_label(self):
+        """Named 'clv_outcome_label' to avoid clashing with Django's auto-
+        generated get_clv_direction_display or any future choice-derived accessor."""
+        from apps.core.utils.odds import clv_label
+        return clv_label(self.clv_cents)
+
+    @property
+    def line_movement_display(self):
+        from apps.core.utils.odds import format_line_movement
+        return format_line_movement(self.odds_american, self.closing_odds_american)
+
     @property
     def net_result(self):
         """Net P/L for this bet (payout minus stake, or None if pending)."""

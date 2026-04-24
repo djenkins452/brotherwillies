@@ -802,6 +802,18 @@ select.form-control {
 .bet-money-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .bet-money-value { font-size: 0.95rem; font-weight: 600; }
 
+/* CLV presentation — sign-colored so the eye lands on "Beat Market" vs
+   "Market Beat You" before reading the number. Colors are explicit
+   (not var-based) so they stay consistent regardless of theme drift. */
+.clv-positive { color: #16a34a; }
+.clv-negative { color: #dc2626; }
+.clv-neutral { color: #6b7280; }
+.clv-positive .bet-money-value,
+.clv-negative .bet-money-value,
+.clv-neutral  .bet-money-value { color: inherit; }
+.bet-clv-cell { min-width: 160px; }
+.bet-clv-line-move { display: block; font-size: 0.7rem; margin-top: 2px; }
+
 /* Decision-layer model pick — banner on detail + inline on tiles */
 .model-pick-banner {
     border-left: 3px solid var(--accent);
