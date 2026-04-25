@@ -279,6 +279,48 @@ def review_bet(request, bet_id):
 
 @login_required
 @require_POST
+def bulk_place_recommended(request):
+    """Place mock bets on every recommended game without existing pending bet.
+
+    Optional query params:
+      - sport: defaults to 'mlb' (only supported sport for v1)
+      - tier_filter: 'all' (default) | 'elite' | 'elite_or_strong'
+      - stake: defaults to 100
+    """
+    from .services.bulk_actions import place_bulk_recommended_bets
+    sport = request.GET.get('sport', 'mlb')
+    tier_filter = request.GET.get('tier_filter', 'all')
+    if tier_filter not in ('all', 'elite', 'elite_or_strong', 'strong'):
+        tier_filter = 'all'
+    try:
+        raw_stake = request.GET.get('stake', '100')
+        stake = Decimal(str(raw_stake))
+        if stake <= 0 or stake > Decimal('10000'):
+            return JsonResponse({'error': 'Stake must be between $0.01 and $10,000'}, status=400)
+    except (InvalidOperation, TypeError, ValueError):
+        return JsonResponse({'error': 'Invalid stake'}, status=400)
+
+    summary = place_bulk_recommended_bets(
+        request.user, sport=sport, stake=stake, tier_filter=tier_filter,
+    )
+    if summary.get('error'):
+        return JsonResponse(summary, status=400)
+    summary['success'] = True
+    return JsonResponse(summary)
+
+
+@login_required
+@require_POST
+def bulk_cancel_open(request):
+    """Cancel every pending bet whose game hasn't started yet."""
+    from .services.bulk_actions import cancel_all_open_bets
+    summary = cancel_all_open_bets(request.user)
+    summary['success'] = True
+    return JsonResponse(summary)
+
+
+@login_required
+@require_POST
 def cancel_bet(request, bet_id):
     """Cancel (delete) a pending mock bet — only allowed pre-game.
 

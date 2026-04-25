@@ -1231,6 +1231,197 @@ class TopPlayReasonsTests(TestCase):
         self.assertIsInstance(reasons, list)
 
 
+class BulkActionsTests(TestCase):
+    """Bulk MockBet operations — place_bulk_recommended + cancel_all_open.
+
+    Both must be idempotent (running twice produces no duplicates / no
+    double-cancels) and must reuse the per-bet eligibility guards instead
+    of opening a back door."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot as MLBOdds
+        self.MLBGame = MLBGame
+        self.MLBOdds = MLBOdds
+        self.user = User.objects.create_user('bulk_user', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+        conf = MLBConf.objects.create(name='AL East', slug='bulk-al-east')
+        self.t1 = MLBTeam.objects.create(
+            name='Yankees', slug='bulk-yankees', conference=conf, rating=70,
+            source='mlb_stats_api', external_id='bulk-1',
+        )
+        self.t2 = MLBTeam.objects.create(
+            name='Rays', slug='bulk-rays', conference=conf, rating=40,
+            source='mlb_stats_api', external_id='bulk-2',
+        )
+
+    def _game(self, hours_out=2, status='scheduled', home_score=None, away_score=None,
+              t1=None, t2=None, ext=None):
+        return self.MLBGame.objects.create(
+            home_team=t1 or self.t1, away_team=t2 or self.t2,
+            first_pitch=timezone.now() + timedelta(hours=hours_out),
+            status=status,
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=ext or str(uuid.uuid4()),
+        )
+
+    def _add_odds(self, game, ml_home=-110, ml_away=-110, market_home_prob=0.5):
+        return self.MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=market_home_prob,
+            moneyline_home=ml_home, moneyline_away=ml_away,
+        )
+
+    # --- bulk place ---------------------------------------------------------
+
+    def test_bulk_place_creates_one_bet_per_recommended_game(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Two games with strong rating gap → recommendation engine picks home
+        game1 = self._game(hours_out=2)
+        self._add_odds(game1)
+        # Different teams for second game so it's not a duplicate matchup
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        conf = MLBConf.objects.first()
+        t3 = MLBTeam.objects.create(name='Sox', slug='bulk-sox', conference=conf,
+                                     rating=72, source='mlb_stats_api', external_id='bulk-3')
+        t4 = MLBTeam.objects.create(name='Os', slug='bulk-os', conference=conf,
+                                     rating=42, source='mlb_stats_api', external_id='bulk-4')
+        game2 = self._game(hours_out=4, t1=t3, t2=t4)
+        self._add_odds(game2)
+
+        summary = place_bulk_recommended_bets(self.user)
+        # Both games should be eligible — verify exactly that many bets exist
+        self.assertEqual(summary['placed'], MockBet.objects.filter(user=self.user).count())
+        self.assertGreaterEqual(summary['placed'], 1)
+        # Each bet has the snapshot fields populated
+        for bet in MockBet.objects.filter(user=self.user):
+            self.assertEqual(bet.recommendation_status, 'recommended')
+            self.assertIn(bet.recommendation_tier, ('elite', 'strong', 'standard'))
+
+    def test_bulk_place_is_idempotent(self):
+        """Running twice must NOT create duplicate bets on the same game."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        game = self._game(hours_out=3)
+        self._add_odds(game)
+        first = place_bulk_recommended_bets(self.user)
+        second = place_bulk_recommended_bets(self.user)
+        self.assertEqual(second['placed'], 0)
+        self.assertEqual(second['skipped_existing'], first['placed'])
+        # No duplicate rows for the same (user, game)
+        per_game = MockBet.objects.filter(user=self.user, mlb_game=game).count()
+        self.assertLessEqual(per_game, 1)
+
+    def test_bulk_place_skips_started_games(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Game already started — shouldn't be eligible
+        game = self._game(hours_out=-1, status='live')
+        self._add_odds(game)
+        summary = place_bulk_recommended_bets(self.user)
+        self.assertEqual(summary['placed'], 0)
+
+    def test_bulk_place_counts_no_odds_games(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Game today, in the future, but no odds → counts as skipped_no_odds
+        # First_pitch must be today (server tz) for the diagnostic counter
+        local_now = timezone.localtime()
+        from datetime import datetime, time as _time
+        # Pick a time later today that's still in the future
+        future_today = timezone.make_aware(
+            datetime.combine(local_now.date(), _time(23, 30))
+        )
+        if future_today <= timezone.now():
+            future_today = timezone.now() + timedelta(hours=2)
+        self.MLBGame.objects.create(
+            home_team=self.t1, away_team=self.t2,
+            first_pitch=future_today,
+            status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        summary = place_bulk_recommended_bets(self.user)
+        self.assertEqual(summary['placed'], 0)
+        # Even if today_count includes other odds, this game must register
+        self.assertGreaterEqual(summary['skipped_no_odds'], 1)
+
+    def test_bulk_place_skips_when_recommendation_is_not_recommended(self):
+        """If decision rules say not_recommended, bulk-place skips. Use a mock
+        so the test doesn't depend on the model's exact prob calculation."""
+        from unittest.mock import patch
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        from apps.core.services.recommendations import (
+            Recommendation, STATUS_NOT_RECOMMENDED,
+        )
+        g = self._game(hours_out=3)
+        self._add_odds(g, ml_home=-200, ml_away=170)
+        # Force the recommendation engine to return a 'not_recommended' rec
+        not_rec = Recommendation(
+            sport='mlb', game=g, bet_type='moneyline', pick='Yankees',
+            line='-200', odds_american=-200,
+            confidence_score=55.0, model_edge=2.0, model_source='house',
+            tier='standard', status=STATUS_NOT_RECOMMENDED, status_reason='low_edge',
+        )
+        # Patch at source — bulk_actions imports get_recommendation locally
+        # inside the helper function, so we need to patch the module the
+        # name resolves to.
+        with patch('apps.core.services.recommendations.get_recommendation',
+                   return_value=not_rec):
+            place_bulk_recommended_bets(self.user)
+        self.assertEqual(MockBet.objects.filter(user=self.user, mlb_game=g).count(), 0)
+
+    # --- bulk cancel --------------------------------------------------------
+
+    def test_bulk_cancel_deletes_only_pregame_pending(self):
+        from apps.mockbets.services.bulk_actions import cancel_all_open_bets
+        game_future = self._game(hours_out=3)
+        game_started = self._game(hours_out=-1, status='live',
+                                   t1=self.t1, t2=self.t2)
+        bet_future = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), mlb_game=game_future,
+        )
+        bet_started = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), mlb_game=game_started,
+        )
+        summary = cancel_all_open_bets(self.user)
+        self.assertEqual(summary['cancelled'], 1)
+        self.assertEqual(summary['skipped_started'], 1)
+        self.assertFalse(MockBet.objects.filter(id=bet_future.id).exists())
+        self.assertTrue(MockBet.objects.filter(id=bet_started.id).exists())
+
+    def test_bulk_cancel_idempotent(self):
+        from apps.mockbets.services.bulk_actions import cancel_all_open_bets
+        first = cancel_all_open_bets(self.user)
+        second = cancel_all_open_bets(self.user)
+        self.assertEqual(second['cancelled'], 0)
+        self.assertEqual(second['skipped_started'], 0)
+
+    # --- endpoints ----------------------------------------------------------
+
+    def test_bulk_place_endpoint_returns_summary_json(self):
+        game = self._game(hours_out=2)
+        self._add_odds(game)
+        resp = self.client.post('/mockbets/bulk/place-recommended/')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data['success'])
+        self.assertIn('placed', data)
+        self.assertIn('skipped_existing', data)
+
+    def test_bulk_cancel_endpoint_requires_login(self):
+        anon = Client()
+        resp = anon.post('/mockbets/bulk/cancel-open/')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_bulk_endpoints_reject_get(self):
+        for url in ('/mockbets/bulk/place-recommended/', '/mockbets/bulk/cancel-open/'):
+            resp = self.client.get(url)
+            self.assertEqual(resp.status_code, 405)
+
+
 class CommandCenterTests(TestCase):
     """The build_command_center facade is the single source of analytics
     truth for the dashboard + AI summary. These tests cover the new

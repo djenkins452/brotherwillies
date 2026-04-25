@@ -14,4 +14,6 @@ urlpatterns = [
     path('<uuid:bet_id>/', views.bet_detail, name='bet_detail'),
     path('<uuid:bet_id>/review/', views.review_bet, name='review_bet'),
     path('<uuid:bet_id>/cancel/', views.cancel_bet, name='cancel_bet'),
+    path('bulk/place-recommended/', views.bulk_place_recommended, name='bulk_place_recommended'),
+    path('bulk/cancel-open/', views.bulk_cancel_open, name='bulk_cancel_open'),
 ]

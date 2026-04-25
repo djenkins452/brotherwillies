@@ -20,12 +20,45 @@
 /* ---------- Hub header ---------- */
 .mlb-hub__header {
     display: flex;
-    align-items: baseline;
+    align-items: flex-end;
+    justify-content: space-between;
     gap: 12px;
     margin-bottom: 18px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
 }
+
+/* Bulk action controls in the hub header. Greens / reds keep the
+   intent obvious without needing to read the label. */
+.mlb-bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.mlb-bulk-btn {
+    font-size: 0.78rem;
+    padding: 6px 12px;
+    font-weight: 700;
+}
+.mlb-bulk-btn--bet {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #fff;
+}
+.mlb-bulk-btn--bet:hover { background: #15803d; border-color: #15803d; }
+.mlb-bulk-btn--cancel {
+    background: transparent;
+    border: 1px solid #6b7280;
+    color: #9ca3af;
+}
+.mlb-bulk-btn--cancel:hover {
+    background: #6b7280;
+    color: #fff;
+}
+.mlb-bulk-btn:disabled { opacity: 0.6; cursor: wait; }
+.mlb-bulk-msg { font-size: 0.78rem; margin-left: 4px; }
 .mlb-hub__title {
     font-size: 28px;
     font-weight: 800;

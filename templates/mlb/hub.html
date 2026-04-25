@@ -9,9 +9,79 @@
 {% block content %}
 <div class="mlb-hub">
   <header class="mlb-hub__header">
-    <h1 class="mlb-hub__title">MLB</h1>
-    <p class="mlb-hub__subtitle">What matters right now</p>
+    <div>
+      <h1 class="mlb-hub__title">MLB</h1>
+      <p class="mlb-hub__subtitle">What matters right now</p>
+    </div>
+    {% if user.is_authenticated %}
+    <div class="mlb-bulk-actions">
+      <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet"
+              onclick="bulkPlaceRecommended()">
+        Bet All Recommended
+      </button>
+      <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--cancel"
+              onclick="bulkCancelOpen()">
+        Cancel All Open
+      </button>
+      <span id="mlb-bulk-msg" class="text-sm mlb-bulk-msg" style="display:none;"></span>
+    </div>
+    {% endif %}
   </header>
+  {% if user.is_authenticated %}
+  <script>
+  function _csrfToken() {
+      var c = document.cookie.split(';').find(function(x){return x.trim().startsWith('csrftoken=');});
+      return c ? c.split('=')[1] : '';
+  }
+  function _showBulkMsg(text, isErr) {
+      var el = document.getElementById('mlb-bulk-msg');
+      el.textContent = text;
+      el.style.color = isErr ? 'var(--red)' : '#22c55e';
+      el.style.display = 'inline';
+  }
+  function bulkPlaceRecommended() {
+      if (!window.confirm('Place a $100 mock bet on every recommended game you don\'t already have a pending bet on. Proceed?')) return;
+      var btn = event.currentTarget;
+      btn.disabled = true; btn.textContent = 'Placing…';
+      fetch('{% url "mockbets:bulk_place_recommended" %}', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': _csrfToken() },
+          credentials: 'same-origin',
+      })
+      .then(function(r){ return r.json().then(function(d){ return [r,d]; }); })
+      .then(function(arr) {
+          var r = arr[0], d = arr[1];
+          if (!r.ok) { _showBulkMsg(d.error || 'Bulk placement failed.', true); btn.disabled=false; btn.textContent='Bet All Recommended'; return; }
+          var msg = 'Placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
+          if (d.skipped_existing) msg += ' · ' + d.skipped_existing + ' already had pending bets';
+          if (d.skipped_no_odds) msg += ' · ' + d.skipped_no_odds + ' had no odds yet';
+          _showBulkMsg(msg, false);
+          setTimeout(function(){ window.location.reload(); }, 1200);
+      })
+      .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent='Bet All Recommended'; });
+  }
+  function bulkCancelOpen() {
+      if (!window.confirm('Cancel all your pending mock bets whose games haven\'t started yet?')) return;
+      var btn = event.currentTarget;
+      btn.disabled = true; btn.textContent = 'Cancelling…';
+      fetch('{% url "mockbets:bulk_cancel_open" %}', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': _csrfToken() },
+          credentials: 'same-origin',
+      })
+      .then(function(r){ return r.json().then(function(d){ return [r,d]; }); })
+      .then(function(arr) {
+          var r = arr[0], d = arr[1];
+          if (!r.ok) { _showBulkMsg(d.error || 'Bulk cancel failed.', true); btn.disabled=false; btn.textContent='Cancel All Open'; return; }
+          var msg = 'Cancelled ' + d.cancelled + ' bet' + (d.cancelled === 1 ? '' : 's');
+          if (d.skipped_started) msg += ' · ' + d.skipped_started + ' already started (kept)';
+          _showBulkMsg(msg, false);
+          setTimeout(function(){ window.location.reload(); }, 1200);
+      })
+      .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent='Cancel All Open'; });
+  }
+  </script>
+  {% endif %}
 
   {% if focus %}
     {% include "mlb/_focus_banner.html" with focus=focus %}
