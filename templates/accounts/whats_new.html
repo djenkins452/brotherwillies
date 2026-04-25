@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-25-decision-intel">Apr 25, 2026 &mdash; Decision Intelligence Era</a> <span class="text-sm text-muted">&bull; Recommendation engine, CLV tracking, de-vigged edges, Postgame Command Center, bulk actions</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-injuries">Apr 19, 2026 &mdash; MLB Injury Ingestion</a> <span class="text-sm text-muted">&bull; Per-team injury data from ESPN, surfaced on every tile</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-focus">Apr 19, 2026 &mdash; Confidence, Focus Engine, ESPN odds</a> <span class="text-sm text-muted">&bull; 0–100% confidence, 🔥 Focus banner, 🎯 Bet Placed, ESPN DraftKings fallback</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-guided-choice">Apr 19, 2026 &mdash; Guided Choice + Odds Integrity</a> <span class="text-sm text-muted">&bull; Primary/Secondary actions, ★ Top Opportunity, line-value signal, fail-fast odds pipeline</span></li>
@@ -27,6 +28,98 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 25 — Decision Intelligence Era                                    #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-25-decision-intel">
+    <p class="card-title">Apr 25, 2026 &mdash; Decision Intelligence Era</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A series of upgrades that take the system from "show interesting analysis" to "tell me what to bet, why, and whether the system is actually working." All changes preserve every game on the page — nothing is hidden — and the math is honest about its own limits.</p>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🎯 Recommendation engine + tiers</p>
+        <p class="text-sm">
+            Every game with odds now produces a single concrete pick: team + bet type + line + odds. Picks are classified into <strong>Elite</strong> (edge ≥ 8 pp), <strong>Strong</strong> (≥ 6 pp), or <strong>Standard</strong>, with a slate-level cap of 2 elites max so the "🔥 High Confidence" signal stays rare. A separate decision-rule layer marks each pick <strong>Recommended</strong> or <strong>Not Recommended</strong> based on edge thresholds and a heavy-favorite juice gate.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🛡 De-vigged edges (more honest math)</p>
+        <p class="text-sm">
+            Edge is now computed against the <em>fair</em> (vig-removed) market probability instead of the raw vig-included implied probability. On a -110/-110 line that means the baseline is 50/50, not 52.4/52.4. Some bets that previously looked like value drop out; some that looked like fades become real opportunities. Fewer recommendations, but the ones we make are real.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">📈 CLV (Closing Line Value) tracking</p>
+        <p class="text-sm">
+            Every settled bet now records the closing market price and computes CLV — did your bet's price beat the close? Positive CLV is the professional's leading-indicator signal of real edge: it resolves at game start (not after 500 settled bets) and survives losses. Surfaced as <code>+4.2% · Beat Market</code> on the bet row, with the full line movement <code>(-120 → -135)</code>.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🏟 MLB Hub → Decision Board</p>
+        <p class="text-sm">
+            The MLB hub used to be a schedule-grouped page (Live / Today / Upcoming). It's now organized around what the system thinks: <strong>🔥 Top Plays Today</strong> (elite tier, capped at 2), <strong>👍 Recommended Bets</strong>, and <strong>⚠ Not Recommended</strong> (dimmed, still clickable). Every game still appears — the partition is by decision quality, not by hiding. CTAs adapt: "Bet This" (green) for recommended, "Not Recommended" (grey but clickable) for fades.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">📊 Postgame Command Center</p>
+        <p class="text-sm">
+            <a href="/mockbets/analytics/">Mock Bet Analytics</a> got a top-to-bottom redesign:
+        </p>
+        <ul style="padding-left:20px;margin-top:4px;">
+            <li class="text-sm" style="line-height:1.6;"><strong>System Verdict panel</strong> — STRONG / NEUTRAL / WEAK with HIGH/MED/LOW confidence band based on sample size. Reasons + warnings spelled out so you know exactly why.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Hero KPIs</strong> — Net P/L · ROI · Record · CLV %+ · System Confidence in five large cards above everything else.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Result Drivers</strong> — Best Wins, Worst Losses, Best/Worst CLV, Biggest Misses (recommended/elite losses), Best Validations (recommended wins with positive CLV).</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Where Is My Edge?</strong> — Performance by edge bucket (0-2pp / 2-4pp / 4-6pp / 6pp+) with win rate, ROI, and CLV %+ per bucket.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Decision Quality</strong> column — every settled bet pilled as Perfect (win+CLV) / Got Lucky / Unlucky / Bad Bet / Neutral.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Quick time filters</strong> — Today / Yesterday / 7d / 30d / All time chips at the top.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>AI Postgame Summary</strong> — plain-English narrative answering "did the system make good decisions?", "where is the strongest edge?", "did we beat the market?" Falls back to a deterministic narrative when OpenAI is unavailable; never blank.</li>
+            <li class="text-sm" style="line-height:1.6;"><strong>Full Bet Ledger</strong> — 12-column table with every bet and its CLV, tier, status, and Decision Quality.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🔍 Why This Lost</p>
+        <p class="text-sm">
+            When a bet settles to a loss, we now classify it as <strong>variance</strong> (good edge, just unlucky), <strong>model_error</strong> (high confidence, no edge), <strong>market_movement</strong> (market disagreed with us at close), or <strong>bad_edge</strong> (shouldn't have taken it). Surfaced on the bet detail page with a "Bad Luck / Model Miss / Weak Edge / Market Misread" badge plus the actual miss numbers.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">⚡ Bulk actions on the MLB hub</p>
+        <p class="text-sm">
+            Two new buttons in the hub header. <strong>"Bet All Recommended"</strong> places a $100 mock bet on every game whose recommendation is "recommended" and you don't already have a pending bet on — transactional, idempotent, runs the same eligibility guards as per-bet placement. <strong>"Cancel All Open"</strong> deletes every pending mock bet whose game hasn't started yet, across all sports. Both gated by a confirm prompt.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">↩ Cancel a single bet</p>
+        <p class="text-sm">
+            Bet detail pages now show a red "Cancel This Bet" button when the underlying game hasn't started yet. Click → confirm → the bet is deleted from your record. Once the game's first pitch passes (status flips OR the time check fires), the button disappears — bets locked in stay locked in.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🎯 "Why This Is a Top Play" on elite cards</p>
+        <p class="text-sm">
+            Elite-tier model picks now include a bulleted explanation directly on the banner: edge in pp, market mispricing call when edge ≥ 8 pp, top-of-slate framing, projected win probability when ≥ 70%. Pure presentation — no new modeling, just surfacing the reasoning the system already used.
+        </p>
+    </div>
+
+    <div class="mb-2">
+        <p class="text-sm" style="color:var(--text-primary);font-weight:600;">🔧 Operations &amp; reliability</p>
+        <p class="text-sm">
+            Lightweight 15-minute "scores + settle" cron path (separate from the 6-hour heavy data refresh). Configurable score-update window via env vars. Per-provider health logs and structured cycle summaries. Robust ESPN odds fallback with multi-shape moneyline extraction. Explicit <code>commenceTimeFrom</code> window on the primary Odds API call so today's games stay in the payload even close to first pitch.
+        </p>
+    </div>
+
+    <p class="text-sm text-muted" style="margin-top:12px;">
+        For complete commit history, see the <code>docs/changelog.md</code> file in the repo. As always, simulated analytics — not advice. Past simulated performance does not predict future outcomes.
+    </p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

@@ -367,9 +367,27 @@
         <strong>No real money is involved</strong> &mdash; this is a decision-quality analysis tool.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Placing a Mock Bet:</strong> From any game detail page (CFB, CBB, MLB, or College Baseball), tap "Place Mock Bet" to open the
+        <strong>Placing a Mock Bet (single):</strong> From any game detail page (CFB, CBB, MLB, or College Baseball), tap "Place Mock Bet" to open the
         placement modal. Choose a bet type (moneyline, spread, total), enter your selection and odds, set a simulated
-        stake amount, and choose a confidence level and model source (House or Your Model).
+        stake amount, and choose a confidence level and model source (House or Your Model). When the model has produced
+        a recommendation for the game, the button reads <strong>"Place Mock Bet on Model Pick"</strong> and the modal pre-fills
+        with the recommendation's pick and odds.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Bulk: "Bet All Recommended" (MLB hub):</strong> Two buttons in the MLB hub header let you act on the entire
+        slate at once. The green <strong>Bet All Recommended</strong> button places a $100 mock bet on every game whose
+        recommendation status is "recommended" and you don't already have a pending bet on. Transactional and idempotent —
+        running it twice will not create duplicates. Started games and games without odds are skipped automatically.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Bulk: "Cancel All Open":</strong> The grey-outlined button next to "Bet All Recommended" deletes every
+        pending mock bet whose game hasn't started yet, across all sports. Bets on games that are already live or final
+        are kept (they're locked-in records by then).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Cancelling a single bet:</strong> Open any pending bet's detail page (<code>/mockbets/&lt;id&gt;/</code>) and
+        click the red "Cancel This Bet" button. The button is only shown while the underlying game hasn't started yet — once
+        first pitch / kickoff / tipoff passes, cancellation is no longer possible (the bet is locked in for analytics).
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Golf Bets:</strong> Navigate to <a href="/golf/">Golf</a> and tap any tournament to open the
@@ -381,11 +399,21 @@
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Settlement:</strong> When a game finalizes, pending bets are automatically resolved. Payouts are
         calculated from the American odds locked in at placement time. Win/Loss/Push results are determined by the
-        actual game outcome.
+        actual game outcome. The settlement engine also captures the <strong>closing line value (CLV)</strong> for each
+        team-sport moneyline bet at this point so analytics can compare your bet price to the market's final close.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>My Mock Bets Dashboard:</strong> View all your simulated bets with KPI cards showing total bets,
-        win rate, simulated net P/L, and simulated ROI. Filter by sport and result status.
+        <strong>My Mock Bets Dashboard:</strong> View all your simulated bets with a bankroll summary header
+        (Total Wagered, Total Won, Total Lost, Net Profit, W-L-P record). Each bet card shows stake, payout, net result,
+        the result badge (✓ WIN / ✗ LOSS / PUSH / PENDING), and CLV when available (e.g. <code>+4.2% · Beat Market</code>
+        with the line movement <code>-120 → -135</code>). Filter by sport and result status.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Why This Lost:</strong> When a bet settles to a loss, we classify it on the detail page as
+        <strong>Bad Luck</strong> (good edge, just unlucky), <strong>Model Miss</strong> (overconfident model),
+        <strong>Market Misread</strong> (market disagreed with us at close), or <strong>Weak Edge</strong>
+        (shouldn't have been taken). Bets placed before the snapshot fields landed will show "Unknown" — no honest
+        classification is possible without the at-bet-time data.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Decision Review:</strong> After a bet settles, flag it as "Would Repeat" or "Would Avoid" and
@@ -399,14 +427,71 @@
 
 {# ── 11. Mock Bet Analytics ────────────────────────────────────────── #}
 <div class="card mb-2" id="mock-analytics">
-    <p class="card-title">11. Mock Bet Analytics</p>
+    <p class="card-title">11. Mock Bet Analytics &mdash; Postgame Command Center</p>
     <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;">
-        The <a href="/mockbets/analytics/">Analytics Dashboard</a> provides comprehensive performance analysis
-        of your mock betting history. Access it from the "Analytics Dashboard" button on the My Mock Bets page.
+        The <a href="/mockbets/analytics/">Analytics Dashboard</a> is a decision-quality command center that answers
+        five questions: <em>How did I do? · Did I beat the market? · Did the recommendation engine perform? · Were
+        Top Plays better than regular picks? · What should I learn?</em> Access it from the "Analytics Dashboard"
+        button on the My Mock Bets page.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Quick time filters:</strong> Chip row at the top — Today / Yesterday / Last 7 days / Last 30 days /
+        All time. Click one and the entire dashboard re-scopes to that window.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>System Verdict panel:</strong> Color-coded card at the top of the page (green / yellow / red border)
+        announcing <strong>STRONG / NEUTRAL / WEAK</strong> with a HIGH/MEDIUM/LOW confidence band based on sample
+        size. Bullet list of reasons + warnings spelled out. STRONG requires CLV %+ ≥ 60, ROI &gt; 0, and at least
+        25 settled bets. WEAK fires on any negative ROI or CLV %+ &lt; 50%. Sample size band is independent of verdict
+        — a STRONG verdict on 8 bets is still LOW confidence.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Hero KPIs:</strong> Five large cards — Net P/L, ROI, Record (W-L-P), CLV %+ (% of bets that beat the
+        closing line), System Confidence Score. Each card is color-coded green/red by direction.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>AI Postgame Summary:</strong> Plain-English narrative answering "Did the system make good
+        decisions?", "Where is the strongest edge?", and "Did we beat the market?" Lazy-loaded panel that calls
+        OpenAI with the deterministic facts only — never invents data, never gives real-money advice. Falls back to a
+        deterministic narrative when OpenAI is unavailable; the panel is never blank. The AI cannot override the
+        System Verdict — it can only summarize and contextualize it.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Result Drivers:</strong> Six small lists explaining the day — <em>Best Wins</em> (top 5 by payout),
+        <em>Worst Losses</em> (top 5 by stake), <em>Best CLV</em>, <em>Worst CLV</em>, <em>Biggest Misses</em>
+        (recommended/elite losses), and <em>Best Validations</em> (recommended/elite wins WITH positive CLV — the
+        system did its job).
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Market Validation (CLV):</strong> Aggregate CLV %+, average CLV, plus the best and worst single bets
+        for the period. CLV is the leading indicator of edge — it resolves at game start, not after hundreds of
+        settled bets.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Where Is My Edge? (Edge Buckets):</strong> Performance grouped by snapshot edge bucket: 0-2pp /
+        2-4pp / 4-6pp / 6pp+. Each row shows count, win rate, ROI, and CLV %+. If a higher bucket consistently
+        outperforms a lower one, the data is telling you to raise the minimum edge threshold.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Recommendation Performance tables:</strong> By Status (Recommended vs Not Recommended) and By Tier
+        (Elite / Strong / Standard) — each showing bets, win rate, ROI, net P/L, and CLV %+. Target: Recommended
+        should outperform Not Recommended; Elite should outperform Strong.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Bet Ledger:</strong> Full row-by-row table of every bet with When · Sport · Selection · Type · Odds ·
+        Stake · Result · Net · CLV · Tier · Status · <strong>Decision Quality</strong>. The Decision Quality column
+        combines outcome with CLV: <em>Perfect</em> (win + +CLV — the process earned it), <em>Got Lucky</em> (win + -CLV —
+        process didn't), <em>Unlucky</em> (loss + +CLV — variance, process was right), <em>Bad Bet</em> (loss + -CLV —
+        process was wrong), <em>Neutral</em> (push). Bets without CLV captured show "—".
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Filters:</strong> Narrow your analysis by sport, bet type, confidence level, model source, and date
         range. All KPIs and charts update to reflect your selection.
+    </p>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Current-rules only filter:</strong> A checkbox in the filter bar excludes bets placed before the
+        decision rules + snapshot fields landed. Use this to scope analytics to the post-rules era when comparing
+        to the system's current behavior.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Charts:</strong> Five interactive Chart.js visualizations &mdash; Cumulative P/L (time-series),
@@ -490,8 +575,28 @@
                     <td>A straight bet on which team wins. Expressed as American odds: -150 means bet $150 to win $100 (favorite), +200 means bet $100 to win $200 (underdog).</td>
                 </tr>
                 <tr>
-                    <td><strong>Confidence</strong></td>
-                    <td>Data quality indicator. HIGH = fresh odds + injury data available. MED = odds within 12 hours. LOW = stale odds or missing data. Higher confidence means more reliable model output.</td>
+                    <td><strong>Data Confidence</strong></td>
+                    <td>Data-input quality (NOT a bet recommendation). Labeled <code>Data: HIGH/MED/LOW</code> in the UI. HIGH = fresh odds + both starters known. MED = odds within 12 hours. LOW = stale odds or missing data. A "Data: HIGH" game can still be "Not Recommended" — they measure different things.</td>
+                </tr>
+                <tr>
+                    <td><strong>Recommendation Status</strong></td>
+                    <td><strong>Recommended</strong> or <strong>Not Recommended</strong>. Determined by decision rules: edge ≥ 4 pp (minimum) AND not a heavy-juice favorite without strong edge. Elite-tier picks (edge ≥ 8 pp) override the juice gate.</td>
+                </tr>
+                <tr>
+                    <td><strong>Tier</strong></td>
+                    <td>Strength of the recommendation. <em>Elite</em> = edge ≥ 8 pp (capped at 2 per slate). <em>Strong</em> = edge ≥ 6 pp. <em>Standard</em> = otherwise.</td>
+                </tr>
+                <tr>
+                    <td><strong>De-vigged Edge</strong></td>
+                    <td>Edge computed against the <em>fair</em> (vig-removed) market probability instead of the raw vig-included implied probability. On a -110/-110 line, the de-vigged baseline is 50/50, not 52.4/52.4.</td>
+                </tr>
+                <tr>
+                    <td><strong>Decision Quality</strong></td>
+                    <td>Per-bet classification combining outcome with CLV. <em>Perfect</em> = win + +CLV. <em>Got Lucky</em> = win + -CLV. <em>Unlucky</em> = loss + +CLV. <em>Bad Bet</em> = loss + -CLV. <em>Neutral</em> = push.</td>
+                </tr>
+                <tr>
+                    <td><strong>System Verdict</strong></td>
+                    <td>Aggregate trust signal in the analytics dashboard. <strong>STRONG</strong> = CLV %+ ≥ 60 AND ROI &gt; 0 AND ≥ 25 settled bets. <strong>WEAK</strong> = ROI &lt; 0 OR CLV %+ &lt; 50. <strong>NEUTRAL</strong> otherwise. Each verdict carries a confidence band (HIGH/MEDIUM/LOW) tied to sample size.</td>
                 </tr>
                 <tr>
                     <td><strong>Brier Score</strong></td>
@@ -499,7 +604,7 @@
                 </tr>
                 <tr>
                     <td><strong>CLV (Closing Line Value)</strong></td>
-                    <td>Whether the betting market moved toward the model's prediction by game time. Positive CLV suggests the model identified value before the market did.</td>
+                    <td>Whether your bet's price beat the market's final close. Positive CLV = you got a better price than what the line settled at by game start. Computed as <code>bet_decimal_odds &minus; close_decimal_odds</code> at settlement. Captured for moneyline bets on team sports when a pre-game OddsSnapshot exists. Surfaced as <code>+4.2% · Beat Market</code> on the bet row plus the line movement <code>(-120 → -135)</code>.</td>
                 </tr>
                 <tr>
                     <td><strong>Calibration</strong></td>

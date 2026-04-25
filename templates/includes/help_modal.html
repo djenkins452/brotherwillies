@@ -88,9 +88,11 @@
                 </ul>
 
             {% elif help_key == 'mlb_hub' %}
-                <h4>MLB Hub</h4>
+                <h4>MLB Hub &mdash; Decision Board</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> A priority-driven command center for real MLB games. Live games and today's schedule are shown as horizontally-scrolling tiles; everything after today is a chronological list below.</li>
+                    <li><strong>What is this page?</strong> A decision-driven command center for real MLB games. Today's games are partitioned into three sections by the recommendation engine: <strong>🔥 Top Plays Today</strong> (elite tier, capped at 2), <strong>👍 Recommended Bets</strong>, and <strong>⚠ Not Recommended</strong> (dimmed, still clickable). Every game still appears — the partition is by decision quality, not by hiding. A separate "Upcoming" section below covers future-day schedule context.</li>
+                    <li><strong>Bulk actions (in the header)</strong> — <strong>Bet All Recommended</strong> places a $100 mock bet on every game whose recommendation is "recommended" and you don't already have a pending bet on. <strong>Cancel All Open</strong> deletes every pending mock bet whose game hasn't started yet, across all sports. Both have a confirm prompt and run the same eligibility guards as per-bet placement.</li>
+                    <li><strong>Tile CTAs</strong> — When the model recommends the bet, the button reads <em>Bet This</em> (green). When the model says fade, it reads <em>Not Recommended</em> (grey, still clickable). Bets you already placed show <em>Your Bet · &lt;selection&gt; (&lt;odds&gt;)</em> with a target icon.</li>
                     <li><strong>Priority chips</strong> — An amber <em>Priority</em> chip or grey <em>Watch</em> chip means our signals layer has flagged this game as worth your attention. A short "why" line on each tile tells you what triggered it (close spread, tight live score, key injury, ace pitching matchup).</li>
                     <li><strong>Action tags</strong> — 🔥 <em>Watch Now</em> (red) marks live games that are close, late in play, or ace pitching matchups that aren't blowouts. 💰 <em>Best Bet</em> (green) marks games where we see a real edge: a tight spread or a meaningful gap between our model's win probability and the market's (≥6%), <em>and</em> both starters are known. When both fire on the same game, Best Bet is the Primary action and Watch Now becomes secondary. When a pitcher is TBD, Best Bet is intentionally suppressed.</li>
                     <li><strong>★ Top Opportunity</strong> — Only the single highest-confidence Best Bet across the whole page earns a gold ★ Top Opportunity tag. Scarcity is the point: one tag you can trust is more useful than ten tags you have to second-guess.</li>
@@ -292,21 +294,33 @@
             {% elif help_key == 'mock_bets' %}
                 <h4>My Mock Bets</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> A simulation dashboard where you track hypothetical bets you've placed across CFB, CBB, and Golf. No real money is involved — this is purely for evaluating your decision-making over time.</li>
-                    <li><strong>KPI Cards</strong> — Show your total simulated bets, win rate, net simulated P/L, and simulated ROI across all settled bets. All figures are simulated, not real.</li>
-                    <li><strong>Filters</strong> — Filter by sport (CFB/CBB/Golf) and result (Pending/Win/Loss). Use these to focus your analysis on specific segments.</li>
-                    <li><strong>Placing a mock bet</strong> — From any game detail page, tap "Place Mock Bet" to open the placement modal. Fill in bet type, selection, odds, stake, confidence, and model source. The bet is recorded as a simulation.</li>
-                    <li><strong>Settlement</strong> — Pending bets are automatically settled when the underlying game finalizes. Win/Loss/Push is determined by the game outcome vs your selection. Payouts are calculated from the American odds you locked in.</li>
+                    <li><strong>What is this page?</strong> A simulation dashboard where you track hypothetical bets you've placed across CFB, CBB, MLB, College Baseball, and Golf. No real money is involved — this is purely for evaluating your decision-making over time.</li>
+                    <li><strong>Bankroll Summary</strong> — Header card always visible: Total Wagered, Total Won, Total Lost, Net Profit, and Record (W-L-P) plus pending count. Math sourced from the same KPI helper as the analytics dashboard.</li>
+                    <li><strong>Bet cards</strong> — Each row shows the result badge (✓ WIN / ✗ LOSS / PUSH / PENDING), stake, payout (or loss amount), net result, and <strong>CLV</strong> when captured (e.g. <code>+4.2% · Beat Market</code> with line movement <code>-120 → -135</code>). Lost bets also surface a "Loss Reason" badge — Bad Luck / Model Miss / Market Misread / Weak Edge — based on the snapshot edge and CLV at bet time.</li>
+                    <li><strong>Filters</strong> — Filter by sport (CFB/CBB/MLB/CB/Golf), result (Pending/Win/Loss), bet type, confidence, and model source.</li>
+                    <li><strong>Placing a mock bet</strong> — From any game detail page, tap "Place Mock Bet" (or "Place Mock Bet on Model Pick" when a recommendation exists) to open the placement modal. Fill in bet type, selection, odds, stake, confidence, and model source. The bet snapshots the recommendation status / tier / confidence at placement time so analytics use what the system knew then, not what it knows now.</li>
+                    <li><strong>Cancellation</strong> — While the underlying game hasn't started yet, the bet detail page shows a red "Cancel This Bet" button. Click → confirm → the bet is removed from your record. Once first pitch / kickoff / tipoff passes, the button disappears and the bet is locked in for analytics.</li>
+                    <li><strong>Bulk cancel (MLB hub)</strong> — The "Cancel All Open" button in the MLB hub header deletes every pending mock bet whose game hasn't started yet, across all sports.</li>
+                    <li><strong>Settlement</strong> — Pending bets are automatically settled when the underlying game finalizes. Win/Loss/Push is determined by the game outcome vs your selection. Payouts are calculated from the American odds you locked in. The settlement engine also captures the closing line value (CLV) for moneyline bets at this point.</li>
                     <li><strong>Decision Review</strong> — After a bet settles, you can flag it as "Would Repeat" or "Would Avoid" and add reflection notes. This builds a feedback loop for improving your analytical process.</li>
                     <li><strong>Golf bets</strong> — Golf supports realistic bet types: Outright Winner, Top 5/10/20 Finish, Make the Cut, and Head-to-Head Matchups.</li>
                     <li><strong>Important:</strong> This is a simulated analytics tool. No real money, no payouts, no betting advice. For learning and decision evaluation only.</li>
                 </ul>
 
             {% elif help_key == 'mock_analytics' %}
-                <h4>Mock Bet Analytics</h4>
+                <h4>Mock Bet Analytics &mdash; Postgame Command Center</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> A comprehensive analytics dashboard for your simulated betting history. Charts, comparison tables, variance metrics, and what-if simulations — all built from your mock bet data.</li>
-                    <li><strong>Filters</strong> — Narrow analysis by sport, bet type, confidence level, model source, and date range. All charts and metrics update based on your filter selection.</li>
+                    <li><strong>What is this page?</strong> A decision-quality command center that answers: <em>How did I do? Did I beat the market? Did the recommendation engine perform? Were Top Plays better than regular picks? What should I learn?</em></li>
+                    <li><strong>Quick Time Filters</strong> — Chips at the top: Today / Yesterday / Last 7 days / Last 30 days / All time. Click one and the entire dashboard re-scopes.</li>
+                    <li><strong>System Verdict panel</strong> — Color-coded card announcing <strong>STRONG / NEUTRAL / WEAK</strong> with HIGH/MED/LOW confidence band. STRONG requires CLV %+ ≥ 60, ROI &gt; 0, and ≥ 25 settled bets. WEAK fires on negative ROI or CLV %+ &lt; 50%. The panel spells out reasons + warnings inline.</li>
+                    <li><strong>Hero KPIs</strong> — Five large cards: Net P/L, ROI, Record (W-L-P), CLV %+ (% of bets that beat the closing line), System Confidence Score.</li>
+                    <li><strong>AI Postgame Summary</strong> — Plain-English narrative answering "Did the system make good decisions?", "Where is the strongest edge?", "Did we beat the market?" Lazy-loaded; falls back to a deterministic narrative when OpenAI is unavailable. The AI cannot override the System Verdict — it can only summarize.</li>
+                    <li><strong>Result Drivers</strong> — Six small lists: Best Wins, Worst Losses, Best/Worst CLV, <em>Biggest Misses</em> (recommended/elite losses), <em>Best Validations</em> (recommended/elite wins WITH positive CLV).</li>
+                    <li><strong>Market Validation (CLV)</strong> — Aggregate CLV %+, average CLV, and the best/worst single bets by CLV.</li>
+                    <li><strong>Where Is My Edge?</strong> — Performance by edge bucket (0-2pp / 2-4pp / 4-6pp / 6pp+) with win rate, ROI, and CLV %+ per bucket. If a higher bucket consistently outperforms a lower one, raise your minimum-edge threshold.</li>
+                    <li><strong>Recommendation Performance</strong> — By Status (Recommended vs Not Recommended) and By Tier (Elite/Strong/Standard). Target signal: Recommended should outperform Not Recommended; Elite should outperform Strong.</li>
+                    <li><strong>Bet Ledger</strong> — Full row-by-row table including a <strong>Decision Quality</strong> column that classifies each settled bet: Perfect (win + +CLV), Got Lucky (win + -CLV), Unlucky (loss + +CLV), Bad Bet (loss + -CLV), or Neutral (push).</li>
+                    <li><strong>Filters</strong> — Standard form filters: sport, bet type, confidence, model source, date range. Plus a "Current-rules only" checkbox to exclude bets placed before the snapshot fields landed.</li>
                     <li><strong>KPI Cards</strong> — Summarize total bets, win-loss-push record, win rate, simulated net P/L, simulated ROI, average odds, and average implied probability.</li>
                     <li><strong>Cumulative P/L Chart</strong> — Time-series showing your running simulated profit/loss. An upward trend means your selections have been profitable in simulation.</li>
                     <li><strong>Rolling Win %</strong> — Your win rate over a sliding 10-bet window. Helps spot hot and cold streaks in your analysis.</li>
@@ -325,7 +339,10 @@
             {% elif help_key == 'mock_bet_detail' %}
                 <h4>Mock Bet Detail</h4>
                 <ul>
-                    <li><strong>What is this page?</strong> A detailed view of a single simulated bet showing all parameters (odds, stake, confidence, model source), the settlement result, and your decision review notes.</li>
+                    <li><strong>What is this page?</strong> A detailed view of a single simulated bet showing all parameters (odds, stake, confidence, model source), the settlement result, CLV (when captured), and your decision review notes.</li>
+                    <li><strong>CLV row</strong> — In the Bet Details table, shows your closing line value as <code>+4.2% · Beat Market</code> with the line movement <code>-120 → -135</code>. Captured at settlement for moneyline bets on team sports when a pre-game OddsSnapshot exists.</li>
+                    <li><strong>Why This Lost</strong> — On a lost bet, this card classifies the loss as Bad Luck / Model Miss / Market Misread / Weak Edge based on the snapshot edge and CLV at bet time. Bets without snapshot data show "Unknown" rather than a fabricated reason.</li>
+                    <li><strong>Cancel This Bet</strong> — While the underlying game hasn't started yet, a red button lets you cancel (delete) the bet. Once first pitch / kickoff / tipoff passes, the button disappears.</li>
                     <li><strong>Settlement Log</strong> — Shows the audit trail of how and why the bet was settled, including the specific game outcome that determined the result.</li>
                     <li><strong>Decision Review</strong> — Flag this bet as "Would Repeat" or "Would Avoid" and add reflection notes to improve your future analysis.</li>
                 </ul>
