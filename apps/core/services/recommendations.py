@@ -101,6 +101,35 @@ def compute_status(model_edge: float, odds_american: int):
     return STATUS_RECOMMENDED, ''
 
 
+def top_play_reasons(model_edge, confidence_score, tier, status) -> list:
+    """Bulleted explanation for why a recommendation qualifies as a top play.
+
+    Used on the elite-tier banner so users see the *justification* — not just
+    the conclusion. Pure presentation: derives from already-computed fields,
+    never re-runs the decision rules.
+    """
+    bullets = []
+    if model_edge is not None:
+        try:
+            bullets.append(f"+{float(model_edge):.1f}pp model edge over fair-value market")
+        except (TypeError, ValueError):
+            pass
+    if model_edge is not None and float(model_edge) >= ELITE_EDGE:
+        bullets.append("Market mispricing detected (≥8pp edge — elite threshold)")
+    if tier == 'elite':
+        bullets.append("Top-of-slate pick (capped at 2 elites per cycle)")
+    if confidence_score is not None:
+        try:
+            cs = float(confidence_score)
+            if cs >= 70:
+                bullets.append(f"High projected win probability ({cs:.0f}%)")
+        except (TypeError, ValueError):
+            pass
+    if status == STATUS_RECOMMENDED:
+        bullets.append("Cleared decision rules: edge threshold + juice gate")
+    return bullets
+
+
 def status_label(status: str) -> str:
     return _STATUS_LABELS.get(status, '')
 
@@ -144,6 +173,10 @@ class Recommendation:
     @property
     def status_reason_label(self) -> str:
         return _STATUS_REASON_LABELS.get(self.status_reason or '', '')
+
+    @property
+    def top_play_reasons(self) -> list:
+        return top_play_reasons(self.model_edge, self.confidence_score, self.tier, self.status)
 
     @property
     def is_recommended(self) -> bool:

@@ -251,6 +251,58 @@ class MockBet(models.Model):
         from apps.core.utils.odds import format_line_movement
         return format_line_movement(self.odds_american, self.closing_odds_american)
 
+    # --- Decision Quality ---------------------------------------------------
+    # Per-bet classification combining outcome with CLV: did the system make
+    # a *good decision* even when the result was bad (or vice-versa)? CLV is
+    # the leading-indicator signal; outcome is variance-bound. Together they
+    # tell you if a bet was process-correct or process-flawed.
+    #
+    #   win  + +CLV → Perfect
+    #   win  + -CLV → Got Lucky (process didn't earn it)
+    #   loss + +CLV → Unlucky (process was right, variance hit)
+    #   loss + -CLV → Bad Bet (process was wrong AND it lost)
+    #   push        → Neutral
+    #
+    # Returns '' when the bet doesn't have CLV captured (pre-CLV bets,
+    # bets with no closing snapshot) or is still pending — there's no
+    # honest classification without both legs.
+    DECISION_QUALITY_LABELS = {
+        'perfect': 'Perfect',
+        'lucky': 'Got Lucky',
+        'unlucky': 'Unlucky',
+        'bad': 'Bad Bet',
+        'neutral': 'Neutral',
+    }
+    DECISION_QUALITY_CLASSES = {
+        'perfect': 'dq-perfect',
+        'lucky': 'dq-lucky',
+        'unlucky': 'dq-unlucky',
+        'bad': 'dq-bad',
+        'neutral': 'dq-neutral',
+    }
+
+    @property
+    def decision_quality(self) -> str:
+        if self.result == 'pending':
+            return ''
+        if self.result == 'push':
+            return 'neutral'
+        if self.clv_cents is None:
+            return ''
+        if self.result == 'win':
+            return 'perfect' if self.clv_direction == 'positive' else 'lucky'
+        if self.result == 'loss':
+            return 'unlucky' if self.clv_direction == 'positive' else 'bad'
+        return ''
+
+    @property
+    def decision_quality_label(self) -> str:
+        return self.DECISION_QUALITY_LABELS.get(self.decision_quality, '')
+
+    @property
+    def decision_quality_class(self) -> str:
+        return self.DECISION_QUALITY_CLASSES.get(self.decision_quality, '')
+
     # --- Cancellation eligibility -------------------------------------------
     # A user can cancel (delete) a pending mock bet IF and only IF the
     # underlying game has not started yet. Once a game is live or final,

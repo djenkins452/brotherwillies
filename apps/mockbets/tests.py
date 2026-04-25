@@ -1010,6 +1010,227 @@ class CLVCaptureTests(TestCase):
         self.assertEqual(bet.clv_direction, 'positive')
 
 
+class DecisionQualityTests(TestCase):
+    """MockBet.decision_quality combines outcome with CLV direction."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('dq_user', password='pw')
+
+    def _bet(self, result, clv=None, direction=''):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('100') if result == 'win' else None,
+            result=result,
+            clv_cents=clv,
+            clv_direction=direction or '',
+        )
+
+    def test_perfect_when_win_plus_positive_clv(self):
+        bet = self._bet('win', clv=0.05, direction='positive')
+        self.assertEqual(bet.decision_quality, 'perfect')
+        self.assertEqual(bet.decision_quality_label, 'Perfect')
+        self.assertEqual(bet.decision_quality_class, 'dq-perfect')
+
+    def test_lucky_when_win_plus_negative_clv(self):
+        bet = self._bet('win', clv=-0.03, direction='negative')
+        self.assertEqual(bet.decision_quality, 'lucky')
+
+    def test_unlucky_when_loss_plus_positive_clv(self):
+        bet = self._bet('loss', clv=0.04, direction='positive')
+        self.assertEqual(bet.decision_quality, 'unlucky')
+
+    def test_bad_when_loss_plus_negative_clv(self):
+        bet = self._bet('loss', clv=-0.02, direction='negative')
+        self.assertEqual(bet.decision_quality, 'bad')
+
+    def test_neutral_for_push(self):
+        bet = self._bet('push', clv=0.01, direction='positive')
+        self.assertEqual(bet.decision_quality, 'neutral')
+
+    def test_empty_when_pending(self):
+        bet = self._bet('pending')
+        self.assertEqual(bet.decision_quality, '')
+
+    def test_empty_when_clv_missing(self):
+        """Honest classification requires both legs — no CLV, no DQ."""
+        bet = self._bet('win', clv=None, direction='')
+        self.assertEqual(bet.decision_quality, '')
+
+
+class SystemVerdictTests(TestCase):
+    """compute_system_verdict deterministic logic."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('verdict_user', password='pw')
+
+    def _bet(self, result, clv=None, direction='', stake='100', payout=None):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal(stake),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+            clv_cents=clv,
+            clv_direction=direction or '',
+            settled_at=timezone.now() if result != 'pending' else None,
+        )
+
+    def _cc(self):
+        from apps.mockbets.services.command_center import build_command_center
+        return build_command_center(MockBet.objects.filter(user=self.user))
+
+    def test_strong_verdict_with_strong_signals(self):
+        # 25 settled bets, 17 wins (68% win rate, +ROI), CLV 70%+
+        for _ in range(17):
+            self._bet('win', clv=0.05, direction='positive', payout='100')
+        for _ in range(8):
+            self._bet('loss', clv=0.02, direction='positive')
+        cc = self._cc()
+        self.assertEqual(cc['system_verdict']['verdict'], 'STRONG')
+        # 25 settled bets — under MEDIUM threshold (30) so confidence is LOW
+        self.assertEqual(cc['system_verdict']['confidence_level'], 'LOW')
+        joined = ' '.join(cc['system_verdict']['reasons'])
+        self.assertIn('CLV', joined)
+
+    def test_weak_verdict_when_negative_roi(self):
+        for _ in range(20):
+            self._bet('loss', clv=-0.02, direction='negative')
+        cc = self._cc()
+        self.assertEqual(cc['system_verdict']['verdict'], 'WEAK')
+
+    def test_weak_verdict_when_clv_below_50(self):
+        # Profitable streak but CLV %+ < 50% — verdict should still flag WEAK
+        for _ in range(10):
+            self._bet('win', clv=-0.01, direction='negative', payout='100')
+        for _ in range(2):
+            self._bet('loss', clv=-0.01, direction='negative')
+        cc = self._cc()
+        self.assertEqual(cc['system_verdict']['verdict'], 'WEAK')
+
+    def test_neutral_verdict_when_signals_mixed(self):
+        """No CLV captured, slightly positive ROI, sub-25 sample → NEUTRAL.
+        Not WEAK (ROI is positive), not STRONG (no CLV signal yet)."""
+        for _ in range(8):
+            self._bet('win', payout='100')
+        for _ in range(7):
+            self._bet('loss')
+        cc = self._cc()
+        self.assertEqual(cc['system_verdict']['verdict'], 'NEUTRAL')
+
+    def test_confidence_low_under_30_bets(self):
+        for _ in range(10):
+            self._bet('win', clv=0.04, direction='positive', payout='100')
+        cc = self._cc()
+        self.assertEqual(cc['system_verdict']['confidence_level'], 'LOW')
+        # Warning surfaces explicitly
+        self.assertTrue(any('Small sample' in w for w in cc['system_verdict']['warnings']))
+
+    def test_no_settled_bets_yields_zero_state(self):
+        from apps.mockbets.services.command_center import compute_system_verdict
+        cc = self._cc()
+        verdict = cc['system_verdict']
+        # 0 bets — falls into NEUTRAL by default since no signals match WEAK/STRONG
+        self.assertEqual(verdict['confidence_level'], 'LOW')
+
+
+class EdgeBucketsTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('eb_user', password='pw')
+
+    def _bet(self, result, edge, payout=None):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            expected_edge=Decimal(str(edge)),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+            settled_at=timezone.now() if result != 'pending' else None,
+        )
+
+    def test_buckets_group_by_edge_range(self):
+        from apps.mockbets.services.command_center import compute_edge_buckets
+        # 0-2pp: 1 win
+        self._bet('win', 1.5, payout='100')
+        # 2-4pp: 1 loss
+        self._bet('loss', 3.0)
+        # 4-6pp: 1 win
+        self._bet('win', 5.0, payout='100')
+        # 6pp+: 1 win
+        self._bet('win', 8.0, payout='100')
+
+        rows = compute_edge_buckets(MockBet.objects.filter(user=self.user))
+        self.assertEqual(len(rows), 4)
+        ranges = [r['range'] for r in rows]
+        self.assertEqual(ranges, ['0–2pp', '2–4pp', '4–6pp', '6pp+'])
+        counts = [r['count'] for r in rows]
+        self.assertEqual(counts, [1, 1, 1, 1])
+
+    def test_bucket_boundaries_are_left_inclusive_right_exclusive(self):
+        """An edge of exactly 4.0 lands in 4-6pp, not in 2-4pp."""
+        from apps.mockbets.services.command_center import compute_edge_buckets
+        self._bet('win', 4.0, payout='100')
+        rows = compute_edge_buckets(MockBet.objects.filter(user=self.user))
+        by_range = {r['range']: r for r in rows}
+        self.assertEqual(by_range['2–4pp']['count'], 0)
+        self.assertEqual(by_range['4–6pp']['count'], 1)
+
+    def test_pending_bets_excluded(self):
+        from apps.mockbets.services.command_center import compute_edge_buckets
+        self._bet('pending', 5.0)
+        rows = compute_edge_buckets(MockBet.objects.filter(user=self.user))
+        self.assertEqual(sum(r['count'] for r in rows), 0)
+
+    def test_bets_without_expected_edge_excluded(self):
+        from apps.mockbets.services.command_center import compute_edge_buckets
+        MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            expected_edge=None,  # no snapshot
+            result='win',
+            simulated_payout=Decimal('100'),
+            settled_at=timezone.now(),
+        )
+        rows = compute_edge_buckets(MockBet.objects.filter(user=self.user))
+        self.assertEqual(sum(r['count'] for r in rows), 0)
+
+
+class TopPlayReasonsTests(TestCase):
+    """top_play_reasons explanation logic for the elite banner."""
+
+    def test_includes_edge_pp(self):
+        from apps.core.services.recommendations import top_play_reasons
+        reasons = top_play_reasons(model_edge=8.5, confidence_score=72.0,
+                                    tier='elite', status='recommended')
+        self.assertTrue(any('+8.5pp model edge' in r for r in reasons))
+
+    def test_elite_edge_threshold_triggers_mispricing_call(self):
+        from apps.core.services.recommendations import top_play_reasons
+        reasons = top_play_reasons(model_edge=10.0, confidence_score=72.0,
+                                    tier='elite', status='recommended')
+        self.assertTrue(any('Market mispricing detected' in r for r in reasons))
+
+    def test_below_elite_threshold_no_mispricing_call(self):
+        from apps.core.services.recommendations import top_play_reasons
+        reasons = top_play_reasons(model_edge=6.5, confidence_score=72.0,
+                                    tier='strong', status='recommended')
+        self.assertFalse(any('mispricing' in r.lower() for r in reasons))
+
+    def test_robust_to_none_inputs(self):
+        from apps.core.services.recommendations import top_play_reasons
+        reasons = top_play_reasons(model_edge=None, confidence_score=None,
+                                    tier='elite', status='recommended')
+        # Doesn't crash and still emits the cleared-rules bullet
+        self.assertIsInstance(reasons, list)
+
+
 class CommandCenterTests(TestCase):
     """The build_command_center facade is the single source of analytics
     truth for the dashboard + AI summary. These tests cover the new

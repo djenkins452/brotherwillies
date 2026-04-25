@@ -188,6 +188,195 @@ def materialize(bets) -> list:
     return list(bets)
 
 
+# --- System Verdict ---------------------------------------------------------
+# A single "is the system working?" signal users can act on. Built from the
+# already-computed CLV %+, ROI, and sample size. Deterministic, no AI.
+#
+# Verdict tiers (priority order — first match wins):
+#   STRONG  — CLV %+ ≥ 60 AND ROI > 0 AND sample ≥ 25
+#   WEAK    — CLV %+ < 50 OR ROI < 0
+#   NEUTRAL — everything else (mixed CLV, near-breakeven ROI, etc.)
+#
+# Confidence level is sample-size-bound regardless of verdict — a STRONG
+# verdict on 8 bets is still LOW confidence. This is the honest framing:
+# "the early signal is good, but we don't yet have enough data to trust it."
+
+_SAMPLE_LOW = 30
+_SAMPLE_MED = 75
+_VERDICT_STRONG_CLV = 60.0
+_VERDICT_STRONG_SAMPLE = 25
+_VERDICT_WEAK_CLV = 50.0
+_NEAR_BREAKEVEN_ROI = 2.0  # |ROI| ≤ 2pp counts as "near 0"
+
+
+def compute_system_verdict(cc: dict) -> dict:
+    """Trust signal: should the user lean on the system's recommendations?
+
+    Reads only fields already on the cc dict — never re-touches the database
+    or the model layer. This means the verdict refreshes whenever the rest
+    of the dashboard does.
+    """
+    kpis = cc['kpis']
+    clv = cc['clv']
+    settled = kpis['settled_count']
+    roi = kpis['roi']
+    clv_rate = clv['positive_rate'] if clv['sample_size'] else None
+    clv_sample = clv['sample_size']
+
+    reasons = []
+    warnings = []
+
+    # Confidence band based on sample size — independent of verdict tier.
+    if settled < _SAMPLE_LOW:
+        confidence = 'LOW'
+        warnings.append(
+            f"Small sample size ({settled} settled bet{'s' if settled != 1 else ''}) — "
+            "patterns may be variance, not skill"
+        )
+    elif settled < _SAMPLE_MED:
+        confidence = 'MEDIUM'
+    else:
+        confidence = 'HIGH'
+
+    if clv_sample == 0 and settled > 0:
+        warnings.append(
+            "No CLV data captured yet — verdict can't fully measure whether "
+            "the system is beating the market"
+        )
+
+    # WEAK takes priority — if the data is screaming "this isn't working",
+    # don't sugar-coat it with NEUTRAL.
+    is_weak = (
+        roi < 0
+        or (clv_rate is not None and clv_rate < _VERDICT_WEAK_CLV)
+    )
+
+    # STRONG requires all three: positive CLV, positive ROI, and enough
+    # bets to be more than a streak.
+    is_strong = (
+        clv_rate is not None
+        and clv_rate >= _VERDICT_STRONG_CLV
+        and roi > 0
+        and settled >= _VERDICT_STRONG_SAMPLE
+    )
+
+    if is_weak:
+        verdict = 'WEAK'
+        if roi < 0:
+            reasons.append(f"Negative simulated ROI ({roi:.1f}%)")
+        if clv_rate is not None and clv_rate < _VERDICT_WEAK_CLV:
+            reasons.append(f"Losing the closing line ({clv_rate:.0f}% positive CLV)")
+    elif is_strong:
+        verdict = 'STRONG'
+        reasons.append(f"Beating market (CLV {clv_rate:.0f}%)")
+        reasons.append(f"Positive simulated ROI (+{roi:.1f}%)")
+        if settled < _SAMPLE_MED:
+            reasons.append(f"Encouraging signal across {settled} settled bets")
+    else:
+        verdict = 'NEUTRAL'
+        if clv_rate is None:
+            reasons.append("CLV data not yet captured — verdict provisional")
+        elif clv_rate < _VERDICT_STRONG_CLV:
+            reasons.append(f"Mixed CLV signal ({clv_rate:.0f}% positive)")
+        if abs(roi) <= _NEAR_BREAKEVEN_ROI:
+            reasons.append(f"ROI near breakeven ({roi:+.1f}%)")
+        if settled < _VERDICT_STRONG_SAMPLE:
+            reasons.append(f"Sample under threshold ({settled} of {_VERDICT_STRONG_SAMPLE} needed for STRONG)")
+
+    return {
+        'verdict': verdict,
+        'confidence_level': confidence,
+        'reasons': reasons,
+        'warnings': warnings,
+        # Inputs surfaced for the UI so the panel can show its own math
+        'inputs': {
+            'roi': roi,
+            'clv_positive_rate': clv_rate,
+            'clv_sample': clv_sample,
+            'settled_bets': settled,
+        },
+    }
+
+
+# --- Edge Buckets -----------------------------------------------------------
+# "Where is my edge actually working?" — group settled bets by their snapshot
+# expected_edge value, compute win rate, ROI, and CLV %+ per bucket. If the
+# 4-6pp bucket consistently underperforms 6pp+, the user has empirical
+# evidence that the MIN_EDGE threshold could be raised.
+
+_EDGE_BUCKETS = [
+    {'label': '0–2pp', 'min': 0.0, 'max': 2.0},
+    {'label': '2–4pp', 'min': 2.0, 'max': 4.0},
+    {'label': '4–6pp', 'min': 4.0, 'max': 6.0},
+    {'label': '6pp+',  'min': 6.0, 'max': float('inf')},
+]
+
+
+def compute_edge_buckets(bets) -> list:
+    """Per-edge-bucket performance rollup.
+
+    Excludes bets with no expected_edge (pre-snapshot) — they can't be
+    bucketed honestly. Excludes pending bets — no result yet to measure.
+    """
+    materialized = materialize(bets)
+    settled_with_edge = [
+        b for b in materialized
+        if b.result and b.result != 'pending' and b.expected_edge is not None
+    ]
+    rows = []
+    for bucket in _EDGE_BUCKETS:
+        in_bucket = [
+            b for b in settled_with_edge
+            if bucket['min'] <= float(b.expected_edge) < bucket['max']
+        ]
+        decisive = [b for b in in_bucket if b.result in ('win', 'loss')]
+        wins = sum(1 for b in decisive if b.result == 'win')
+        with_clv = [b for b in in_bucket if b.clv_cents is not None]
+        positive_clv = sum(1 for b in with_clv if b.clv_direction == 'positive')
+        stake_total = sum(float(b.stake_amount) for b in in_bucket)
+        net_total = sum(float(b.net_result or 0) for b in in_bucket)
+        rows.append({
+            'range': bucket['label'],
+            'count': len(in_bucket),
+            'win_rate': round(wins / len(decisive) * 100, 1) if decisive else 0.0,
+            'roi': round(net_total / stake_total * 100, 1) if stake_total else 0.0,
+            'clv_positive_rate': round(positive_clv / len(with_clv) * 100, 1) if with_clv else 0.0,
+            'clv_sample': len(with_clv),
+        })
+    return rows
+
+
+# --- Decision Quality Breakdown --------------------------------------------
+# Aggregate counts of MockBet.decision_quality values across the slate.
+# Used by the AI summary to answer "did results match decision quality?"
+
+def compute_decision_quality_breakdown(bets) -> dict:
+    """Counts of decision_quality categories across settled bets."""
+    materialized = materialize(bets)
+    counts = {'perfect': 0, 'lucky': 0, 'unlucky': 0, 'bad': 0, 'neutral': 0, 'unclassified': 0}
+    classified = 0
+    for b in materialized:
+        if b.result == 'pending':
+            continue
+        dq = b.decision_quality or ''
+        if dq:
+            counts[dq] = counts.get(dq, 0) + 1
+            classified += 1
+        else:
+            counts['unclassified'] += 1
+    total = sum(counts.values())
+    pcts = {
+        k: round(v / total * 100, 1) if total else 0.0
+        for k, v in counts.items()
+    }
+    return {
+        'counts': counts,
+        'pcts': pcts,
+        'classified': classified,
+        'total': total,
+    }
+
+
 def build_command_center(bets) -> dict:
     """Single structured analytics object for the dashboard.
 
@@ -208,7 +397,7 @@ def build_command_center(bets) -> dict:
     ledger = _build_ledger(materialized)
     capabilities = _capabilities(materialized, settled)
 
-    return {
+    cc = {
         'kpis': kpis,
         'hero': _build_hero(kpis, system_confidence, clv),
         'clv': clv,
@@ -220,3 +409,9 @@ def build_command_center(bets) -> dict:
         'ledger': ledger,
         'capabilities': capabilities,
     }
+    # Decision-intelligence layer — sits ON TOP of the assembled data, so it
+    # can read everything else and produce trust signals.
+    cc['system_verdict'] = compute_system_verdict(cc)
+    cc['edge_buckets'] = compute_edge_buckets(materialized)
+    cc['decision_quality'] = compute_decision_quality_breakdown(materialized)
+    return cc

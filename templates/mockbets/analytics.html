@@ -101,6 +101,31 @@
 </div>
 {% else %}
 
+{# ===== SYSTEM VERDICT ===== #}
+{% if cc.capabilities.has_settled_bets %}
+<div class="card cc-verdict cc-verdict-{{ cc.system_verdict.verdict|lower }} mb-2">
+    <div class="cc-verdict-row">
+        <div>
+            <div class="cc-verdict-eyebrow">System Verdict</div>
+            <div class="cc-verdict-headline">
+                {{ cc.system_verdict.verdict }} SIGNAL
+                <span class="cc-verdict-confidence">· {{ cc.system_verdict.confidence_level }} confidence</span>
+            </div>
+        </div>
+        <div class="cc-verdict-stats text-sm text-muted">
+            {{ cc.system_verdict.inputs.settled_bets }} settled bets
+            {% if cc.system_verdict.inputs.clv_sample %}
+            · CLV sample {{ cc.system_verdict.inputs.clv_sample }}
+            {% endif %}
+        </div>
+    </div>
+    <ul class="cc-verdict-reasons">
+        {% for r in cc.system_verdict.reasons %}<li>&check; {{ r }}</li>{% endfor %}
+        {% for w in cc.system_verdict.warnings %}<li class="cc-verdict-warning">&#9888; {{ w }}</li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+
 {# ===== HERO KPIs ===== #}
 <div class="cc-hero mb-2">
     <div class="cc-hero-tile cc-hero-tile-primary">
@@ -348,6 +373,34 @@
 </div>
 {% endif %}
 
+{# ===== EDGE BUCKETS — "Where is my edge?" ===== #}
+{% if cc.capabilities.has_settled_bets and cc.edge_buckets %}
+<div class="card mb-2">
+    <h3 class="card-title">Where Is My Edge?</h3>
+    <p class="text-sm text-muted" style="margin-top:0;">Performance by snapshot edge bucket. If a higher bucket consistently outperforms a lower one, the data is telling you to raise the minimum edge threshold.</p>
+    <table class="data-table cc-edge-bucket-table">
+        <thead>
+            <tr><th>Edge Range</th><th>Bets</th><th>Win %</th><th>ROI %</th><th title="Closing Line Value: positive % of bets that beat the market's final price.">CLV %+</th></tr>
+        </thead>
+        <tbody>
+            {% for row in cc.edge_buckets %}
+            <tr>
+                <td>{{ row.range }}</td>
+                <td>{% if row.count %}{{ row.count }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                <td>{% if row.count %}{{ row.win_rate|floatformat:1 }}%{% else %}&mdash;{% endif %}</td>
+                <td class="{% if row.count and row.roi > 0 %}text-green{% elif row.count and row.roi < 0 %}text-red{% endif %}">
+                    {% if row.count %}{% if row.roi > 0 %}+{% endif %}{{ row.roi|floatformat:1 }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td title="{% if row.clv_sample %}Sample: {{ row.clv_sample }} bets{% endif %}">
+                    {% if row.clv_sample %}{{ row.clv_positive_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 {# ===== FULL BET LEDGER ===== #}
 {% if cc.ledger %}
 <div class="card mb-2">
@@ -367,6 +420,7 @@
                     <th>CLV</th>
                     <th>Tier</th>
                     <th>Status</th>
+                    <th title="Combines outcome with CLV: did the system make a good DECISION, regardless of variance?">Decision</th>
                 </tr>
             </thead>
             <tbody>
@@ -394,6 +448,11 @@
                     <td>
                         {% if b.recommendation_status == 'recommended' %}<span class="text-green">Rec</span>
                         {% elif b.recommendation_status == 'not_recommended' %}<span class="text-muted">Not Rec</span>
+                        {% else %}&mdash;{% endif %}
+                    </td>
+                    <td>
+                        {% if b.decision_quality %}
+                        <span class="dq-pill {{ b.decision_quality_class }}">{{ b.decision_quality_label }}</span>
                         {% else %}&mdash;{% endif %}
                     </td>
                 </tr>

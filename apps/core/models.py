@@ -164,3 +164,8 @@ class BettingRecommendation(models.Model):
     @property
     def is_recommended(self):
         return self.status == 'recommended'
+
+    @property
+    def top_play_reasons(self):
+        from apps.core.services.recommendations import top_play_reasons
+        return top_play_reasons(self.model_edge, self.confidence_score, self.tier, self.status)

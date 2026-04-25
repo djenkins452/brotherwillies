@@ -138,6 +138,55 @@ def _build_user_prompt(cc: dict) -> str:
         f"(based on {sys_conf['components']['total_bets']} settled bets)"
     )
 
+    # System verdict — the deterministic "is the system working?" answer
+    # the AI should be able to validate, not contradict.
+    verdict = cc.get('system_verdict')
+    if verdict:
+        parts.append('')
+        parts.append('SYSTEM VERDICT (deterministic):')
+        parts.append(
+            f"  Verdict: {verdict['verdict']}, "
+            f"Confidence: {verdict['confidence_level']}"
+        )
+        if verdict['reasons']:
+            parts.append('  Reasons:')
+            for r in verdict['reasons']:
+                parts.append(f"    - {r}")
+        if verdict['warnings']:
+            parts.append('  Warnings:')
+            for w in verdict['warnings']:
+                parts.append(f"    - {w}")
+
+    # Edge bucket performance — answers "where is my real edge?"
+    edge_buckets = cc.get('edge_buckets') or []
+    populated_buckets = [b for b in edge_buckets if b['count'] > 0]
+    if populated_buckets:
+        parts.append('')
+        parts.append('EDGE BUCKET PERFORMANCE:')
+        for b in populated_buckets:
+            parts.append(
+                f"  {b['range']}: {b['count']} bets, "
+                f"{b['win_rate']:.1f}% win, {b['roi']:+.1f}% ROI"
+                + (f", CLV %+ {b['clv_positive_rate']:.0f}% (n={b['clv_sample']})"
+                   if b['clv_sample'] else '')
+            )
+
+    # Decision quality breakdown — answers "did results match decisions?"
+    dq = cc.get('decision_quality')
+    if dq and dq['classified']:
+        parts.append('')
+        parts.append(f"DECISION QUALITY BREAKDOWN ({dq['classified']} classified):")
+        for key, label in (
+            ('perfect', 'Perfect (win + +CLV)'),
+            ('lucky', 'Got Lucky (win + -CLV)'),
+            ('unlucky', 'Unlucky (loss + +CLV)'),
+            ('bad', 'Bad Bet (loss + -CLV)'),
+            ('neutral', 'Neutral (push)'),
+        ):
+            count = dq['counts'].get(key, 0)
+            if count:
+                parts.append(f"  {label}: {count} ({dq['pcts'].get(key, 0):.0f}%)")
+
     return '\n'.join(parts)
 
 
@@ -157,13 +206,28 @@ CRITICAL RULES — you MUST follow these:
    or "lock".
 5. Be honest about both strengths AND weaknesses.
 
-RESPONSE STRUCTURE (under 350 words total):
+RESPONSE STRUCTURE (under 400 words total):
 1. Headline (one sentence — overall simulated result)
 2. WHAT WENT WELL — 2-3 bullets
 3. WHAT WENT POORLY — 2-3 bullets
-4. DID THE SYSTEM BEAT THE MARKET? — one paragraph referencing CLV %+ and
-   tier/status performance. If no CLV data, say so.
-5. WHAT TO WATCH NEXT — 2-3 bullets
+4. DID THE SYSTEM MAKE GOOD DECISIONS? — one paragraph explicitly
+   referencing the SYSTEM VERDICT block (STRONG/NEUTRAL/WEAK +
+   confidence) AND the DECISION QUALITY BREAKDOWN. Did results match
+   decision quality (lots of "Perfect" and "Unlucky" = good process,
+   lots of "Got Lucky" and "Bad Bet" = bad process)?
+5. WHERE IS THE STRONGEST EDGE? — one paragraph referencing the EDGE
+   BUCKET PERFORMANCE block. If one bucket is clearly outperforming
+   others (e.g. 6pp+ at 65% win vs 0-2pp at 45%), call it out. If no
+   bucket has enough data, say so.
+6. DID THE SYSTEM BEAT THE MARKET? — short paragraph on CLV %+. If no
+   CLV data, say so.
+7. WHAT TO WATCH NEXT — 2-3 bullets
+
+The deterministic SYSTEM VERDICT is the source of truth on whether the
+system is working. Your job is to summarize and contextualize it, NOT
+to override it. If the verdict says WEAK, do not write "the system is
+performing well." If the verdict says STRONG with LOW confidence, lead
+with the sample-size caveat.
 
 End with: "This summary is based on simulated data only. Past simulated
 performance does not predict future outcomes."
@@ -254,6 +318,27 @@ def _deterministic_fallback(cc: dict) -> str:
         parts.append(
             "Did the system beat the market? Cannot tell — no closing-line "
             "data has been captured for any settled bets yet."
+        )
+
+    # Edge bucket signal — point at the strongest one if any has signal.
+    edge_buckets = cc.get('edge_buckets') or []
+    settled_buckets = [b for b in edge_buckets if b['count'] >= 5]
+    if settled_buckets:
+        best = max(settled_buckets, key=lambda b: b['roi'])
+        if best['roi'] > 5:
+            parts.append('')
+            parts.append(
+                f"Where is the edge? The {best['range']} edge bucket "
+                f"({best['count']} bets) returned {best['roi']:+.1f}% ROI — "
+                "the strongest signal in the data."
+            )
+
+    verdict = cc.get('system_verdict')
+    if verdict:
+        parts.append('')
+        parts.append(
+            f"System Verdict: {verdict['verdict']} "
+            f"(confidence: {verdict['confidence_level']})"
         )
 
     parts.append('')

@@ -32,5 +32,13 @@ No logic here — tier + tier_label are decided in the service.
         Edge vs market:
         <strong class="{% if recommendation.model_edge > 0 %}edge-positive{% elif recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ recommendation.model_edge|floatformat:1 }}%</strong>
     </div>
+    {% if recommendation.tier == 'elite' and recommendation.top_play_reasons %}
+    <div class="model-pick-why">
+        <div class="model-pick-why-label">Why This Is a Top Play</div>
+        <ul class="model-pick-why-list">
+            {% for reason in recommendation.top_play_reasons %}<li>{{ reason }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
 </div>
 {% endif %}

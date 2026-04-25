@@ -703,6 +703,106 @@ select.form-control {
     font-weight: 500;
 }
 
+/* ===== System Verdict Panel ===== */
+.cc-verdict {
+    border-left-width: 4px;
+    border-left-style: solid;
+}
+.cc-verdict-strong { border-left-color: #16a34a; background: rgba(34, 197, 94, 0.05); }
+.cc-verdict-neutral { border-left-color: #facc15; background: rgba(250, 204, 21, 0.04); }
+.cc-verdict-weak { border-left-color: #dc2626; background: rgba(220, 38, 38, 0.05); }
+.cc-verdict-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.cc-verdict-eyebrow {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+.cc-verdict-headline {
+    font-size: 1.4rem;
+    font-weight: 800;
+    line-height: 1.2;
+}
+.cc-verdict-strong .cc-verdict-headline { color: #16a34a; }
+.cc-verdict-neutral .cc-verdict-headline { color: #ca8a04; }
+.cc-verdict-weak .cc-verdict-headline { color: #dc2626; }
+.cc-verdict-confidence {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.cc-verdict-reasons {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.cc-verdict-reasons li {
+    padding: 3px 0;
+    font-size: 0.88rem;
+}
+.cc-verdict-reasons .cc-verdict-warning { color: #ca8a04; }
+
+/* ===== Decision Quality pills ===== */
+.dq-pill {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+}
+.dq-perfect { color: #16a34a; background: rgba(34, 197, 94, 0.12); }
+.dq-lucky { color: #ca8a04; background: rgba(250, 204, 21, 0.14); }
+.dq-unlucky { color: #2563eb; background: rgba(59, 130, 246, 0.12); }
+.dq-bad { color: #dc2626; background: rgba(220, 38, 38, 0.10); }
+.dq-neutral { color: var(--text-muted); background: rgba(148, 163, 184, 0.10); }
+
+/* ===== Edge bucket table ===== */
+.cc-edge-bucket-table th,
+.cc-edge-bucket-table td {
+    padding: 8px 10px;
+}
+
+/* ===== Top Play reasons (elite banner) ===== */
+.model-pick-why {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(250, 204, 21, 0.25);
+}
+.model-pick-why-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #facc15;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.model-pick-why-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 0.85rem;
+}
+.model-pick-why-list li {
+    padding: 2px 0;
+}
+.model-pick-why-list li::before {
+    content: "✓ ";
+    color: #facc15;
+    font-weight: 700;
+    margin-right: 4px;
+}
+
 /* ===== Mock Bet Analytics Command Center ===== */
 
 /* Quick time-filter chips above the filter form */
