@@ -1010,6 +1010,203 @@ class CLVCaptureTests(TestCase):
         self.assertEqual(bet.clv_direction, 'positive')
 
 
+class CommandCenterTests(TestCase):
+    """The build_command_center facade is the single source of analytics
+    truth for the dashboard + AI summary. These tests cover the new
+    aggregations (drivers, CLV extremes, capability flags) and ensure
+    delegated KPIs survive the wrapper untouched."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('cc_user', password='pw')
+
+    def _bet(self, result, stake='100', payout=None, status='recommended',
+             tier='strong', clv=None, direction='', odds=-110, selection='X'):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection=selection, odds_american=odds,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal(stake),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+            recommendation_status=status,
+            recommendation_tier=tier,
+            clv_cents=clv,
+            clv_direction=direction or '',
+            settled_at=timezone.now() if result != 'pending' else None,
+        )
+
+    def test_capabilities_with_no_bets(self):
+        from apps.mockbets.services.command_center import build_command_center
+        cc = build_command_center([])
+        self.assertFalse(cc['capabilities']['has_any_bets'])
+        self.assertFalse(cc['capabilities']['has_settled_bets'])
+        self.assertFalse(cc['capabilities']['has_clv_data'])
+
+    def test_capabilities_settled_no_clv(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100')  # no clv
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertTrue(cc['capabilities']['has_settled_bets'])
+        self.assertFalse(cc['capabilities']['has_clv_data'])
+
+    def test_hero_record_string(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100')
+        self._bet('win', payout='100')
+        self._bet('loss')
+        self._bet('push')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(cc['hero']['record'], '2-1-1')
+
+    def test_hero_record_omits_pushes_when_zero(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100')
+        self._bet('loss')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(cc['hero']['record'], '1-1')
+
+    def test_clv_block_with_data(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100', clv=0.05, direction='positive')
+        self._bet('win', payout='100', clv=0.10, direction='positive')
+        self._bet('loss', clv=-0.03, direction='negative')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(cc['clv']['sample_size'], 3)
+        self.assertEqual(cc['clv']['positive_count'], 2)
+        self.assertAlmostEqual(cc['clv']['positive_rate'], 66.7, places=1)
+        self.assertAlmostEqual(cc['clv']['avg_clv'], 0.04, places=2)
+        self.assertEqual(cc['clv']['best'].clv_cents, 0.10)
+        self.assertEqual(cc['clv']['worst'].clv_cents, -0.03)
+
+    def test_clv_block_empty_when_no_data(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100')  # no clv captured
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(cc['clv']['sample_size'], 0)
+        self.assertIsNone(cc['clv']['best'])
+        self.assertIsNone(cc['clv']['worst'])
+
+    def test_drivers_best_wins_sorted_by_payout(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='50', selection='Small Win')
+        self._bet('win', payout='200', selection='Big Win')
+        self._bet('win', payout='100', selection='Mid Win')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        names = [b.selection for b in cc['drivers']['best_wins']]
+        self.assertEqual(names, ['Big Win', 'Mid Win', 'Small Win'])
+
+    def test_drivers_worst_losses_sorted_by_stake(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('loss', stake='50', selection='Small')
+        self._bet('loss', stake='200', selection='Big')
+        self._bet('loss', stake='100', selection='Mid')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        names = [b.selection for b in cc['drivers']['worst_losses']]
+        self.assertEqual(names, ['Big', 'Mid', 'Small'])
+
+    def test_drivers_best_validations_require_rec_and_positive_clv(self):
+        from apps.mockbets.services.command_center import build_command_center
+        # Win with rec + positive CLV → validation
+        self._bet('win', payout='100', status='recommended', tier='strong',
+                  clv=0.05, direction='positive', selection='Validated')
+        # Win without CLV → not a validation
+        self._bet('win', payout='100', status='recommended', tier='strong',
+                  selection='Win No CLV')
+        # Win with negative CLV → not a validation
+        self._bet('win', payout='100', status='recommended', tier='strong',
+                  clv=-0.02, direction='negative', selection='Win Bad CLV')
+        # Win with positive CLV but not_recommended → not a validation
+        self._bet('win', payout='100', status='not_recommended', tier='standard',
+                  clv=0.05, direction='positive', selection='Lucky Not Rec')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        names = [b.selection for b in cc['drivers']['best_validations']]
+        self.assertEqual(names, ['Validated'])
+
+    def test_drivers_biggest_misses_only_recommended_or_elite_losses(self):
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('loss', stake='100', status='recommended', tier='strong',
+                  selection='Recommended Miss')
+        self._bet('loss', stake='100', status='', tier='elite',
+                  selection='Elite No Status')
+        self._bet('loss', stake='100', status='not_recommended', tier='standard',
+                  selection='Not Rec Loss')  # excluded
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        names = sorted(b.selection for b in cc['drivers']['biggest_misses'])
+        self.assertEqual(names, ['Elite No Status', 'Recommended Miss'])
+
+    def test_ledger_pending_bets_first(self):
+        """Pending bets surface above settled in the ledger so the user
+        sees what's in play before what's done."""
+        from apps.mockbets.services.command_center import build_command_center
+        self._bet('win', payout='100', selection='Settled Win')
+        self._bet('pending', selection='Pending Bet')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(cc['ledger'][0].selection, 'Pending Bet')
+
+    def test_top_n_cap_on_drivers(self):
+        """No matter how many wins, drivers cap at 5 per category."""
+        from apps.mockbets.services.command_center import build_command_center
+        for i in range(8):
+            self._bet('win', payout=str(100 + i), selection=f'Win {i}')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        self.assertEqual(len(cc['drivers']['best_wins']), 5)
+
+
+class AISummaryTests(TestCase):
+    """ai_summary always returns content — falls back to deterministic
+    narrative when OpenAI is unavailable."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('ai_user', password='pw')
+
+    def _bet(self, result, payout=None, clv=None, direction=''):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal(payout) if payout is not None else None,
+            result=result,
+            clv_cents=clv,
+            clv_direction=direction or '',
+            settled_at=timezone.now() if result != 'pending' else None,
+        )
+
+    def test_no_settled_bets_returns_friendly_message(self):
+        from apps.mockbets.services.command_center import build_command_center
+        from apps.mockbets.services.ai_summary import generate_mockbet_analytics_summary
+        cc = build_command_center([])
+        result = generate_mockbet_analytics_summary(cc)
+        self.assertEqual(result['source'], 'deterministic')
+        self.assertIsNone(result['error'])
+        self.assertIn('No settled bets', result['content'])
+
+    def test_no_api_key_falls_back_to_deterministic(self):
+        from apps.mockbets.services.command_center import build_command_center
+        from apps.mockbets.services.ai_summary import generate_mockbet_analytics_summary
+        self._bet('win', payout='100')
+        self._bet('loss')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        with self.settings(OPENAI_API_KEY=''):
+            result = generate_mockbet_analytics_summary(cc)
+        self.assertEqual(result['source'], 'deterministic')
+        self.assertIsNone(result['error'])
+        # Deterministic narrative references settled bets count
+        self.assertIn('settled bets', result['content'])
+        # Must include the legal-style closer
+        self.assertIn('Past simulated performance', result['content'])
+
+    def test_deterministic_fallback_flags_small_sample(self):
+        from apps.mockbets.services.command_center import build_command_center
+        from apps.mockbets.services.ai_summary import generate_mockbet_analytics_summary
+        for _ in range(3):
+            self._bet('win', payout='100')
+        cc = build_command_center(MockBet.objects.filter(user=self.user))
+        with self.settings(OPENAI_API_KEY=''):
+            result = generate_mockbet_analytics_summary(cc)
+        self.assertIn('Sample size is small', result['content'])
+
+
 class CancelBetTests(TestCase):
     """Cancellation workflow: allowed pre-game, rejected when game has
     started or the bet has already settled, and ownership-gated."""

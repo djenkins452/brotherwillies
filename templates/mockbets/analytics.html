@@ -12,6 +12,15 @@
     <div class="text-sm" style="color:var(--accent);">Simulated performance analytics. Past performance does not predict future outcomes.</div>
 </div>
 
+{# ===== QUICK TIME FILTERS ===== #}
+<div class="cc-quick-filters mb-1">
+    <a href="?range=today{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'today' %}active{% endif %}">Today</a>
+    <a href="?range=yesterday{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'yesterday' %}active{% endif %}">Yesterday</a>
+    <a href="?range=7d{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == '7d' %}active{% endif %}">Last 7 days</a>
+    <a href="?range=30d{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == '30d' %}active{% endif %}">Last 30 days</a>
+    <a href="?range=all{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'all' %}active{% endif %}">All time</a>
+</div>
+
 {# ===== FILTERS ===== #}
 <div class="card mb-1">
     <form method="get" id="analytics-filters">
@@ -85,41 +94,318 @@
 </div>
 {% endif %}
 
-{# ===== KPI CARDS ===== #}
-<div class="stat-grid mb-2">
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.total_bets }}</div>
-        <div class="stat-label">Total Bets</div>
+{% if not cc.capabilities.has_any_bets %}
+<div class="card card-muted mb-2">
+    <p>No mock bets match these filters yet.</p>
+    <p class="text-sm text-muted">Place a few mock bets from any game detail page, or widen the filter range.</p>
+</div>
+{% else %}
+
+{# ===== HERO KPIs ===== #}
+<div class="cc-hero mb-2">
+    <div class="cc-hero-tile cc-hero-tile-primary">
+        <div class="cc-hero-label">Net P/L</div>
+        <div class="cc-hero-value {% if cc.hero.net_pl > 0 %}text-green{% elif cc.hero.net_pl < 0 %}text-red{% endif %}">
+            {% if cc.hero.net_pl > 0 %}+{% endif %}${{ cc.hero.net_pl|floatformat:2 }}
+        </div>
+        <div class="cc-hero-sub">{{ cc.kpis.settled_count }} settled · {{ cc.kpis.pending_count }} pending</div>
     </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.settled_count }}</div>
-        <div class="stat-label">Settled</div>
+    <div class="cc-hero-tile">
+        <div class="cc-hero-label">ROI</div>
+        <div class="cc-hero-value {% if cc.hero.roi > 0 %}text-green{% elif cc.hero.roi < 0 %}text-red{% endif %}">
+            {% if cc.hero.roi > 0 %}+{% endif %}{{ cc.hero.roi|floatformat:1 }}%
+        </div>
+        <div class="cc-hero-sub">on ${{ cc.kpis.total_stake|floatformat:0 }} wagered</div>
     </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.wins }}-{{ kpis.losses }}-{{ kpis.pushes }}</div>
-        <div class="stat-label">W-L-P</div>
+    <div class="cc-hero-tile">
+        <div class="cc-hero-label">Record</div>
+        <div class="cc-hero-value">{{ cc.hero.record }}</div>
+        <div class="cc-hero-sub">{{ cc.hero.win_rate|floatformat:1 }}% win rate</div>
     </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.win_pct|floatformat:1 }}%</div>
-        <div class="stat-label">Win Rate</div>
+    <div class="cc-hero-tile" title="Closing Line Value: percent of bets where you got a better price than the market's final close. Leading indicator of edge.">
+        <div class="cc-hero-label">CLV %+</div>
+        <div class="cc-hero-value {% if cc.hero.clv_sample and cc.hero.clv_positive_rate > 50 %}text-green{% elif cc.hero.clv_sample and cc.hero.clv_positive_rate < 50 %}text-red{% endif %}">
+            {% if cc.hero.clv_sample %}{{ cc.hero.clv_positive_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}
+        </div>
+        <div class="cc-hero-sub">
+            {% if cc.hero.clv_sample %}{{ cc.hero.clv_sample }} bet{{ cc.hero.clv_sample|pluralize }} measured
+            {% else %}no closing odds yet{% endif %}
+        </div>
     </div>
-    <div class="stat-tile">
-        <div class="stat-value {% if kpis.net_pl > 0 %}text-green{% elif kpis.net_pl < 0 %}text-red{% endif %}">${{ kpis.net_pl|floatformat:2 }}</div>
-        <div class="stat-label">Sim. Net P/L</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value {% if kpis.roi > 0 %}text-green{% elif kpis.roi < 0 %}text-red{% endif %}">{{ kpis.roi|floatformat:1 }}%</div>
-        <div class="stat-label">Sim. ROI</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.avg_odds|stringformat:"+d" }}</div>
-        <div class="stat-label">Avg Odds</div>
-    </div>
-    <div class="stat-tile">
-        <div class="stat-value">{{ kpis.avg_implied }}%</div>
-        <div class="stat-label">Avg Implied</div>
+    <div class="cc-hero-tile" title="Weighted score: 50% win rate, 30% normalized ROI, 20% sample-size factor. Caps below 100 until enough bets accumulate.">
+        <div class="cc-hero-label">System Confidence</div>
+        <div class="cc-hero-value">{{ cc.hero.system_confidence_score|floatformat:1 }}</div>
+        <div class="cc-hero-sub">{{ cc.hero.system_confidence_total_bets }} bets in sample</div>
     </div>
 </div>
+
+{% if not cc.capabilities.has_settled_bets %}
+<div class="card card-muted mb-2">
+    <p><strong>No settled bets yet.</strong> Performance metrics, CLV, and recommendation breakdowns will appear after at least one bet resolves.</p>
+</div>
+{% endif %}
+
+{# ===== AI POSTGAME SUMMARY (lazy-loaded) ===== #}
+{% if cc.capabilities.has_settled_bets %}
+<div class="card cc-ai-summary mb-2" id="cc-ai-summary">
+    <div class="cc-ai-header">
+        <span class="badge badge-ai">AI Summary</span>
+        <span class="text-sm text-muted">Plain-English recap of the deterministic facts above. Falls back to a deterministic narrative when OpenAI is unavailable.</span>
+    </div>
+    <div class="cc-ai-body" id="cc-ai-body">
+        <div class="ai-insight-loading">
+            <div class="shimmer-line"></div>
+            <div class="shimmer-line" style="width:90%"></div>
+            <div class="shimmer-line" style="width:75%"></div>
+            <p class="ai-loading-msg">Generating your postgame summary…</p>
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var body = document.getElementById('cc-ai-body');
+    var qs = window.location.search;
+    fetch('{% url "mockbets:ai_summary" %}' + qs, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin',
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error && !data.content) {
+            body.innerHTML = '<div class="text-sm text-muted">' + data.error + '</div>';
+            return;
+        }
+        var sourceTag = '';
+        if (data.source === 'deterministic') {
+            sourceTag = '<div class="cc-ai-source-tag">Deterministic narrative (OpenAI unavailable)</div>';
+        }
+        var formatted = data.content
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>');
+        body.innerHTML = sourceTag + '<p>' + formatted + '</p>';
+    })
+    .catch(function(e) {
+        body.innerHTML = '<div class="text-sm text-muted">Could not load summary.</div>';
+    });
+})();
+</script>
+{% endif %}
+
+{# ===== RESULT DRIVERS ===== #}
+{% if cc.capabilities.has_settled_bets %}
+<div class="card mb-2">
+    <h3 class="card-title">What Drove the Result</h3>
+    <p class="text-sm text-muted" style="margin-top:0;">The bets that explain the day. Each card links to the full bet detail.</p>
+    <div class="cc-drivers-grid">
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Best Wins</h4>
+            {% if cc.drivers.best_wins %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.best_wins %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        {{ b.bet_type|title }} · {{ b.odds_american|stringformat:"+d" }} · <span class="text-green">+${{ b.simulated_payout|floatformat:2 }}</span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}<p class="text-sm text-muted">No wins yet.</p>{% endif %}
+        </div>
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Worst Losses</h4>
+            {% if cc.drivers.worst_losses %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.worst_losses %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        {{ b.bet_type|title }} · {{ b.odds_american|stringformat:"+d" }} · <span class="text-red">&minus;${{ b.stake_amount|floatformat:2 }}</span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}<p class="text-sm text-muted">No losses yet.</p>{% endif %}
+        </div>
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Best CLV</h4>
+            {% if cc.drivers.best_clv %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.best_clv %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        <span class="text-green">{{ b.clv_percent_display }}</span> · {{ b.line_movement_display|default:"" }}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% elif not cc.capabilities.has_clv_data %}
+            <p class="text-sm text-muted">CLV will appear once closing odds are captured.</p>
+            {% else %}<p class="text-sm text-muted">No positive-CLV bets yet.</p>{% endif %}
+        </div>
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Worst CLV</h4>
+            {% if cc.drivers.worst_clv %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.worst_clv %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        <span class="text-red">{{ b.clv_percent_display }}</span> · {{ b.line_movement_display|default:"" }}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% elif not cc.capabilities.has_clv_data %}
+            <p class="text-sm text-muted">CLV will appear once closing odds are captured.</p>
+            {% else %}<p class="text-sm text-muted">No negative-CLV bets yet.</p>{% endif %}
+        </div>
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Biggest Misses
+                <span class="text-sm text-muted" title="Losses on bets the system flagged as recommended or elite tier — these are the misclassifications most worth understanding.">⚠</span>
+            </h4>
+            {% if cc.drivers.biggest_misses %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.biggest_misses %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        {{ b.recommendation_tier|title|default:"—" }} · <span class="text-red">&minus;${{ b.stake_amount|floatformat:2 }}</span>
+                        {% if b.loss_reason %} · {{ b.loss_reason_label }}{% endif %}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% elif not cc.capabilities.has_recommendation_data %}
+            <p class="text-sm text-muted">Older bets may not include recommendation metadata.</p>
+            {% else %}<p class="text-sm text-muted">No recommended/elite losses — clean slate so far.</p>{% endif %}
+        </div>
+        <div class="cc-drivers-col">
+            <h4 class="cc-drivers-h">Best Validations
+                <span class="text-sm text-muted" title="Recommended/elite wins WITH positive CLV — both signals firing on the same bet.">✓</span>
+            </h4>
+            {% if cc.drivers.best_validations %}
+            <ul class="cc-drivers-list">
+                {% for b in cc.drivers.best_validations %}
+                <li>
+                    <a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.selection }}</a>
+                    <span class="cc-drivers-meta text-sm text-muted">
+                        {{ b.recommendation_tier|title|default:"—" }} · <span class="text-green">+${{ b.simulated_payout|floatformat:2 }} · {{ b.clv_percent_display }}</span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% elif not cc.capabilities.has_clv_data or not cc.capabilities.has_recommendation_data %}
+            <p class="text-sm text-muted">Need both CLV and recommendation snapshots — they'll appear together once data accumulates.</p>
+            {% else %}<p class="text-sm text-muted">No simultaneous wins yet.</p>{% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# ===== MARKET VALIDATION (CLV detail) ===== #}
+{% if cc.capabilities.has_clv_data %}
+<div class="card mb-2">
+    <h3 class="card-title">Market Validation (CLV)</h3>
+    <p class="text-sm text-muted" style="margin-top:0;">Closing Line Value resolves at game start, not settlement — the earliest honest signal of bet-selection quality.</p>
+    <div class="cc-clv-grid">
+        <div>
+            <div class="cc-clv-label">CLV %+</div>
+            <div class="cc-clv-value {% if cc.clv.positive_rate > 50 %}text-green{% elif cc.clv.positive_rate < 50 %}text-red{% endif %}">
+                {{ cc.clv.positive_rate|floatformat:0 }}%
+            </div>
+            <div class="text-sm text-muted">{{ cc.clv.positive_count }}/{{ cc.clv.sample_size }}</div>
+        </div>
+        <div>
+            <div class="cc-clv-label">Avg CLV</div>
+            <div class="cc-clv-value {% if cc.clv.avg_clv > 0 %}text-green{% elif cc.clv.avg_clv < 0 %}text-red{% endif %}">
+                {% if cc.clv.avg_clv > 0 %}+{% endif %}{{ cc.clv.avg_clv|floatformat:4 }}
+            </div>
+            <div class="text-sm text-muted">decimal-odds delta</div>
+        </div>
+        <div>
+            <div class="cc-clv-label">Best Single Bet</div>
+            {% if cc.clv.best %}
+            <div class="cc-clv-value text-green">{{ cc.clv.best.clv_percent_display }}</div>
+            <div class="text-sm text-muted"><a href="{% url 'mockbets:bet_detail' cc.clv.best.id %}">{{ cc.clv.best.selection }}</a></div>
+            {% else %}<div class="cc-clv-value">&mdash;</div>{% endif %}
+        </div>
+        <div>
+            <div class="cc-clv-label">Worst Single Bet</div>
+            {% if cc.clv.worst %}
+            <div class="cc-clv-value text-red">{{ cc.clv.worst.clv_percent_display }}</div>
+            <div class="text-sm text-muted"><a href="{% url 'mockbets:bet_detail' cc.clv.worst.id %}">{{ cc.clv.worst.selection }}</a></div>
+            {% else %}<div class="cc-clv-value">&mdash;</div>{% endif %}
+        </div>
+    </div>
+</div>
+{% elif cc.capabilities.has_settled_bets %}
+<div class="card card-muted mb-2">
+    <h3 class="card-title">Market Validation (CLV)</h3>
+    <p class="text-sm text-muted">CLV will appear once closing odds are captured for at least one settled bet.</p>
+</div>
+{% endif %}
+
+{# ===== FULL BET LEDGER ===== #}
+{% if cc.ledger %}
+<div class="card mb-2">
+    <h3 class="card-title">Bet Ledger <span class="text-sm text-muted">({{ cc.ledger|length }} bet{{ cc.ledger|length|pluralize }})</span></h3>
+    <div class="cc-ledger-wrap">
+        <table class="data-table cc-ledger-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Sport</th>
+                    <th>Selection</th>
+                    <th>Type</th>
+                    <th>Odds</th>
+                    <th>Stake</th>
+                    <th>Result</th>
+                    <th>Net</th>
+                    <th>CLV</th>
+                    <th>Tier</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in cc.ledger %}
+                <tr>
+                    <td><a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.placed_at|date:"M d g:i A" }}</a></td>
+                    <td>{{ b.sport|upper }}</td>
+                    <td>{{ b.selection|truncatechars:24 }}</td>
+                    <td>{{ b.bet_type|title }}</td>
+                    <td>{{ b.odds_american|stringformat:"+d" }}</td>
+                    <td>${{ b.stake_amount|floatformat:0 }}</td>
+                    <td>
+                        {% if b.result == 'win' %}<span class="text-green">WIN</span>
+                        {% elif b.result == 'loss' %}<span class="text-red">LOSS</span>
+                        {% elif b.result == 'push' %}PUSH
+                        {% else %}<span class="text-muted">PENDING</span>{% endif %}
+                    </td>
+                    <td class="{% if b.is_settled and b.net_result > 0 %}text-green{% elif b.is_settled and b.net_result < 0 %}text-red{% endif %}">
+                        {% if b.is_settled %}{% if b.net_result > 0 %}+{% endif %}${{ b.net_result|floatformat:2 }}{% else %}&mdash;{% endif %}
+                    </td>
+                    <td class="{% if b.clv_direction == 'positive' %}text-green{% elif b.clv_direction == 'negative' %}text-red{% endif %}">
+                        {% if b.clv_cents is not None %}{{ b.clv_percent_display }}{% else %}&mdash;{% endif %}
+                    </td>
+                    <td>{{ b.recommendation_tier|title|default:"—" }}</td>
+                    <td>
+                        {% if b.recommendation_status == 'recommended' %}<span class="text-green">Rec</span>
+                        {% elif b.recommendation_status == 'not_recommended' %}<span class="text-muted">Not Rec</span>
+                        {% else %}&mdash;{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# ===== END NEW DASHBOARD SECTIONS ===== #}
+{% endif %}{# has_any_bets #}
 
 {% if kpis.settled_count > 0 %}
 {# ===== RECOMMENDATION PERFORMANCE ===== #}

@@ -327,9 +327,31 @@ def analytics_dashboard(request):
     if model_source in ('house', 'user'):
         bets = bets.filter(model_source=model_source)
 
-    # Date range filter
-    date_from = request.GET.get('date_from')
-    date_to = request.GET.get('date_to')
+    # Quick time filter — translates a named window into date_from/date_to.
+    # Always wins over manual dates so toggling a chip resets cleanly.
+    quick_range = request.GET.get('range', '')
+    today = timezone.localdate()
+    if quick_range == 'today':
+        date_from = date_to = today.isoformat()
+    elif quick_range == 'yesterday':
+        from datetime import timedelta as _td
+        y = (today - _td(days=1)).isoformat()
+        date_from = date_to = y
+    elif quick_range == '7d':
+        from datetime import timedelta as _td
+        date_from = (today - _td(days=6)).isoformat()
+        date_to = today.isoformat()
+    elif quick_range == '30d':
+        from datetime import timedelta as _td
+        date_from = (today - _td(days=29)).isoformat()
+        date_to = today.isoformat()
+    elif quick_range == 'all':
+        date_from = ''
+        date_to = ''
+    else:
+        # Fall back to manual date filter form values
+        date_from = request.GET.get('date_from')
+        date_to = request.GET.get('date_to')
     if date_from:
         bets = bets.filter(placed_at__date__gte=date_from)
     if date_to:
@@ -355,6 +377,10 @@ def analytics_dashboard(request):
     # picking winners vs just making guesses.
     from .services.recommendation_performance import compute_all as compute_rec_perf
     rec_performance = compute_rec_perf(all_bets)
+    # Command-center facade: single structured analytics object the new
+    # dashboard sections + AI summary read from. Reuses kpis/perf above.
+    from .services.command_center import build_command_center
+    cc = build_command_center(all_bets)
 
     return render(request, 'mockbets/analytics.html', {
         'kpis': kpis,
@@ -364,6 +390,8 @@ def analytics_dashboard(request):
         'edge': edge,
         'variance': variance,
         'rec_performance': rec_performance,
+        'cc': cc,
+        'current_quick_range': quick_range,
         'current_sport': sport or '',
         'current_bet_type': bet_type or '',
         'current_confidence': confidence or '',
@@ -393,6 +421,75 @@ def flat_bet_sim(request):
     if result is None:
         return JsonResponse({'error': 'No settled bets to simulate'}, status=400)
     return JsonResponse(result)
+
+
+@login_required
+def ai_summary(request):
+    """AJAX endpoint for the postgame AI summary on the analytics dashboard.
+
+    Reads the same query string as analytics_dashboard so the summary
+    reflects the user's current filter state. Always returns JSON, even
+    when OpenAI is unavailable (deterministic fallback baked into the
+    service).
+    """
+    from .services.command_center import build_command_center
+    from .services.ai_summary import generate_mockbet_analytics_summary
+
+    bets = MockBet.objects.filter(user=request.user).select_related(
+        'cfb_game__home_team', 'cfb_game__away_team',
+        'cbb_game__home_team', 'cbb_game__away_team',
+        'mlb_game__home_team', 'mlb_game__away_team',
+        'college_baseball_game__home_team', 'college_baseball_game__away_team',
+        'golf_event', 'golf_golfer',
+    )
+
+    # Apply the same filter taxonomy as the analytics view. Re-doing the
+    # parse rather than refactoring into a shared helper keeps this endpoint
+    # independently testable and avoids a refactor right when the
+    # dashboard rewrite is landing.
+    sport = request.GET.get('sport')
+    if sport in ('cfb', 'cbb', 'golf', 'mlb', 'college_baseball'):
+        bets = bets.filter(sport=sport)
+    bet_type = request.GET.get('bet_type')
+    if bet_type:
+        bets = bets.filter(bet_type=bet_type)
+    confidence = request.GET.get('confidence')
+    if confidence in ('low', 'medium', 'high'):
+        bets = bets.filter(confidence_level=confidence)
+    model_source = request.GET.get('model_source')
+    if model_source in ('house', 'user'):
+        bets = bets.filter(model_source=model_source)
+    quick_range = request.GET.get('range', '')
+    today = timezone.localdate()
+    if quick_range == 'today':
+        bets = bets.filter(placed_at__date=today)
+    elif quick_range == 'yesterday':
+        from datetime import timedelta as _td
+        bets = bets.filter(placed_at__date=today - _td(days=1))
+    elif quick_range == '7d':
+        from datetime import timedelta as _td
+        bets = bets.filter(placed_at__date__gte=today - _td(days=6))
+    elif quick_range == '30d':
+        from datetime import timedelta as _td
+        bets = bets.filter(placed_at__date__gte=today - _td(days=29))
+    elif quick_range != 'all':
+        date_from = request.GET.get('date_from')
+        date_to = request.GET.get('date_to')
+        if date_from:
+            bets = bets.filter(placed_at__date__gte=date_from)
+        if date_to:
+            bets = bets.filter(placed_at__date__lte=date_to)
+    if request.GET.get('current_rules_only') == '1':
+        bets = bets.exclude(recommendation_status='')
+
+    cc = build_command_center(list(bets))
+    result = generate_mockbet_analytics_summary(cc)
+    return JsonResponse({
+        'content': result['content'],
+        'source': result['source'],
+        'meta': result['meta'],
+        'error': result['error'],
+    })
 
 
 @login_required

@@ -10,6 +10,7 @@ urlpatterns = [
     path('place/', views.place_bet, name='place_bet'),
     path('flat-bet-sim/', views.flat_bet_sim, name='flat_bet_sim'),
     path('ai-commentary/', views.ai_commentary, name='ai_commentary'),
+    path('ai-summary/', views.ai_summary, name='ai_summary'),
     path('<uuid:bet_id>/', views.bet_detail, name='bet_detail'),
     path('<uuid:bet_id>/review/', views.review_bet, name='review_bet'),
     path('<uuid:bet_id>/cancel/', views.cancel_bet, name='cancel_bet'),

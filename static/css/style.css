@@ -703,6 +703,169 @@ select.form-control {
     font-weight: 500;
 }
 
+/* ===== Mock Bet Analytics Command Center ===== */
+
+/* Quick time-filter chips above the filter form */
+.cc-quick-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.cc-quick-filters .filter-chip { font-size: 0.78rem; }
+
+/* Hero summary — large top tiles. 5-up on wide, wraps cleanly. */
+.cc-hero {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+}
+@media (max-width: 1024px) {
+    .cc-hero { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 640px) {
+    .cc-hero { grid-template-columns: repeat(2, 1fr); }
+}
+.cc-hero-tile {
+    padding: 14px 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.cc-hero-tile-primary {
+    border-color: rgba(79, 140, 255, 0.55);
+    background: rgba(79, 140, 255, 0.05);
+}
+.cc-hero-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+.cc-hero-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    line-height: 1.15;
+}
+.cc-hero-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+/* AI summary panel — same shimmer treatment as game-detail AI insights */
+.cc-ai-summary { padding: 14px 16px; }
+.cc-ai-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+.cc-ai-body p { margin: 0 0 8px 0; line-height: 1.5; }
+.cc-ai-source-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: rgba(148, 163, 184, 0.12);
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Result drivers — six-column grid of small lists */
+.cc-drivers-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+@media (max-width: 1024px) {
+    .cc-drivers-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+    .cc-drivers-grid { grid-template-columns: 1fr; }
+}
+.cc-drivers-col {
+    border-left: 2px solid var(--border);
+    padding: 4px 0 4px 12px;
+}
+.cc-drivers-h {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin: 0 0 6px 0;
+}
+.cc-drivers-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.cc-drivers-list li {
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+.cc-drivers-list li:last-child { border-bottom: none; }
+.cc-drivers-list a {
+    font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+}
+.cc-drivers-list a:hover { color: var(--accent); }
+.cc-drivers-meta { display: block; font-size: 0.72rem; }
+
+/* Market validation (CLV) — 4-up summary */
+.cc-clv-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+}
+@media (max-width: 768px) {
+    .cc-clv-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.cc-clv-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+.cc-clv-value {
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+/* Bet ledger table — horizontal scroll on narrow screens */
+.cc-ledger-wrap { overflow-x: auto; }
+.cc-ledger-table {
+    width: 100%;
+    font-size: 0.82rem;
+}
+.cc-ledger-table th {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    font-weight: 700;
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.cc-ledger-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    white-space: nowrap;
+}
+.cc-ledger-table tr:hover td { background: rgba(79, 140, 255, 0.04); }
+.cc-ledger-table a { color: inherit; text-decoration: none; }
+.cc-ledger-table a:hover { color: var(--accent); }
+
 /* Bankroll summary — /mockbets/ page header */
 .bankroll-summary {
     padding: 14px;
