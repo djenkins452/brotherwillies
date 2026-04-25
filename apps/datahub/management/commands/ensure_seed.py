@@ -68,6 +68,17 @@ class Command(BaseCommand):
         except Exception as e:
             self.stdout.write(self.style.WARNING(f'settle_mockbets on deploy failed: {e}'))
 
+        # Backfill historical MockBet snapshot/CLV fields for bets placed
+        # before those features existed. Idempotent — first run does the
+        # work, subsequent runs see "0 filled" and exit cheap. Only fills
+        # NULL fields from existing data; never fabricates. Output goes
+        # to the deploy log so operators can verify what was filled.
+        try:
+            self.stdout.write('--- mockbet backfill ---')
+            call_command('backfill_mockbets', '--commit')
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'backfill_mockbets on deploy failed: {e}'))
+
         # --- post-run diagnostic block ---------------------------------------
         # Prints a summary of odds coverage for each sport in the deploy log
         # so operators can see at a glance whether ingestion worked. Without
