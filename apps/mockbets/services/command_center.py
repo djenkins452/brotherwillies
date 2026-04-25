@@ -166,18 +166,34 @@ def _capabilities(bets, settled) -> dict:
     `has_clv_data` is True only when at least one settled bet has CLV
     captured. `has_recommendation_data` is True when at least one bet
     has snapshot status — pre-migration bets won't.
+
+    Also surfaces coverage rates so the UI can tell users how complete
+    the historical record is — e.g. "CLV coverage: 62% of bets". This
+    is the operational view of how much backfill has been able to do.
     """
     has_settled = bool(settled)
-    has_clv = any(b.clv_cents is not None for b in settled)
-    has_rec_data = any(
-        (b.recommendation_status or b.recommendation_tier)
-        for b in materialize(bets)
-    )
+    settled_with_clv = [b for b in settled if b.clv_cents is not None]
+    has_clv = bool(settled_with_clv)
+    materialized_bets = materialize(bets)
+    bets_with_rec_snapshot = [
+        b for b in materialized_bets
+        if (b.recommendation_status or b.recommendation_tier)
+    ]
+    has_rec_data = bool(bets_with_rec_snapshot)
     return {
         'has_any_bets': bool(bets),
         'has_settled_bets': has_settled,
         'has_clv_data': has_clv,
         'has_recommendation_data': has_rec_data,
+        # Coverage % — useful for "62% of bets have CLV captured" indicator
+        'clv_coverage_pct': (
+            round(len(settled_with_clv) / len(settled) * 100, 1)
+            if settled else 0.0
+        ),
+        'rec_coverage_pct': (
+            round(len(bets_with_rec_snapshot) / len(materialized_bets) * 100, 1)
+            if materialized_bets else 0.0
+        ),
     }
 
 

@@ -101,6 +101,18 @@
 </div>
 {% else %}
 
+{# ===== DATA COVERAGE INDICATOR ===== #}
+{% if cc.capabilities.has_settled_bets %}
+<div class="cc-coverage-bar text-sm text-muted mb-1">
+    <span title="Percent of settled bets with closing odds + CLV captured">CLV coverage: <strong>{{ cc.capabilities.clv_coverage_pct|floatformat:0 }}%</strong></span>
+    &middot;
+    <span title="Percent of all bets with recommendation snapshot fields populated">Recommendation snapshots: <strong>{{ cc.capabilities.rec_coverage_pct|floatformat:0 }}%</strong></span>
+    {% if cc.capabilities.clv_coverage_pct < 100 or cc.capabilities.rec_coverage_pct < 100 %}
+    <span class="text-muted" title="Older bets may not have all snapshot fields. Run `python manage.py backfill_mockbets --commit` to fill in what we can derive from existing OddsSnapshot rows. Won't fabricate.">&middot; older bets may be partial</span>
+    {% endif %}
+</div>
+{% endif %}
+
 {# ===== SYSTEM VERDICT ===== #}
 {% if cc.capabilities.has_settled_bets %}
 <div class="card cc-verdict cc-verdict-{{ cc.system_verdict.verdict|lower }} mb-2">

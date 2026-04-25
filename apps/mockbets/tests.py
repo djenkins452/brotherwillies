@@ -760,7 +760,11 @@ class StalePendingRegressionTests(TestCase):
         self.assertEqual(bet.result, 'win')
         self.assertContains(resp, 'WIN')  # badge renders on the card
         self.assertContains(resp, 'Payout')
-        self.assertNotContains(resp, 'PENDING')
+        # No PENDING result-badge on the actual bet card. The literal word
+        # 'PENDING' may appear in the help-modal copy that explains all
+        # result types — so we look for the specific badge HTML, not the
+        # bare word.
+        self.assertNotContains(resp, 'bet-result-badge">PENDING')
 
     def test_settle_user_pending_does_not_touch_other_users(self):
         """Per-user scoping — one user visiting /mockbets/ must never settle
@@ -1229,6 +1233,163 @@ class TopPlayReasonsTests(TestCase):
                                     tier='elite', status='recommended')
         # Doesn't crash and still emits the cleared-rules bullet
         self.assertIsInstance(reasons, list)
+
+
+class BackfillTests(TestCase):
+    """Backfill must:
+      - Fill missing closing_odds + CLV when a pre-game OddsSnapshot exists
+      - Skip when no snapshot exists (never fabricate)
+      - Never overwrite existing data
+      - Be idempotent (second run = no-op)
+      - Honor dry_run (no DB writes)
+      - Copy recommendation snapshot from linked BettingRecommendation only
+        — never recompute from current model
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        self.user = User.objects.create_user('backfill_user', password='pw')
+        conf = MLBConf.objects.create(name='AL East', slug='backfill-al-east')
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='backfill-yankees', conference=conf,
+            source='mlb_stats_api', external_id='bf-147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='backfill-royals', conference=conf,
+            source='mlb_stats_api', external_id='bf-118',
+        )
+
+    def _game_with_pregame_odds(self, ml_home=-150, ml_away=130, hours_past=3):
+        from apps.mlb.models import Game as MLBGame, OddsSnapshot
+        game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=hours_past),
+            status='final', home_score=5, away_score=3,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        OddsSnapshot.objects.create(
+            game=game, captured_at=game.first_pitch - timedelta(minutes=10),
+            market_home_win_prob=0.60,
+            moneyline_home=ml_home, moneyline_away=ml_away,
+        )
+        return game
+
+    def _bet(self, game, selection='Yankees', odds=-130, **overrides):
+        defaults = dict(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection=selection, odds_american=odds,
+            implied_probability=Decimal('0.565'),
+            stake_amount=Decimal('100'), mlb_game=game,
+            result='win',
+            simulated_payout=Decimal('76.92'),
+            settled_at=timezone.now(),
+        )
+        defaults.update(overrides)
+        return MockBet.objects.create(**defaults)
+
+    def test_dry_run_does_not_persist_changes(self):
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds(ml_home=-150)
+        bet = self._bet(game)
+        self.assertIsNone(bet.closing_odds_american)
+        summary = backfill_mockbet_data(dry_run=True)
+        self.assertEqual(summary['closing_odds_filled'], 1)
+        self.assertEqual(summary['clv_computed'], 1)
+        bet.refresh_from_db()
+        # Dry run — DB still has nulls
+        self.assertIsNone(bet.closing_odds_american)
+        self.assertIsNone(bet.clv_cents)
+
+    def test_commit_persists_closing_odds_and_clv(self):
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds(ml_home=-150)
+        bet = self._bet(game)
+        backfill_mockbet_data(dry_run=False)
+        bet.refresh_from_db()
+        self.assertEqual(bet.closing_odds_american, -150)
+        # Bet at -130, closed at -150 → less juice at bet → +CLV
+        self.assertGreater(bet.clv_cents, 0)
+        self.assertEqual(bet.clv_direction, 'positive')
+
+    def test_does_not_overwrite_existing_clv(self):
+        """If a bet already has CLV, backfill must leave it alone."""
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds(ml_home=-150)
+        bet = self._bet(game, closing_odds_american=-200, clv_cents=0.123,
+                        clv_direction='positive')
+        backfill_mockbet_data(dry_run=False)
+        bet.refresh_from_db()
+        # Existing values preserved — backfill did not touch them
+        self.assertEqual(bet.closing_odds_american, -200)
+        self.assertEqual(bet.clv_cents, 0.123)
+
+    def test_skips_when_no_pregame_snapshot(self):
+        """Game has no OddsSnapshot — never fabricate."""
+        from apps.mlb.models import Game as MLBGame
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=2),
+            status='final', home_score=5, away_score=3,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        bet = self._bet(game)
+        summary = backfill_mockbet_data(dry_run=False)
+        bet.refresh_from_db()
+        self.assertIsNone(bet.closing_odds_american)
+        self.assertIsNone(bet.clv_cents)
+        self.assertGreaterEqual(summary['skipped_no_odds'], 1)
+
+    def test_idempotent_second_run_is_noop(self):
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds()
+        self._bet(game)
+        first = backfill_mockbet_data(dry_run=False)
+        second = backfill_mockbet_data(dry_run=False)
+        # Second run — nothing to fill
+        self.assertEqual(second['closing_odds_filled'], 0)
+        self.assertEqual(second['clv_computed'], 0)
+        # First run filled both
+        self.assertEqual(first['closing_odds_filled'], 1)
+        self.assertEqual(first['clv_computed'], 1)
+
+    def test_recommendation_snapshot_copied_from_linked_row(self):
+        """When BettingRecommendation FK is set, copy snapshot fields."""
+        from apps.core.models import BettingRecommendation
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds()
+        # tier is derived from model_edge on the DB model; edge=6.5 → 'strong'
+        rec = BettingRecommendation.objects.create(
+            sport='mlb', mlb_game=game, bet_type='moneyline',
+            pick='Yankees', line='-130', odds_american=-130,
+            confidence_score=Decimal('72'),
+            model_edge=Decimal('6.5'),
+            model_source='house', status='recommended',
+            status_reason='',
+        )
+        bet = self._bet(game, recommendation=rec)
+        # Snapshot fields are blank initially
+        self.assertEqual(bet.recommendation_status, '')
+        self.assertEqual(bet.recommendation_tier, '')
+        backfill_mockbet_data(dry_run=False)
+        bet.refresh_from_db()
+        self.assertEqual(bet.recommendation_status, 'recommended')
+        self.assertEqual(bet.recommendation_tier, 'strong')
+        self.assertEqual(bet.recommendation_confidence, Decimal('72.00'))
+        # Edge backfilled too
+        self.assertEqual(bet.expected_edge, Decimal('6.50'))
+
+    def test_no_recommendation_row_means_no_rec_backfill(self):
+        """Spec rule: never recompute from current model. If the linked
+        BettingRecommendation row is gone, snapshot stays null."""
+        from apps.mockbets.services.backfill import backfill_mockbet_data
+        game = self._game_with_pregame_odds()
+        bet = self._bet(game, recommendation=None)
+        backfill_mockbet_data(dry_run=False)
+        bet.refresh_from_db()
+        # Snapshot stays empty — no fabrication
+        self.assertEqual(bet.recommendation_status, '')
+        self.assertEqual(bet.recommendation_tier, '')
 
 
 class BulkActionsTests(TestCase):

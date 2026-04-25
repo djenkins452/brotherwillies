@@ -131,10 +131,17 @@ class BettingRecommendation(models.Model):
 
     @property
     def tier(self):
-        """Raw tier from confidence_score. Persisted snapshots don't participate
-        in the slate-level elite cap — that's a lobby-render concern only."""
+        """Raw tier from model_edge (edge-based since the Apr 21 migration).
+
+        Earlier this property passed confidence_score to _raw_tier, which is
+        a leftover from when tier was confidence-based. _raw_tier now expects
+        edge in pp. Persisted snapshots don't participate in the slate-level
+        elite cap — that's a lobby-render concern only.
+        """
         from apps.core.services.recommendations import _raw_tier
-        return _raw_tier(float(self.confidence_score))
+        if self.model_edge is None:
+            return 'standard'
+        return _raw_tier(float(self.model_edge))
 
     @property
     def tier_label(self):
