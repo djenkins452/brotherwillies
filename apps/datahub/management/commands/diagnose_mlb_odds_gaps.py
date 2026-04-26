@@ -48,6 +48,12 @@ class _GameDiag:
     def __init__(self, game):
         self.game = game
         self.matchup = f'{game.away_team.name} @ {game.home_team.name}'
+        # Game state — answers "is this even a pre-game line situation?"
+        self.status = (game.status or 'unknown').upper()[:7]
+        # Minutes from now to first_pitch. Negative = game has started.
+        from django.utils import timezone as _tz
+        delta = (game.first_pitch - _tz.now()).total_seconds() / 60.0
+        self.minutes_to_pitch = int(delta)
         # Stage 1 — Odds API
         self.api_present = '?'
         self.api_bookmakers = '-'
@@ -61,8 +67,17 @@ class _GameDiag:
         self.final_reason = ''
 
     def as_row(self):
+        # Format Δ first_pitch for human reading: "+125m" / "-30m" / "live".
+        if self.status == 'LIVE':
+            delta_str = 'live'
+        elif self.minutes_to_pitch >= 0:
+            delta_str = f'+{self.minutes_to_pitch}m'
+        else:
+            delta_str = f'{self.minutes_to_pitch}m'
         return [
             self.matchup[:36],
+            self.status,
+            delta_str,
             self.api_present,
             str(self.api_bookmakers),
             self.api_parsed,
@@ -205,6 +220,13 @@ class Command(BaseCommand):
             f'Window: now → +36h. Fresh threshold: {fresh_window} min.'
         )
 
+        # ---- Stage 0: Odds API Preflight ----------------------------------
+        # Answers "is the API key correct, what's our coverage, how much
+        # quota remains?" — the questions that matter when the symptom is
+        # "the API isn't returning the events we expect," NOT
+        # "the events are there but we're failing to parse them."
+        self._print_odds_api_preflight()
+
         # ---- Stage 1: probe the Odds API -----------------------------------
         api_events = self._fetch_odds_api()
         if api_events is None:
@@ -260,6 +282,139 @@ class Command(BaseCommand):
             f'diagnosed={len(diags)} '
             f'reasons={dict(reason_short)}'
         )
+
+    # -----------------------------------------------------------------------
+    # Stage 0 — Odds API preflight
+    # -----------------------------------------------------------------------
+
+    def _print_odds_api_preflight(self):
+        """Direct probe of The Odds API to answer the questions that aren't
+        about per-event matching: key validity, plan coverage, region scope,
+        and quota state. Bypasses our normal provider so we see exactly
+        what the API itself returns.
+
+        Output sections:
+          - Key fingerprint (last 4 chars + length)
+          - /v4/sports response — confirms MLB is in this key's catalog
+          - /v4/sports/baseball_mlb/odds with regions=us  — event count
+          - /v4/sports/baseball_mlb/odds with regions=us,us2 — event count
+          - Quota: x-requests-used / x-requests-remaining
+          - Unique bookmaker names across the wider response
+        """
+        import requests
+        import os
+
+        api_key = getattr(settings, 'ODDS_API_KEY', '') or ''
+        self.stdout.write('')
+        self.stdout.write('--- Odds API preflight ----------------------------------------')
+        if not api_key:
+            self.stdout.write(self.style.ERROR(
+                '  ODDS_API_KEY is EMPTY in settings. The provider is being '
+                'called without a key — this guarantees zero events.'
+            ))
+            return
+        # Mask all but last 4 chars so the user can sanity-check it's the
+        # right key without exposing the full secret in deploy logs.
+        fingerprint = ('*' * max(0, len(api_key) - 4)) + api_key[-4:]
+        self.stdout.write(f'  ODDS_API_KEY fingerprint: {fingerprint} (length={len(api_key)})')
+
+        # 1. Sports catalog probe — proves the key is valid and what it covers.
+        try:
+            r = requests.get(
+                'https://api.the-odds-api.com/v4/sports',
+                params={'apiKey': api_key},
+                timeout=10,
+            )
+            self.stdout.write(f'  /v4/sports → HTTP {r.status_code}')
+            self._report_quota_headers(r.headers)
+            if r.status_code == 200:
+                sports = r.json() or []
+                mlb_present = any(
+                    (s.get('key') == 'baseball_mlb') for s in sports
+                )
+                self.stdout.write(
+                    f'  Active sports for this key: {len(sports)} '
+                    f'({"includes" if mlb_present else "MISSING"} baseball_mlb)'
+                )
+                if not mlb_present:
+                    self.stdout.write(self.style.ERROR(
+                        '  ⚠  baseball_mlb is NOT in this key\'s active sports list. '
+                        'This is the smoking gun: the new plan does not include MLB.'
+                    ))
+            else:
+                # 401 / 403 / 429 — show the body, that\'s where the
+                # actionable error message usually is.
+                body = (r.text or '')[:300]
+                self.stdout.write(self.style.ERROR(
+                    f'  /v4/sports failed. Body: {body!r}'
+                ))
+                return
+        except Exception as exc:
+            self.stdout.write(self.style.ERROR(f'  /v4/sports request errored: {exc}'))
+            return
+
+        # 2. Region comparison: us vs us,us2 — sometimes the new plan only
+        # ships us2 books which we currently aren't requesting.
+        from datetime import timedelta as _td
+        now = timezone.now()
+        commence_from = (now - _td(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        commence_to = (now + _td(hours=72)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        for regions in ('us', 'us,us2'):
+            try:
+                r = requests.get(
+                    'https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/',
+                    params={
+                        'apiKey': api_key,
+                        'regions': regions,
+                        'markets': 'h2h',
+                        'oddsFormat': 'american',
+                        'commenceTimeFrom': commence_from,
+                        'commenceTimeTo': commence_to,
+                    },
+                    timeout=15,
+                )
+                if r.status_code != 200:
+                    self.stdout.write(self.style.WARNING(
+                        f'  /v4/baseball_mlb/odds (regions={regions}) → HTTP {r.status_code} '
+                        f'body={(r.text or "")[:200]!r}'
+                    ))
+                    self._report_quota_headers(r.headers)
+                    continue
+                events = r.json() or []
+                bookmakers = set()
+                events_with_books = 0
+                for e in events:
+                    books = e.get('bookmakers') or []
+                    if books:
+                        events_with_books += 1
+                    for b in books:
+                        bookmakers.add(b.get('title', '?'))
+                self.stdout.write(
+                    f'  /v4/baseball_mlb/odds (regions={regions}) → {len(events)} events '
+                    f'({events_with_books} with books, {len(bookmakers)} unique books seen)'
+                )
+                if bookmakers:
+                    self.stdout.write(
+                        f'    bookmakers={sorted(bookmakers)}'
+                    )
+                self._report_quota_headers(r.headers)
+            except Exception as exc:
+                self.stdout.write(self.style.WARNING(
+                    f'  regions={regions} request errored: {exc}'
+                ))
+
+        self.stdout.write('---------------------------------------------------------------')
+        self.stdout.write('')
+
+    def _report_quota_headers(self, headers):
+        """Surface The Odds API's quota counters when present."""
+        used = headers.get('x-requests-used')
+        remaining = headers.get('x-requests-remaining')
+        last = headers.get('x-requests-last')
+        if used or remaining:
+            self.stdout.write(
+                f'    quota: used={used} remaining={remaining} last_call_cost={last}'
+            )
 
     # -----------------------------------------------------------------------
     # Stage 1 — Odds API
@@ -394,6 +549,12 @@ class Command(BaseCommand):
         if not odds_list:
             d.espn_attempt = 'NO_ODDS'
             d.espn_skip_reason = 'event_present_no_odds_block'
+            # Probe ESPN's per-event odds endpoint as a secondary
+            # source. The scoreboard's odds[] sometimes ships empty even
+            # though the core-API per-event endpoint has the bookmaker
+            # data. If this probe returns items we know the fix is to
+            # add this endpoint as a fallback within the ESPN provider.
+            self._probe_espn_per_event_odds(d, match)
             return
 
         _, ml_h, ml_a, is_derived = _pick_best_odds_entry(
@@ -411,6 +572,62 @@ class Command(BaseCommand):
             else:
                 d.espn_skip_reason = ''
 
+    def _probe_espn_per_event_odds(self, d: _GameDiag, scoreboard_event):
+        """Probe ESPN's per-event odds endpoint as a secondary source.
+
+        URL pattern (sports.core.api.espn.com — different host from
+        scoreboard's site.api.espn.com):
+            /v2/sports/baseball/leagues/mlb/events/{event_id}/competitions/{competition_id}/odds
+
+        Used purely as a diagnostic — we record whether the endpoint
+        carries odds data when scoreboard's odds[] is empty. If this
+        consistently returns items, the fix is to add this endpoint as
+        a fallback within MLBEspnOddsProvider.fetch().
+        """
+        event_id = scoreboard_event.get('id')
+        comp = (scoreboard_event.get('competitions') or [{}])[0]
+        competition_id = comp.get('id') or event_id
+        if not event_id:
+            d.espn_skip_reason += ' (no event_id to probe)'
+            return
+        try:
+            from apps.datahub.providers.client import APIClient
+            core_client = APIClient(
+                base_url='https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb',
+                rate_limit_delay=0.3,
+            )
+            # ?limit=20 to get all bookmaker entries; default page size
+            # of 1 sometimes hides additional providers.
+            resp = core_client.get(
+                f'/events/{event_id}/competitions/{competition_id}/odds',
+                params={'limit': 20},
+            )
+            items = (resp or {}).get('items') or []
+            count = len(items)
+            d.espn_skip_reason += f' [per_event_endpoint items={count}]'
+            if count > 0:
+                # Stash a small sample of the first item for log review.
+                import json as _json
+                try:
+                    first = items[0]
+                    sample = _json.dumps(first, default=str)[:500]
+                except Exception:
+                    sample = str(items[0])[:500]
+                logger.info(
+                    'mlb_odds_espn_per_event_probe game_id=%s event_id=%s '
+                    'items=%d sample=%s',
+                    d.game.id, event_id, count, sample,
+                )
+                # Also surface in the table cell so the user sees it
+                # without having to dig into deploy logs.
+                d.espn_attempt = f'PER_EVENT={count}'
+        except Exception as exc:
+            logger.warning(
+                'mlb_odds_espn_per_event_probe_failed game_id=%s err=%s',
+                d.game.id, exc,
+            )
+            d.espn_skip_reason += ' [per_event_probe_failed]'
+
     # -----------------------------------------------------------------------
     # Stage 3 — final reason synthesis
     # -----------------------------------------------------------------------
@@ -419,13 +636,28 @@ class Command(BaseCommand):
         """Single-string explanation for THIS game's missing odds.
 
         Reasoning order:
-          1. If API matched + parsed both moneylines → reason is something
+          1. If status=LIVE or ΔFP < -10min → game is live; pre-game
+             endpoints (Odds API + ESPN scoreboard) drop these. The
+             cause is contractual, not a bug. Tagged distinctly.
+          2. If API matched + parsed both moneylines → reason is something
              other than "no data" (probably a persist-time failure or a
              post-persist filter). Flag it explicitly.
-          2. If API matched but didn't parse → no_moneyline_pair.
-          3. If API absent → did ESPN fill or fail?
-          4. If API team alias miss → tag it for alias-table extension.
+          3. If API matched but didn't parse → no_moneyline_pair.
+          4. If API absent → did ESPN fill or fail?
+          5. If API team alias miss → tag it for alias-table extension.
         """
+        # Top-priority signal: game is live or already underway. The
+        # pre-game endpoints we query simply do not return live games;
+        # the moneyline moves to a live endpoint that this codebase
+        # doesn't currently consume.
+        if d.status == 'LIVE' or d.minutes_to_pitch < -10:
+            base = 'game_live_or_started_pre_game_endpoints_drop_it'
+            # Carry the per-event probe result along if we got one — if
+            # ESPN's per-event endpoint had data, that's still a possible
+            # recovery path even for live games.
+            if d.espn_attempt.startswith('PER_EVENT='):
+                return f'{base} (but per-event endpoint had data — see logs)'
+            return base
         if d.api_present == 'YES' and d.api_parsed == 'YES':
             # Curious — primary should have persisted this game. Either
             # the gap detector saw it BEFORE the persist completed, or
@@ -449,6 +681,12 @@ class Command(BaseCommand):
                 return 'espn_present_but_no_extractable_moneyline'
             if d.espn_attempt == 'NO_ODDS':
                 return 'espn_present_but_no_odds_block'
+            if d.espn_attempt.startswith('PER_EVENT='):
+                # Scoreboard's odds[] was empty BUT the per-event core-API
+                # endpoint had bookmaker data. This is the smoking-gun
+                # signal that adding the per-event endpoint as a
+                # fallback inside MLBEspnOddsProvider would close the gap.
+                return 'espn_scoreboard_empty_but_per_event_endpoint_has_data'
             if d.espn_attempt == 'NO_MATCH':
                 return 'absent_from_both_apis'
             if d.espn_attempt == 'ERR':
@@ -462,7 +700,7 @@ class Command(BaseCommand):
     # -----------------------------------------------------------------------
 
     def _print_table(self, diags):
-        headers = ['Game', 'API', 'Books', 'Parsed', 'Matched', 'ESPN', 'Final Reason']
+        headers = ['Game', 'Status', 'ΔFP', 'API', 'Books', 'Parsed', 'Matched', 'ESPN', 'Final Reason']
         rows = [d.as_row() for d in diags]
         widths = [max(len(str(c)) for c in [h] + [r[i] for r in rows])
                   for i, h in enumerate(headers)]
@@ -484,6 +722,11 @@ class Command(BaseCommand):
     def _print_legend(self):
         self.stdout.write('')
         self.stdout.write('Legend:')
+        self.stdout.write('  Status    SCHEDULED / LIVE / FINAL — game state')
+        self.stdout.write('  ΔFP       Minutes from now to first_pitch (negative = past)')
+        self.stdout.write('  ↳ if Status=LIVE or ΔFP is negative, the Odds API has likely')
+        self.stdout.write('    moved this event to its live-odds endpoint and our pre-game')
+        self.stdout.write('    fetch will not return it. Same applies to ESPN scoreboard.')
         self.stdout.write('  API=YES   game found in Odds API response')
         self.stdout.write('  API=NO    game NOT in Odds API response')
         self.stdout.write('  API=PART  team name appeared but alias resolution failed')
@@ -493,4 +736,6 @@ class Command(BaseCommand):
         self.stdout.write('  ESPN=DERIVED  ESPN single-side, opposite inverted')
         self.stdout.write('  ESPN=NO_ML    event present, no moneyline extractable')
         self.stdout.write('  ESPN=NO_MATCH event not found in ESPN scoreboard')
-        self.stdout.write('  ESPN=NO_ODDS  event in ESPN but no odds block')
+        self.stdout.write('  ESPN=NO_ODDS  scoreboard has event but odds[] empty')
+        self.stdout.write('  ESPN=PER_EVENT=N  scoreboard empty BUT per-event endpoint had N items')
+        self.stdout.write('                    (smoking gun — fallback fix would recover these)')
