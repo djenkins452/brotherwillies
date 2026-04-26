@@ -338,6 +338,10 @@ class Command(BaseCommand):
         # ---- Output --------------------------------------------------------
         self._print_table(diags)
         self._print_all_time_coverage(diags)
+        # NEW: dry-run primary's persist for each game so we can see
+        # the EXACT reason persist fails. Names team-pk mismatches,
+        # duplicate Team rows, missing Game rows.
+        self._print_primary_persist_dry_run(diags)
         self._print_legend()
 
         # Also emit each row at INFO so the deploy log captures the table.
@@ -984,6 +988,159 @@ class Command(BaseCommand):
                 f'{primary_marker}'
             )
         self.stdout.write('--------------------------------------------------------------')
+
+    def _print_primary_persist_dry_run(self, diags):
+        """For each game, simulate exactly what MLBOddsProvider.persist
+        would do. Surfaces the EXACT reason primary fails to write
+        for each PRIMARY-NEVER-RAN game.
+
+        Specifically reproduces:
+          1. _find_team(api_home_name) → which Team row is returned?
+          2. Compare returned team.pk to game.home_team.pk
+          3. Run the persist's Game.objects.filter(...) query
+          4. Show what it returns
+          5. Detect duplicate Team rows + duplicate Game rows for this matchup
+
+        Output names the actual cause per game: 'team-mismatch',
+        'duplicate-game-match-wrong-pk', 'no-game-found-in-window',
+        'team-not-resolved'.
+        """
+        filtered = getattr(self, '_preflight_filtered_events', None) or []
+        if not filtered:
+            return
+
+        from apps.datahub.providers.mlb.odds_provider import _find_team
+        from apps.mlb.models import Team, Game
+        from datetime import timedelta
+
+        self.stdout.write('')
+        self.stdout.write('--- Primary persist DRY-RUN per game ----------------------------')
+        self.stdout.write('  Reproduces what MLBOddsProvider.persist() does, without writing.')
+        self.stdout.write('')
+
+        # Pre-compute duplicate Team and Game maps so we can flag them.
+        dup_teams_by_name = {}
+        for t in Team.objects.values('name', 'pk'):
+            dup_teams_by_name.setdefault(t['name'], []).append(t['pk'])
+        dup_team_names = {n for n, pks in dup_teams_by_name.items() if len(pks) > 1}
+
+        for d in diags:
+            # Find the API event whose teams match this game's teams (strict).
+            home_db = d.game.home_team
+            away_db = d.game.away_team
+            api_event = None
+            for e in filtered:
+                eh = e.get('home_team', '')
+                ea = e.get('away_team', '')
+                # Match by resolved Team identity, both orientations.
+                if (_find_team(eh) and _find_team(ea)
+                        and ((_find_team(eh).pk == home_db.pk and _find_team(ea).pk == away_db.pk)
+                             or (_find_team(eh).pk == away_db.pk and _find_team(ea).pk == home_db.pk))):
+                    api_event = e
+                    break
+
+            self.stdout.write(f'  • {d.matchup}  (Game pk={d.game.pk})')
+
+            if api_event is None:
+                self.stdout.write(
+                    f'      ↳ No API event resolves to this Game\'s exact team pks. '
+                    f'(API may have the matchup but resolve to different Team rows.)'
+                )
+                # Surface duplicate-team scenario explicitly:
+                if home_db.name in dup_team_names:
+                    self.stdout.write(self.style.ERROR(
+                        f'      ↳ ⚠  DUPLICATE TEAM rows for {home_db.name!r}: pks={dup_teams_by_name[home_db.name]}'
+                    ))
+                if away_db.name in dup_team_names:
+                    self.stdout.write(self.style.ERROR(
+                        f'      ↳ ⚠  DUPLICATE TEAM rows for {away_db.name!r}: pks={dup_teams_by_name[away_db.name]}'
+                    ))
+                continue
+
+            # Now mimic persist's flow exactly.
+            api_home = api_event.get('home_team', '')
+            api_away = api_event.get('away_team', '')
+            api_commence = api_event.get('commence_time', '')
+
+            resolved_home = _find_team(api_home)
+            resolved_away = _find_team(api_away)
+            self.stdout.write(
+                f'      api_home={api_home!r} → resolved Team pk={resolved_home.pk if resolved_home else None} '
+                f'name={resolved_home.name if resolved_home else None!r}'
+            )
+            self.stdout.write(
+                f'      api_away={api_away!r} → resolved Team pk={resolved_away.pk if resolved_away else None} '
+                f'name={resolved_away.name if resolved_away else None!r}'
+            )
+            self.stdout.write(
+                f'      DB game.home_team.pk={home_db.pk} ({home_db.name!r}) '
+                f'game.away_team.pk={away_db.pk} ({away_db.name!r})'
+            )
+            # Verdict: do the resolved pks match the Game's teams?
+            home_match = resolved_home and resolved_home.pk == home_db.pk
+            away_match = resolved_away and resolved_away.pk == away_db.pk
+            home_match_swap = resolved_home and resolved_home.pk == away_db.pk
+            away_match_swap = resolved_away and resolved_away.pk == home_db.pk
+
+            if not ((home_match and away_match) or (home_match_swap and away_match_swap)):
+                self.stdout.write(self.style.ERROR(
+                    f'      ↳ ⚠  TEAM-PK MISMATCH: _find_team returns different '
+                    f'Team rows than the Game points at. Persist will skip with '
+                    f'no_game_match. Likely duplicate Team rows.'
+                ))
+                continue
+
+            # Teams resolved correctly. Now run the persist's Game query.
+            from django.utils.dateparse import parse_datetime
+            commence_dt = parse_datetime(api_commence) if api_commence else None
+            if commence_dt and timezone.is_naive(commence_dt):
+                commence_dt = timezone.make_aware(commence_dt)
+
+            if commence_dt:
+                window_start = commence_dt - timedelta(hours=36)
+                window_end = commence_dt + timedelta(hours=36)
+                # Use whichever orientation matched.
+                if home_match and away_match:
+                    home_for_filter, away_for_filter = resolved_home, resolved_away
+                else:
+                    home_for_filter, away_for_filter = resolved_away, resolved_home
+                candidate_qs = Game.objects.filter(
+                    home_team=home_for_filter, away_team=away_for_filter,
+                    first_pitch__gte=window_start, first_pitch__lte=window_end,
+                )
+                candidate_pks = list(candidate_qs.values_list('pk', flat=True))
+                first = candidate_qs.order_by('first_pitch').first()
+                first_pk = first.pk if first else None
+
+                self.stdout.write(
+                    f'      ±36h-window Games matching this team pair: pks={candidate_pks}'
+                )
+                if not candidate_pks:
+                    self.stdout.write(self.style.ERROR(
+                        f'      ↳ ⚠  ZERO Games match the team pair within ±36h '
+                        f'of API commence_time {api_commence!r}. '
+                        f'first_pitch likely outside window or wrong direction.'
+                    ))
+                elif len(candidate_pks) > 1:
+                    self.stdout.write(self.style.ERROR(
+                        f'      ↳ ⚠  DOUBLEHEADER / DUPLICATE Game rows. Persist '
+                        f'picks pk={first_pk} via .order_by("first_pitch").first(). '
+                        f'This Game (pk={d.game.pk}) ' +
+                        ("IS the picked one — primary should write here." if first_pk == d.game.pk else
+                         f"is NOT picked — primary writes to pk={first_pk} instead.")
+                    ))
+                elif first_pk == d.game.pk:
+                    self.stdout.write(
+                        f'      ↳ ✅ Primary should write to THIS game pk={first_pk}. '
+                        f'If snaps are missing, the bug is downstream of game match '
+                        f'(moneyline extraction or DB write).'
+                    )
+                else:
+                    self.stdout.write(self.style.ERROR(
+                        f'      ↳ ⚠  Game-pk mismatch: persist picks pk={first_pk} '
+                        f'but diagnostic\'s game is pk={d.game.pk}.'
+                    ))
+        self.stdout.write('-----------------------------------------------------------------')
 
     def _print_legend(self):
         self.stdout.write('')
