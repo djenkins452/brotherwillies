@@ -201,7 +201,20 @@
   <h2 class="ops-section-title">Recent Runs</h2>
   <div class="ops-card">
     {% if snapshot.recent_runs %}
-      <table class="ops-table">
+    {# table-layout: fixed lets us assign column widths that ARE honored —     #}
+    {# without it, the <pre>'s longest unbroken token pushes the Summary       #}
+    {# column past 100% and the whole table overflows the card horizontally.   #}
+    {# The Summary column gets the remaining width via width:auto + the fixed  #}
+    {# widths on the other five.                                               #}
+      <table class="ops-table ops-runs-table" style="table-layout:fixed;width:100%;">
+        <colgroup>
+          <col style="width:160px;">
+          <col style="width:80px;">
+          <col style="width:130px;">
+          <col style="width:80px;">
+          <col style="width:90px;">
+          <col>
+        </colgroup>
         <thead>
           <tr>
             <th>Command</th>
@@ -220,7 +233,7 @@
               <td>{{ r.started_at|date:"M j H:i:s" }}</td>
               <td class="num">{% if r.duration_seconds %}{{ r.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
               <td><span class="ops-pill ops-pill-{{ r.status }}">{{ r.status|upper }}</span></td>
-              <td>
+              <td class="ops-summary-cell">
                 {% if r.stdout_tail %}
                   <details>
                     <summary style="cursor:pointer;">{{ r.summary|default:"—"|truncatechars:60 }}</summary>
@@ -228,7 +241,11 @@
                     {# Without it, operators have to drag-select inside a scrollable <pre>, #}
                     {# which is fiddly and easy to truncate by accident — especially the #}
                     {# top of long refresh_data transcripts where the persist summary lives. #}
-                    <div style="position:relative;margin-top:8px;">
+                    {#                                                                       #}
+                    {# Layout: the wrapper carries the max-width so the inner <pre> never    #}
+                    {# expands its <td> beyond the table's natural width. Without this the   #}
+                    {# long Done:{…} dicts force the row wider than the viewport.            #}
+                    <div class="ops-stdout-wrap" style="position:relative;margin-top:8px;max-width:100%;">
                       <button type="button"
                               class="ops-copy-btn"
                               data-copy-target="stdout-{{ r.id }}"
@@ -238,7 +255,7 @@
                                      border:1px solid #3a3f5a;border-radius:4px;
                                      cursor:pointer;">Copy</button>
                       <pre id="stdout-{{ r.id }}"
-                           style="margin:0;padding:8px 64px 8px 8px;background:#1a1d2e;border-radius:6px;font-size:0.78rem;line-height:1.4;overflow-x:auto;max-height:400px;white-space:pre;color:#cfd2e8;">{{ r.stdout_tail }}</pre>
+                           style="margin:0;padding:8px 64px 8px 8px;background:#1a1d2e;border-radius:6px;font-size:0.78rem;line-height:1.4;max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#cfd2e8;">{{ r.stdout_tail }}</pre>
                     </div>
                   </details>
                 {% else %}
