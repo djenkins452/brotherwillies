@@ -54,34 +54,72 @@ def american_to_prob(ml):
     return abs(ml) / (abs(ml) + 100.0)
 
 
+def _coerce_to_int(value):
+    """Best-effort: pull an int out of a value that might be wrapped in a dict.
+
+    ESPN started serving moneyLine as `{"value": -150, "displayValue": "-150"}`
+    in some payloads — we used to assume bare ints, which crashed downstream
+    code with `TypeError: '>' not supported between instances of 'dict' and 'int'`.
+    This helper unwraps the common dict shapes seen in the wild.
+
+    Returns None when no integer can be extracted (caller treats as "side
+    has no moneyline available").
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, dict):
+        # Common keys: value (most common), american, current, openValue, close
+        for key in ('value', 'american', 'current', 'openValue', 'close', 'displayValue'):
+            if key in value:
+                return _coerce_to_int(value[key])
+        return None
+    if isinstance(value, str):
+        # "+120" / "-150" / "120" — strip the + and parse
+        try:
+            return int(value.lstrip('+'))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def _extract_moneyline(odds_entry, side):
     """Pull the American moneyline for 'home' or 'away' out of an ESPN odds entry.
 
-    ESPN has used at least three shapes historically:
+    ESPN has used at least four shapes historically:
       A. `{"homeTeamOdds": {"moneyLine": -131}, "awayTeamOdds": {"moneyLine": 113}}`
       B. `{"moneyline": {"home": -131, "away": 113}}`
       C. flat: `{"homeMoneyLine": -131, "awayMoneyLine": 113}`
-    Be tolerant of all three so a shape-drift on their side doesn't silently
-    break fallback coverage.
+      D. dict-wrapped: `{"homeTeamOdds": {"moneyLine": {"value": -131, "displayValue": "-131"}}}`
+         (newer ESPN shape — caused production outage on 2026-04-25)
+    Be tolerant of all four. _coerce_to_int handles shape D + str variants;
+    callers downstream get a bare int or None.
     """
     # Shape A
     team_odds = odds_entry.get(f'{side}TeamOdds') or {}
     ml = team_odds.get('moneyLine')
     if ml is not None:
-        return ml
+        coerced = _coerce_to_int(ml)
+        if coerced is not None:
+            return coerced
     # Shape B
     ml_dict = odds_entry.get('moneyline') or odds_entry.get('moneyLine') or {}
     if isinstance(ml_dict, dict):
         ml = ml_dict.get(side) or ml_dict.get(f'{side}Odds') or ml_dict.get(f'{side}Value')
         if ml is not None:
-            return ml
+            coerced = _coerce_to_int(ml)
+            if coerced is not None:
+                return coerced
     # Shape C
     flat = (
         odds_entry.get(f'{side}MoneyLine')
         or odds_entry.get(f'{side}Moneyline')
         or odds_entry.get(f'{side}_moneyline')
     )
-    return flat
+    return _coerce_to_int(flat)
 
 
 def _pick_best_odds_entry(odds_list):

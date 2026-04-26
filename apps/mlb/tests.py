@@ -1279,6 +1279,72 @@ class ESPNOddsProviderTests(TestCase):
             out = p.normalize([event])
         self.assertEqual(out, [])
 
+    def test_extract_moneyline_handles_dict_shape(self):
+        """ESPN started serving moneyLine as {'value': -150, 'displayValue': '-150'}.
+        That shape crashed production on 2026-04-25 because downstream code
+        compared a dict to int. Extractor must coerce to a bare int."""
+        from apps.datahub.providers.mlb.odds_espn_provider import _extract_moneyline
+        odds_entry = {
+            'provider': {'name': 'DraftKings'},
+            'homeTeamOdds': {'moneyLine': {'value': -150, 'displayValue': '-150'}},
+            'awayTeamOdds': {'moneyLine': {'value': 130, 'displayValue': '+130'}},
+            'spread': -1.5, 'overUnder': 8.5,
+        }
+        self.assertEqual(_extract_moneyline(odds_entry, 'home'), -150)
+        self.assertEqual(_extract_moneyline(odds_entry, 'away'), 130)
+
+    def test_extract_moneyline_handles_string_shape(self):
+        """Some ESPN payloads serve moneyLine as '+150' / '-110' strings.
+        The extractor strips the + and parses the int."""
+        from apps.datahub.providers.mlb.odds_espn_provider import _extract_moneyline
+        odds_entry = {
+            'provider': {'name': 'DraftKings'},
+            'homeTeamOdds': {'moneyLine': '-150'},
+            'awayTeamOdds': {'moneyLine': '+130'},
+        }
+        self.assertEqual(_extract_moneyline(odds_entry, 'home'), -150)
+        self.assertEqual(_extract_moneyline(odds_entry, 'away'), 130)
+
+    def test_persist_does_not_crash_on_dict_shape(self):
+        """End-to-end: normalize+persist runs cleanly when moneyLine arrives
+        as a dict. Regression test for the production outage."""
+        from unittest.mock import patch
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        from apps.mlb.models import OddsSnapshot
+        conf, _ = Conference.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        home = Team.objects.create(name='New York Yankees', slug='ny-dict', conference=conf,
+                                   source='mlb_stats_api', external_id='dict-147')
+        away = Team.objects.create(name='Boston Red Sox', slug='bos-dict', conference=conf,
+                                   source='mlb_stats_api', external_id='dict-111')
+        Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=1),
+            source='mlb_stats_api', external_id='espn_dict_test_game',
+        )
+        event = {
+            **self.SAMPLE_EVENT,
+            'date': (timezone.now() + timedelta(hours=1)).isoformat(),
+            'competitions': [{
+                **self.SAMPLE_EVENT['competitions'][0],
+                'odds': [{
+                    'provider': {'name': 'DraftKings'},
+                    # Dict-shaped values — what crashed prod.
+                    'homeTeamOdds': {'moneyLine': {'value': -131, 'displayValue': '-131'}},
+                    'awayTeamOdds': {'moneyLine': {'value': 113, 'displayValue': '+113'}},
+                    'spread': -1.5, 'overUnder': 8.5,
+                }],
+            }],
+        }
+        with patch.object(MLBEspnOddsProvider, '__init__', return_value=None):
+            p = MLBEspnOddsProvider()
+            normalized = p.normalize([event])
+            result = p.persist(normalized)
+        self.assertEqual(result['created'], 1)
+        snap = OddsSnapshot.objects.filter(game__external_id='espn_dict_test_game').first()
+        self.assertIsNotNone(snap)
+        self.assertEqual(snap.moneyline_home, -131)
+        self.assertEqual(snap.moneyline_away, 113)
+
     def test_persist_creates_snapshot_when_teams_and_game_match(self):
         from unittest.mock import patch
         from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider

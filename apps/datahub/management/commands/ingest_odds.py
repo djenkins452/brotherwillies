@@ -97,6 +97,30 @@ class Command(BaseCommand):
             else:
                 raise CommandError(str(e))
         except Exception as e:
+            # Explicit detection of common Odds API failure modes — the bare
+            # exception message buries them in a stack trace, but a 401 here
+            # almost always means "ODDS_API_KEY is invalid or quota exhausted",
+            # which is the single most common production-stopping issue.
+            err_str = str(e)
+            if '401' in err_str:
+                logger.error(
+                    f"odds_api_unauthorized sport={sport} — "
+                    "ODDS_API_KEY is invalid or quota is exhausted. "
+                    "Rotate the key in Railway env vars."
+                )
+                self.stdout.write(self.style.ERROR(
+                    f"⚠ ODDS API 401 UNAUTHORIZED for {sport}: the ODDS_API_KEY env var "
+                    "is invalid, expired, or quota-exhausted. The deploy log shows the "
+                    "rejected URL. Update the ODDS_API_KEY in Railway → Variables and "
+                    "redeploy. (No quota warning will appear because the request was "
+                    "rejected at auth, not at quota.)"
+                ))
+            elif '429' in err_str:
+                logger.error(f"odds_api_rate_limited sport={sport}")
+                self.stdout.write(self.style.ERROR(
+                    f"⚠ ODDS API 429 RATE LIMIT for {sport}: too many requests. "
+                    "Consider widening the cron interval or upgrading the API tier."
+                ))
             if sport == 'mlb':
                 logger.warning(f"mlb_odds_primary_run_failed err={e}")
                 self.stdout.write(self.style.WARNING(
@@ -104,7 +128,13 @@ class Command(BaseCommand):
                 ))
                 stats = {'created': 0, 'skipped': 0}
             else:
-                raise
+                # Don't crash the cron for other sports — log it loudly and move
+                # on so the rest of the refresh cycle still runs.
+                logger.error(f"{sport}_odds_primary_run_failed err={e}")
+                self.stdout.write(self.style.WARNING(
+                    f"Primary odds source errored for {sport}: {e}. Skipping."
+                ))
+                stats = {'created': 0, 'skipped': 0, 'status': 'error'}
 
         # --- ESPN fallback for MLB ---------------------------------------
         # Triggered on either of two conditions:
