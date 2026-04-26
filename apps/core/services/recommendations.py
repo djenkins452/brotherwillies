@@ -34,6 +34,12 @@ _TIER_LABELS = {
     'elite': '🔥 High Confidence',
     'strong': 'Strong Edge',
     'standard': 'Model Pick',
+    # Source-Aware Betting: 'blocked' tier marks recommendations whose
+    # underlying snapshot was derived (synthetic moneyline). Status is
+    # also forced to 'not_recommended' with reason='derived_odds'.
+    # The UI hides these from primary surfaces; staff diagnostics still
+    # see them with this label.
+    'blocked': '🔒 Blocked (Derived Odds)',
 }
 
 STATUS_RECOMMENDED = 'recommended'
@@ -57,6 +63,7 @@ _STATUS_REASON_LABELS = {
     'low_edge': 'Low Edge',
     'high_juice': 'High Juice Risk',
     'marginal': 'Marginal',
+    'derived_odds': 'Derived Odds',
     '': '',
 }
 
@@ -163,6 +170,15 @@ class Recommendation:
     movement_score: Optional[float] = None
     movement_supports_pick: bool = False
     market_warning: bool = False
+    # Source-Aware Betting (trust-tier guardrails):
+    #   is_secondary  → True iff the underlying snapshot is ESPN fallback
+    #                   (odds_source='espn', is_derived=False). The
+    #                   displayed_confidence property applies a 0.85
+    #                   multiplier; the UI surfaces a yellow badge.
+    #   blocked       → reflected via tier='blocked' and status='not_recommended'
+    #                   with status_reason='derived_odds'. The model's edge
+    #                   math is preserved untouched.
+    is_secondary: bool = False
 
     @property
     def tier_label(self) -> str:
@@ -210,8 +226,23 @@ class Recommendation:
 
     @property
     def displayed_confidence(self):
-        from apps.core.services.odds_movement import displayed_confidence
-        return displayed_confidence(self.confidence_score, self.movement_class, self.movement_supports_pick)
+        """Two adjustments composed in one property, in order:
+            1. Movement nudge (additive, capped, +5pp max).
+            2. Secondary-source multiplier (×0.85 when is_secondary).
+        Then clamp at 99.
+
+        The two are deliberately not factored into separate fields — they
+        are both purely presentation. Edge math and base confidence_score
+        stay untouched.
+        """
+        from apps.core.services.odds_movement import displayed_confidence as _dc
+        from apps.core.services.odds_trust import secondary_confidence_multiplier
+        nudged = _dc(self.confidence_score, self.movement_class, self.movement_supports_pick)
+        if nudged is None:
+            return None
+        if self.is_secondary:
+            nudged = nudged * secondary_confidence_multiplier()
+        return min(99.0, nudged)
 
     @property
     def market_movement_chip(self):
@@ -320,6 +351,27 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
 
     model_edge_pp = round(edge * 100, 1)
     status, reason = compute_status(model_edge_pp, pick_odds)
+    tier = _raw_tier(model_edge_pp)
+    is_secondary = False
+
+    # Source-Aware Betting trust-tier guardrail.
+    # Decided AFTER the existing math runs so we never alter edge / status
+    # / tier from inside the math itself — we only OVERLAY a stricter
+    # decision when the underlying snapshot fails the trust check.
+    #
+    #   tier='invalid'    → block: not_recommended + reason=derived_odds.
+    #                       Tier becomes 'blocked' (UI hides outside diags).
+    #   tier='secondary'  → preserve recommendation; flip is_secondary=True
+    #                       so displayed_confidence × 0.85 + UI badge fires.
+    #   tier='primary'    → no change; behavior identical to pre-guardrail.
+    from apps.core.services.odds_trust import get_odds_trust_tier
+    trust = get_odds_trust_tier(odds)
+    if trust == 'invalid':
+        status = STATUS_NOT_RECOMMENDED
+        reason = 'derived_odds'
+        tier = 'blocked'
+    elif trust == 'secondary':
+        is_secondary = True
 
     # Movement signal — purely additive. The model still drives the pick,
     # the tier, and the recommendation status. Movement only affects the
@@ -339,13 +391,14 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         confidence_score=round(confidence * 100, 1),
         model_edge=model_edge_pp,
         model_source=model_source,
-        tier=_raw_tier(model_edge_pp),
+        tier=tier,
         status=status,
         status_reason=reason,
         movement_class=sig['movement_class'],
         movement_score=sig['movement_score'],
         movement_supports_pick=sig['supports_pick'],
         market_warning=sig['market_warning'],
+        is_secondary=is_secondary,
     )
 
 
@@ -406,5 +459,6 @@ def persist_recommendation(sport: str, game, user=None):
         movement_score=rec.movement_score,
         movement_supports_pick=rec.movement_supports_pick,
         market_warning=rec.market_warning,
+        is_secondary=rec.is_secondary,
         **{game_fk_field: game},
     )

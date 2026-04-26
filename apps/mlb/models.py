@@ -220,6 +220,15 @@ class OddsSnapshot(models.Model):
     source_quality = models.CharField(
         max_length=15, choices=SNAPSHOT_SOURCE_QUALITY_CHOICES, default='primary',
     )
+    # is_derived flags snapshots whose moneyline values were not directly
+    # observed but synthesized — e.g., when ESPN gave us only one side of
+    # the line and we filled the other via symmetric inversion. These rows
+    # are excluded from primary betting decisions: the recommendation
+    # engine blocks them, the UI hides them outside staff diagnostics, and
+    # bulk-bet actions never include them. Default False so any row that
+    # doesn't explicitly set it (older data, primary path) is treated as
+    # genuine market data.
+    is_derived = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         ordering = ['-captured_at']

@@ -171,19 +171,26 @@ def _extract_moneyline(odds_entry, side):
 
 
 def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
-    """Return the first odds entry with both home + away moneylines set.
+    """Return (entry, home_ml, away_ml, is_derived).
+
+    is_derived is True when one side's moneyline came from symmetric
+    inversion of the other (Pass 3 single-side fallback). False otherwise.
+    The caller persists is_derived onto the snapshot so the recommendation
+    engine can refuse to bet against synthesized lines.
 
     ESPN sometimes returns multiple entries per event (e.g. a spread-only
     book first, then a moneyline book). Picking the first DraftKings entry
     misses the moneyline when that entry is spread-only. Scan all entries,
-    prefer the preferred provider, and return the tuple (entry, home_ml, away_ml).
+    prefer the preferred provider, and accumulate.
 
     Pass-by-pass strategy:
       1. Preferred provider with both moneylines via standard shapes.
       2. Any provider with both moneylines via standard shapes.
       3. Combined `details` parsing across ALL entries — ESPN was observed
          emitting the moneyline inside `details` strings like "BAL -143"
-         instead of `homeTeamOdds.moneyLine`. We accumulate side-by-side.
+         instead of `homeTeamOdds.moneyLine`. We accumulate side-by-side
+         AND fill the missing side via -value when only one was published.
+         The inversion path sets is_derived=True so downstream gates fire.
       4. Fall back to the first entry's spread/total (no moneyline).
     """
     # Pass 1 — preferred provider with both moneylines present.
@@ -193,13 +200,13 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
         h = _extract_moneyline(o, 'home')
         a = _extract_moneyline(o, 'away')
         if h is not None and a is not None:
-            return o, h, a
+            return o, h, a, False
     # Pass 2 — any provider with both moneylines via standard shapes.
     for o in odds_list or []:
         h = _extract_moneyline(o, 'home')
         a = _extract_moneyline(o, 'away')
         if h is not None and a is not None:
-            return o, h, a
+            return o, h, a, False
     # Pass 3 — combined details-string parsing. Each entry's details
     # might carry one side's moneyline (e.g. "BAL -143" for home,
     # "BOS +130" for away in a separate entry, OR just one side as
@@ -228,18 +235,19 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
 
         # v1 derivation — when ESPN gives only one side's moneyline
         # ("NYY -136" but no entry for the opponent), fill the missing
-        # side via symmetric inversion. Real markets carry vig (the true
-        # opposite of -136 is roughly +120, not +136), so this is
-        # acknowledged as approximate. Acceptable in v1 because:
-        #   - The model still owns the true probability; ESPN's number
-        #     only feeds into market_home_win_prob downstream.
-        #   - "Approximate moneyline" is strictly better than "no
-        #     moneyline" — the alternative was skipping the game entirely
-        #     and showing the user no odds.
+        # side via symmetric inversion. is_derived flips True so the
+        # snapshot is tagged as synthesized data; the recommendation
+        # engine refuses to bet against derived rows. Real markets carry
+        # vig (true opposite of -136 is roughly +120, not +136), so the
+        # inverted value is approximate — that approximation is exactly
+        # why we tag it as derived.
+        is_derived = False
         if details_home is not None and details_away is None:
             details_away = -details_home
+            is_derived = True
         elif details_away is not None and details_home is None:
             details_home = -details_away
+            is_derived = True
 
         if details_home is not None or details_away is not None:
             # Prefer the preferred-provider entry as the carrier so
@@ -257,15 +265,20 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
             )
             logger.info(
                 'mlb_odds_espn_parsed_details details=%r '
-                'home_ml=%s away_ml=%s',
-                details_seen, details_home, details_away,
+                'home_ml=%s away_ml=%s is_derived=%s',
+                details_seen, details_home, details_away, is_derived,
             )
-            return carrier, details_home, details_away
+            return carrier, details_home, details_away, is_derived
     # Pass 4 — fall back to the first entry so we still emit spread/total.
     if odds_list:
         first = odds_list[0]
-        return first, _extract_moneyline(first, 'home'), _extract_moneyline(first, 'away')
-    return None, None, None
+        return (
+            first,
+            _extract_moneyline(first, 'home'),
+            _extract_moneyline(first, 'away'),
+            False,
+        )
+    return None, None, None, False
 
 
 class MLBEspnOddsProvider(AbstractProvider):
@@ -331,7 +344,7 @@ class MLBEspnOddsProvider(AbstractProvider):
             # Scan ALL odds entries for one with both home+away moneylines, not
             # just the first DraftKings entry — ESPN sometimes emits a spread-
             # only entry before the moneyline entry under the same provider.
-            preferred, home_ml, away_ml = _pick_best_odds_entry(
+            preferred, home_ml, away_ml, is_derived = _pick_best_odds_entry(
                 odds_list, home_abbr=home_abbr, away_abbr=away_abbr,
             )
             if preferred is None:
@@ -378,6 +391,9 @@ class MLBEspnOddsProvider(AbstractProvider):
                 'moneyline_away': away_ml,
                 'spread': spread,
                 'total': total,
+                # Carries through to OddsSnapshot.is_derived in persist().
+                # True when one side was synthesized via inversion.
+                'is_derived': is_derived,
             })
         logger.info(f"mlb_odds_espn_normalize events={len(raw) if raw else 0} out={len(normalized)}")
         return normalized
@@ -508,6 +524,10 @@ class MLBEspnOddsProvider(AbstractProvider):
                 # tell ESPN-fallback rows apart from primary ones.
                 odds_source='espn',
                 source_quality='fallback',
+                # is_derived flips True when the moneyline was filled via
+                # symmetric inversion in normalize() — recommendation
+                # engine will block these rows from ever being recommended.
+                is_derived=bool(item.get('is_derived', False)),
             )
             logger.info(
                 'mlb_odds_espn_match_success game_id=%s home=%s away=%s '

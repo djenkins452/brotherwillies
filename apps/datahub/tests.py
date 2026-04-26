@@ -1398,7 +1398,7 @@ class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
                 'details': 'BOS +130',
             },
         ]
-        entry, home_ml, away_ml = _pick_best_odds_entry(
+        entry, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='BAL', away_abbr='BOS',
         )
         self.assertEqual(home_ml, -143)
@@ -1416,7 +1416,7 @@ class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
             _pick_best_odds_entry,
         )
         odds_list = [{'details': 'BAL -143', 'spread': -1.5}]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='BAL', away_abbr='BOS',
         )
         self.assertEqual(home_ml, -143)
@@ -1435,7 +1435,7 @@ class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
             'homeTeamOdds': {'moneyLine': -130},
             'awayTeamOdds': {'moneyLine': 110},
         }]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='BAL', away_abbr='BOS',
         )
         self.assertEqual(home_ml, -130)
@@ -1559,7 +1559,7 @@ class MlbEspnSingleSideDerivationTests(TestCase):
             _pick_best_odds_entry,
         )
         odds_list = [{'details': 'NYY -136', 'spread': -1.5}]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='NYY', away_abbr='BOS',
         )
         self.assertEqual(home_ml, -136)
@@ -1571,7 +1571,7 @@ class MlbEspnSingleSideDerivationTests(TestCase):
             _pick_best_odds_entry,
         )
         odds_list = [{'details': 'NYY -136', 'spread': 1.5}]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='BOS', away_abbr='NYY',
         )
         self.assertEqual(away_ml, -136)
@@ -1584,7 +1584,7 @@ class MlbEspnSingleSideDerivationTests(TestCase):
             _pick_best_odds_entry,
         )
         odds_list = [{'details': 'TOR +120', 'spread': 1.5}]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='TOR', away_abbr='NYY',
         )
         self.assertEqual(home_ml, 120)
@@ -1640,7 +1640,7 @@ class MlbEspnSingleSideDerivationTests(TestCase):
             {'details': 'NYY -136', 'spread': -1.5},
             {'details': 'BOS +120'},
         ]
-        _, home_ml, away_ml = _pick_best_odds_entry(
+        _, home_ml, away_ml, _is_derived = _pick_best_odds_entry(
             odds_list, home_abbr='NYY', away_abbr='BOS',
         )
         # Both sides match what ESPN reported, NOT the inversion

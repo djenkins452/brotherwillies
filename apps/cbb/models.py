@@ -100,6 +100,8 @@ class OddsSnapshot(models.Model):
     source_quality = models.CharField(
         max_length=15, choices=SNAPSHOT_SOURCE_QUALITY_CHOICES, default='primary',
     )
+    # See apps.mlb.models.OddsSnapshot for the doc on is_derived.
+    is_derived = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         ordering = ['-captured_at']

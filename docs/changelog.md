@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-26 - Source-Aware Betting (Commit A): trust tiers + guardrails
+
+**Summary:** Snapshots now carry an explicit `is_derived` flag, the recommendation engine refuses to bet on synthesized moneylines, and ESPN-sourced recommendations get a 0.85 confidence multiplier. Pure data-layer + recommendation-engine work — no UI changes yet (those land in Commit B).
+
+### Schema (additive on all 5 sport snapshots)
+- `is_derived = BooleanField(default=False, db_index=True)` — true on ESPN rows whose moneyline came from symmetric inversion. Default False so older rows + primary path are correctly classified as genuine market data.
+
+### ESPN provider tagging
+- `_pick_best_odds_entry` now returns a 4-tuple `(entry, home_ml, away_ml, is_derived)`. `is_derived=True` only on the Pass-3 single-side inversion path; standard shapes and two-sided details parsing return False.
+- `normalize()` carries `is_derived` through the per-event record dict.
+- `persist()` writes it onto the OddsSnapshot.
+
+### Trust-tier helper — `apps/core/services/odds_trust.py`
+`get_odds_trust_tier(snapshot)` returns one of:
+- `primary` — `odds_source='odds_api'`, `is_derived=False`
+- `secondary` — `odds_source='espn'`, `is_derived=False`
+- `invalid` — `is_derived=True` (overrides source)
+- `unknown` — anything else (defensive default)
+
+Plus `trust_badge(tier)` returning `{'icon': '🟢|🟡|🔴|⚪', 'label': '…'}` for UI consumption (Commit B uses these).
+
+### Recommendation engine guardrail
+- New `STATUS_REASON_CHOICES` entry: `derived_odds`.
+- New tier label: `blocked` ('🔒 Blocked (Derived Odds)').
+- New `BettingRecommendation.is_secondary` BooleanField + Recommendation dataclass field.
+- `_moneyline_candidate()` runs the model's edge math first (untouched), then overlays the trust-tier decision:
+  - **invalid** → `status='not_recommended'`, `status_reason='derived_odds'`, `tier='blocked'`. Edge math preserved untouched.
+  - **secondary** → `is_secondary=True`. Status / tier / edge unchanged.
+  - **primary** → no change vs pre-guardrail behavior.
+- `displayed_confidence` property (both dataclass + model) now composes: `(confidence_score + movement_nudge) × 0.85_if_secondary`, clamped at 99. Pure presentation; edge math and base `confidence_score` are never mutated.
+- `BettingRecommendation.tier` property returns `'blocked'` whenever `status_reason == 'derived_odds'`, regardless of how strong the model edge looked. Why: the model wasn't wrong; we just refuse to act on synthetic odds.
+
+### Tests (23 new in `apps.core.tests`, plus mechanical 4-tuple updates to existing ESPN tests)
+- `OddsTrustTierTests` (9) — primary/secondary/invalid/unknown classification, derived-overrides-source precedence, None safety, missing-attr backward compat, badge lookups, multiplier constant.
+- `RecommendationTrustGuardrailTests` (5) — primary unchanged, secondary recommends with flag, secondary `displayed_confidence` reduced by 0.85, derived blocks (status/reason/tier), edge math preserved across primary vs derived.
+- `PersistedRecommendationTrustTests` (5) — `is_secondary` round-trips, blocked tier on persisted row, primary unchanged, displayed multiplier on persist, blocked rows still have `displayed_confidence`.
+- `EspnProviderIsDerivedTaggingTests` (4) — two-sided standard shape not derived, two-sided details not derived, single-side details marked derived, end-to-end derived → blocked recommendation.
+
+558 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- New: `apps/core/services/odds_trust.py`, plus 5 sport snapshot migrations + `apps/core/migrations/0005_…`.
+- Edited: `apps/mlb/models.py`, `apps/cfb/models.py`, `apps/cbb/models.py`, `apps/college_baseball/models.py`, `apps/golf/models.py`, `apps/core/models.py`, `apps/core/services/recommendations.py`, `apps/datahub/providers/mlb/odds_espn_provider.py`, `apps/core/tests.py`, `apps/datahub/tests.py`.
+
+### Out of scope (Commit B, next)
+- MLB hub split sections ("Top Plays — Verified Odds" vs "Recommended — ESPN Fallback")
+- Per-card source badges (🟢/🟡/🔴)
+- Split bulk-bet buttons ("Bet All Verified Plays" vs "Bet All ESPN Plays" with confirm modal)
+- Hiding `is_derived` rows from primary surfaces
+- Help modal entries documenting the badges
+
+---
+
 ## 2026-04-26 - ESPN single-side moneyline: derive opposite via symmetric inversion (v1)
 
 **Summary:** Earlier today's fix made the ESPN provider parse the moneyline out of `details` strings like `"NYY -136"`. But ESPN often emits only ONE side's moneyline — never publishing the opponent's number — so the parser still returned `away_ml=None` and downstream skipped the row. This fix fills the missing side by symmetric inversion (`-136 → +136`).

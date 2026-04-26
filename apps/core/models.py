@@ -92,6 +92,10 @@ class BettingRecommendation(models.Model):
         ('low_edge', 'Low Edge'),
         ('high_juice', 'High Juice Risk'),
         ('marginal', 'Marginal'),
+        # Source-Aware Betting: snapshot's moneyline was synthesized
+        # (ESPN single-side inversion). Recommendation is force-marked
+        # not_recommended with this reason and tier='blocked'.
+        ('derived_odds', 'Derived Odds'),
     ]
 
     bet_type = models.CharField(max_length=10, choices=BET_TYPE_CHOICES)
@@ -125,6 +129,14 @@ class BettingRecommendation(models.Model):
     movement_supports_pick = models.BooleanField(default=False)
     market_warning = models.BooleanField(default=False)
 
+    # Source-Aware Betting (added with the trust-tier guardrails):
+    # is_secondary flips True when the recommendation is based on ESPN
+    # fallback odds (odds_source='espn', is_derived=False). The UI
+    # surfaces a yellow 'ESPN Odds' badge and the displayed_confidence
+    # property scales the headline number by 0.85. The model edge math
+    # is unchanged — only the user-facing display reflects the discount.
+    is_secondary = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -156,7 +168,15 @@ class BettingRecommendation(models.Model):
         a leftover from when tier was confidence-based. _raw_tier now expects
         edge in pp. Persisted snapshots don't participate in the slate-level
         elite cap — that's a lobby-render concern only.
+
+        Source-Aware Betting override: when the recommendation was force-
+        blocked because the underlying snapshot was synthesized
+        (status_reason='derived_odds'), the tier is 'blocked' regardless
+        of how strong the model edge looked. The model's edge math wasn't
+        wrong — we just refuse to act on synthetic odds.
         """
+        if self.status_reason == 'derived_odds':
+            return 'blocked'
         from apps.core.services.recommendations import _raw_tier
         if self.model_edge is None:
             return 'standard'
@@ -207,14 +227,22 @@ class BettingRecommendation(models.Model):
 
     @property
     def displayed_confidence(self):
-        """confidence_score + bounded movement nudge (capped at +5pp, clamped <99).
+        """Movement nudge + secondary-source multiplier composed in one
+        property (matches the Recommendation dataclass). Both are purely
+        presentation; edge math and base confidence_score stay untouched.
 
         Falls back to raw confidence_score when there's no movement signal
         — so the existing UI keeps working when movement data is absent
         (e.g., golf, or any sport before its provider hook ships).
         """
-        from apps.core.services.odds_movement import displayed_confidence
-        return displayed_confidence(self.confidence_score, self.movement_class or None, self.movement_supports_pick)
+        from apps.core.services.odds_movement import displayed_confidence as _dc
+        from apps.core.services.odds_trust import secondary_confidence_multiplier
+        nudged = _dc(self.confidence_score, self.movement_class or None, self.movement_supports_pick)
+        if nudged is None:
+            return None
+        if self.is_secondary:
+            nudged = nudged * secondary_confidence_multiplier()
+        return min(99.0, nudged)
 
     @property
     def market_movement_chip(self):

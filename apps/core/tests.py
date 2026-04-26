@@ -1375,3 +1375,312 @@ class CfbCbbCollegeBaseballProviderHookTests(TestCase):
     def test_college_baseball_hook_runs(self):
         OddsSnapshot, g = self._setup_cb()
         self._runs_through(OddsSnapshot, g)
+
+
+# =========================================================================
+# Source-Aware Betting — trust-tier guardrails
+# =========================================================================
+# A snapshot's source determines whether the recommendation engine treats
+# it as primary, secondary, or invalid (synthesized odds). These tests
+# enforce the contract: invalid → blocked, secondary → reduced confidence,
+# primary → unchanged behavior. Edge math and core fields stay untouched.
+
+from apps.core.services.odds_trust import (
+    SECONDARY_CONFIDENCE_MULTIPLIER,
+    get_odds_trust_tier,
+    secondary_confidence_multiplier,
+    trust_badge,
+)
+
+
+class OddsTrustTierTests(TestCase):
+    """Pure helper coverage. Defensive against missing fields / Nones."""
+
+    def test_primary_for_odds_api_source(self):
+        s = SimpleNamespace(odds_source='odds_api', is_derived=False)
+        self.assertEqual(get_odds_trust_tier(s), 'primary')
+
+    def test_secondary_for_espn_source(self):
+        s = SimpleNamespace(odds_source='espn', is_derived=False)
+        self.assertEqual(get_odds_trust_tier(s), 'secondary')
+
+    def test_derived_overrides_source(self):
+        # Even though odds_source='espn' would otherwise be 'secondary',
+        # is_derived=True takes precedence — the row is invalid for betting.
+        s = SimpleNamespace(odds_source='espn', is_derived=True)
+        self.assertEqual(get_odds_trust_tier(s), 'invalid')
+
+    def test_unknown_source_returns_unknown(self):
+        s = SimpleNamespace(odds_source='manual', is_derived=False)
+        self.assertEqual(get_odds_trust_tier(s), 'unknown')
+
+    def test_none_snapshot_safe(self):
+        self.assertEqual(get_odds_trust_tier(None), 'unknown')
+
+    def test_missing_is_derived_attr_treated_as_false(self):
+        # Backward compat: rows from before is_derived existed have no
+        # field at all. Default behavior must be "trust as not derived."
+        s = SimpleNamespace(odds_source='espn')  # no is_derived
+        self.assertEqual(get_odds_trust_tier(s), 'secondary')
+
+    def test_badge_returns_unknown_for_invalid_input(self):
+        self.assertEqual(trust_badge('garbage')['icon'], '⚪')
+        self.assertEqual(trust_badge(None)['icon'], '⚪')
+
+    def test_badge_known_tiers(self):
+        self.assertEqual(trust_badge('primary')['icon'], '🟢')
+        self.assertEqual(trust_badge('secondary')['icon'], '🟡')
+        self.assertEqual(trust_badge('invalid')['icon'], '🔴')
+
+    def test_secondary_multiplier_is_0_85(self):
+        self.assertEqual(secondary_confidence_multiplier(), 0.85)
+        self.assertEqual(SECONDARY_CONFIDENCE_MULTIPLIER, 0.85)
+
+
+class RecommendationTrustGuardrailTests(TestCase):
+    """End-to-end through get_recommendation: each trust tier produces
+    the correct status / reason / tier / is_secondary state. Edge math
+    must be unchanged across all three paths."""
+
+    def setUp(self):
+        # Heavy home favorite so the model edge naturally clears the
+        # ELITE threshold — tier='elite' before guardrail intervenes.
+        self.game = _make_mlb_game(home_rating=85, away_rating=45)
+
+    def _seed_snapshot(self, *, source, is_derived=False):
+        return OddsSnapshot.objects.create(
+            game=self.game,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.55,  # weak market = strong model edge
+            moneyline_home=-110, moneyline_away=-110,
+            odds_source=source, is_derived=is_derived,
+            source_quality='primary' if source == 'odds_api' else 'fallback',
+        )
+
+    def test_primary_source_unchanged_behavior(self):
+        # odds_api source → no override, tier from edge, is_secondary=False.
+        self._seed_snapshot(source='odds_api')
+        rec = get_recommendation('mlb', self.game, user=None)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.status, STATUS_RECOMMENDED)
+        self.assertNotEqual(rec.status_reason, 'derived_odds')
+        self.assertNotEqual(rec.tier, 'blocked')
+        self.assertFalse(rec.is_secondary)
+
+    def test_secondary_source_recommends_with_flag(self):
+        # ESPN source, not derived → still recommended, but is_secondary=True
+        # so displayed_confidence applies the 0.85 multiplier.
+        self._seed_snapshot(source='espn', is_derived=False)
+        rec = get_recommendation('mlb', self.game, user=None)
+        self.assertIsNotNone(rec)
+        # Status, edge, tier preserved (the tier may legitimately be
+        # 'elite' / 'strong' / 'standard' depending on model — we only
+        # assert the secondary flag and confidence reduction).
+        self.assertTrue(rec.is_secondary)
+        self.assertNotEqual(rec.tier, 'blocked')
+        self.assertNotEqual(rec.status_reason, 'derived_odds')
+
+    def test_secondary_displayed_confidence_reduced(self):
+        self._seed_snapshot(source='espn', is_derived=False)
+        rec = get_recommendation('mlb', self.game, user=None)
+        # displayed_confidence ≈ confidence_score × 0.85, clamped at 99.
+        # We only check the multiplier was applied; exact value depends
+        # on the model.
+        self.assertIsNotNone(rec.displayed_confidence)
+        # Allow movement nudge of up to +5 BEFORE the multiplier; so
+        # displayed = (confidence + nudge) * 0.85, which must be strictly
+        # less than confidence_score itself when there's no large nudge.
+        # Sanity: with no movement signal yet, nudge=0, so:
+        expected = float(rec.confidence_score) * 0.85
+        self.assertAlmostEqual(rec.displayed_confidence, expected, places=2)
+
+    def test_derived_source_blocks_recommendation(self):
+        # ESPN with is_derived=True → blocked.
+        self._seed_snapshot(source='espn', is_derived=True)
+        rec = get_recommendation('mlb', self.game, user=None)
+        self.assertIsNotNone(rec)  # We still emit the row, just neutered.
+        self.assertEqual(rec.status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(rec.status_reason, 'derived_odds')
+        self.assertEqual(rec.tier, 'blocked')
+        self.assertFalse(rec.is_secondary)
+        # Edge math is preserved — we didn't fake the model.
+        self.assertIsNotNone(rec.model_edge)
+
+    def test_derived_path_does_not_alter_edge_math(self):
+        # Compare edge from a primary run vs a derived run on otherwise
+        # identical data. The numbers must match — guardrail only
+        # touches presentation/tier, never the underlying probability work.
+        self._seed_snapshot(source='odds_api')
+        primary_rec = get_recommendation('mlb', self.game, user=None)
+
+        # Wipe and re-seed with derived flag. Same probabilities, same
+        # moneylines → same edge.
+        OddsSnapshot.objects.all().delete()
+        self._seed_snapshot(source='espn', is_derived=True)
+        derived_rec = get_recommendation('mlb', self.game, user=None)
+
+        self.assertEqual(primary_rec.model_edge, derived_rec.model_edge)
+        self.assertEqual(primary_rec.confidence_score, derived_rec.confidence_score)
+
+
+class PersistedRecommendationTrustTests(TestCase):
+    """The model field + tier property on the persisted row must behave
+    the same way as the dataclass for any code that JOINs through the FK."""
+
+    def setUp(self):
+        self.game = _make_mlb_game(home_rating=85, away_rating=45)
+
+    def _seed(self, *, source, is_derived=False):
+        OddsSnapshot.objects.create(
+            game=self.game,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.55,
+            moneyline_home=-110, moneyline_away=-110,
+            odds_source=source, is_derived=is_derived,
+        )
+
+    def test_persisted_secondary_flag_round_trip(self):
+        from apps.core.services.recommendations import persist_recommendation
+        self._seed(source='espn')
+        row = persist_recommendation('mlb', self.game)
+        self.assertIsNotNone(row)
+        self.assertTrue(row.is_secondary)
+
+    def test_persisted_blocked_tier(self):
+        from apps.core.services.recommendations import persist_recommendation
+        self._seed(source='espn', is_derived=True)
+        row = persist_recommendation('mlb', self.game)
+        self.assertIsNotNone(row)
+        # Property reads 'blocked' even though no field stores tier.
+        self.assertEqual(row.tier, 'blocked')
+        self.assertEqual(row.status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(row.status_reason, 'derived_odds')
+
+    def test_persisted_primary_unchanged(self):
+        from apps.core.services.recommendations import persist_recommendation
+        self._seed(source='odds_api')
+        row = persist_recommendation('mlb', self.game)
+        self.assertFalse(row.is_secondary)
+        self.assertNotEqual(row.tier, 'blocked')
+        self.assertNotEqual(row.status_reason, 'derived_odds')
+
+    def test_persisted_displayed_confidence_applies_secondary_multiplier(self):
+        from apps.core.services.recommendations import persist_recommendation
+        self._seed(source='espn')
+        row = persist_recommendation('mlb', self.game)
+        self.assertAlmostEqual(
+            row.displayed_confidence,
+            float(row.confidence_score) * 0.85,
+            places=2,
+        )
+
+    def test_persisted_blocked_row_still_has_displayed_confidence(self):
+        # Blocked rows aren't "primary betting candidates," but they
+        # still need to render. displayed_confidence must work; the UI
+        # decides whether to show the number.
+        from apps.core.services.recommendations import persist_recommendation
+        self._seed(source='espn', is_derived=True)
+        row = persist_recommendation('mlb', self.game)
+        self.assertIsNotNone(row.displayed_confidence)
+
+
+class EspnProviderIsDerivedTaggingTests(TestCase):
+    """End-to-end: ESPN single-side payload produces a snapshot with
+    is_derived=True. Two-sided payload produces is_derived=False."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, Team
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.home = Team.objects.create(
+            name='New York Yankees', slug='new-york-yankees', conference=conf,
+        )
+        self.away = Team.objects.create(
+            name='Boston Red Sox', slug='boston-red-sox', conference=conf,
+        )
+        self.game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+
+    def _event(self, *, home_details=None, away_details=None,
+               home_ml=None, away_ml=None):
+        odds = []
+        if home_details or away_details:
+            if home_details:
+                odds.append({'provider': {'name': 'DraftKings'},
+                             'details': home_details, 'spread': -1.5,
+                             'overUnder': 8.5})
+            if away_details:
+                odds.append({'provider': {'name': 'DraftKings'},
+                             'details': away_details})
+        if home_ml is not None and away_ml is not None:
+            odds.append({
+                'provider': {'name': 'DraftKings'},
+                'homeTeamOdds': {'moneyLine': home_ml},
+                'awayTeamOdds': {'moneyLine': away_ml},
+                'spread': -1.5, 'overUnder': 8.5,
+            })
+        return {
+            'date': self.game.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'competitions': [{
+                'date': self.game.first_pitch.isoformat().replace('+00:00', 'Z'),
+                'competitors': [
+                    {'homeAway': 'home', 'team': {
+                        'displayName': 'New York Yankees', 'abbreviation': 'NYY',
+                    }},
+                    {'homeAway': 'away', 'team': {
+                        'displayName': 'Boston Red Sox', 'abbreviation': 'BOS',
+                    }},
+                ],
+                'odds': odds,
+            }],
+        }
+
+    def test_two_sided_standard_shape_not_derived(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        events = [self._event(home_ml=-130, away_ml=110)]
+        normalized = provider.normalize(events)
+        self.assertEqual(normalized[0]['is_derived'], False)
+        provider.persist(normalized)
+        snap = OddsSnapshot.objects.get(game=self.game)
+        self.assertFalse(snap.is_derived)
+
+    def test_two_sided_details_not_derived(self):
+        # Both sides explicitly published in details — no inversion needed.
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        events = [self._event(home_details='NYY -136', away_details='BOS +118')]
+        normalized = provider.normalize(events)
+        self.assertEqual(normalized[0]['is_derived'], False)
+        provider.persist(normalized)
+        snap = OddsSnapshot.objects.get(game=self.game)
+        self.assertFalse(snap.is_derived)
+
+    def test_single_sided_details_marked_derived(self):
+        # Only one side published — inversion fills the other → is_derived=True.
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        events = [self._event(home_details='NYY -136')]
+        normalized = provider.normalize(events)
+        self.assertEqual(normalized[0]['is_derived'], True)
+        provider.persist(normalized)
+        snap = OddsSnapshot.objects.get(game=self.game)
+        self.assertTrue(snap.is_derived)
+        self.assertEqual(snap.odds_source, 'espn')
+
+    def test_derived_snapshot_blocks_recommendation_end_to_end(self):
+        # Full pipeline integration: ESPN single-side → derived snapshot
+        # → recommendation engine blocks it.
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        events = [self._event(home_details='NYY -136')]
+        provider.persist(provider.normalize(events))
+
+        rec = get_recommendation('mlb', self.game, user=None)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(rec.status_reason, 'derived_odds')
+        self.assertEqual(rec.tier, 'blocked')
