@@ -1109,7 +1109,18 @@ class Command(BaseCommand):
                     first_pitch__gte=window_start, first_pitch__lte=window_end,
                 )
                 candidate_pks = list(candidate_qs.values_list('pk', flat=True))
-                first = candidate_qs.order_by('first_pitch').first()
+                # Mirror the production persist's NEW closest-by-commence
+                # picker. Previous version used .order_by('first_pitch')
+                # but persist now picks by closest delta — diagnostic
+                # must agree or its output is misleading.
+                candidates_objs = list(candidate_qs)
+                if candidates_objs:
+                    candidates_objs.sort(
+                        key=lambda g: abs((g.first_pitch - commence_dt).total_seconds())
+                    )
+                    first = candidates_objs[0]
+                else:
+                    first = None
                 first_pk = first.pk if first else None
 
                 self.stdout.write(
@@ -1122,68 +1133,75 @@ class Command(BaseCommand):
                         f'first_pitch likely outside window or wrong direction.'
                     ))
                 elif len(candidate_pks) > 1:
-                    self.stdout.write(self.style.ERROR(
+                    note = ("IS the picked one — primary should write here." if first_pk == d.game.pk else
+                            f"is NOT picked — primary writes to pk={first_pk} instead.")
+                    self.stdout.write(self.style.WARNING(
                         f'      ↳ ⚠  DOUBLEHEADER / DUPLICATE Game rows. Persist '
-                        f'picks pk={first_pk} via .order_by("first_pitch").first(). '
-                        f'This Game (pk={d.game.pk}) ' +
-                        ("IS the picked one — primary should write here." if first_pk == d.game.pk else
-                         f"is NOT picked — primary writes to pk={first_pk} instead.")
+                        f'picks pk={first_pk} via closest-to-commence ('
+                        f'first_pitch closest to {api_commence!r}). '
+                        f'This Game (pk={d.game.pk}) {note}'
                     ))
+                    # Markets probe runs even for the doubleheader case so
+                    # we see whether the picked event has h2h. If not,
+                    # persist would skip even after picking the right Game.
+                    if first_pk == d.game.pk:
+                        self._print_per_book_markets(api_event)
                 elif first_pk == d.game.pk:
                     self.stdout.write(
                         f'      ↳ ✅ Primary should write to THIS game pk={first_pk}. '
                         f'If snaps are missing, the bug is downstream of game match '
                         f'(moneyline extraction or DB write).'
                     )
-                    # Walk the API event's bookmakers and surface what
-                    # markets each one offers. If h2h is missing across
-                    # all books, persist skips with no_moneyline_home and
-                    # no snapshot is written — even though everything
-                    # upstream looks fine. This is the most likely cause
-                    # for live games where books drop moneyline.
-                    books = api_event.get('bookmakers') or []
-                    book_market_summary = []
-                    h2h_books = 0
-                    h2h_with_pair = 0
-                    for b in books:
-                        title = b.get('title', '?')
-                        keys = sorted({m.get('key') for m in (b.get('markets') or []) if m.get('key')})
-                        has_h2h = 'h2h' in keys
-                        if has_h2h:
-                            h2h_books += 1
-                            # Check if h2h has both home + away outcomes.
-                            for m in b.get('markets') or []:
-                                if m.get('key') == 'h2h':
-                                    outcomes = m.get('outcomes') or []
-                                    home_seen = away_seen = False
-                                    for o in outcomes:
-                                        n = o.get('name', '')
-                                        if n == api_event.get('home_team'):
-                                            home_seen = True
-                                        elif n == api_event.get('away_team'):
-                                            away_seen = True
-                                    if home_seen and away_seen:
-                                        h2h_with_pair += 1
-                        book_market_summary.append(f'{title}({"+".join(keys) or "no-markets"})')
-                    self.stdout.write(
-                        f'      bookmakers and their markets: {book_market_summary}'
-                    )
-                    self.stdout.write(
-                        f'      bookmakers offering h2h: {h2h_books} of {len(books)}; '
-                        f'bookmakers with BOTH home+away h2h outcomes: {h2h_with_pair}'
-                    )
-                    if h2h_with_pair == 0:
-                        self.stdout.write(self.style.ERROR(
-                            f'      ↳ ⚠  NO bookmaker has a usable h2h moneyline pair. '
-                            f'Persist will skip every record with reason=no_moneyline_home '
-                            f'and write zero snapshots. THIS IS LIKELY YOUR BUG for live games.'
-                        ))
+                    self._print_per_book_markets(api_event)
                 else:
                     self.stdout.write(self.style.ERROR(
                         f'      ↳ ⚠  Game-pk mismatch: persist picks pk={first_pk} '
                         f'but diagnostic\'s game is pk={d.game.pk}.'
                     ))
         self.stdout.write('-----------------------------------------------------------------')
+
+    def _print_per_book_markets(self, api_event):
+        """Surface what markets each bookmaker offers in this API event,
+        and explicitly flag when ZERO bookmakers have a usable h2h
+        moneyline pair. That's the root cause for live games where
+        bookmakers drop moneyline — persist would skip every record
+        with reason=no_moneyline_home, writing zero snapshots."""
+        books = api_event.get('bookmakers') or []
+        book_market_summary = []
+        h2h_books = 0
+        h2h_with_pair = 0
+        api_home = api_event.get('home_team')
+        api_away = api_event.get('away_team')
+        for b in books:
+            title = b.get('title', '?')
+            keys = sorted({m.get('key') for m in (b.get('markets') or []) if m.get('key')})
+            has_h2h = 'h2h' in keys
+            if has_h2h:
+                h2h_books += 1
+                for m in b.get('markets') or []:
+                    if m.get('key') == 'h2h':
+                        outcomes = m.get('outcomes') or []
+                        home_seen = away_seen = False
+                        for o in outcomes:
+                            n = o.get('name', '')
+                            if n == api_home:
+                                home_seen = True
+                            elif n == api_away:
+                                away_seen = True
+                        if home_seen and away_seen:
+                            h2h_with_pair += 1
+            book_market_summary.append(f'{title}({"+".join(keys) or "no-markets"})')
+        self.stdout.write(f'      bookmakers and their markets: {book_market_summary}')
+        self.stdout.write(
+            f'      bookmakers offering h2h: {h2h_books} of {len(books)}; '
+            f'bookmakers with BOTH home+away h2h outcomes: {h2h_with_pair}'
+        )
+        if h2h_with_pair == 0 and books:
+            self.stdout.write(self.style.ERROR(
+                f'      ↳ ⚠  NO bookmaker has a usable h2h moneyline pair. '
+                f'Persist will skip every record with reason=no_moneyline_home '
+                f'and write zero snapshots. THIS IS LIKELY YOUR BUG for live games.'
+            ))
 
     def _print_legend(self):
         self.stdout.write('')
