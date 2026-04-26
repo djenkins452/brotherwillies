@@ -1693,3 +1693,137 @@ class MlbEspnSingleSideEndToEndTests(TestCase):
         self.assertEqual(snap.moneyline_away, 136)
         self.assertEqual(snap.odds_source, 'espn')
         self.assertEqual(snap.source_quality, 'fallback')
+
+
+class DiagnoseMlbOddsGapsCommandTests(TestCase):
+    """The diagnostic command is a one-shot tool — it must:
+      1. Identify gap games correctly
+      2. Probe both APIs without persisting anything
+      3. Produce a final_reason for every game
+      4. Never crash when one of the providers errors
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, Team
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.home = Team.objects.create(
+            name='New York Yankees', slug='new-york-yankees', conference=conf,
+        )
+        self.away = Team.objects.create(
+            name='Boston Red Sox', slug='boston-red-sox', conference=conf,
+        )
+        self.game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+
+    def test_command_runs_clean_when_no_gaps(self):
+        # Pre-seed a fresh primary snapshot so the game is NOT a gap.
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=self.game,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.55,
+            moneyline_home=-130, moneyline_away=110,
+            odds_source='odds_api', source_quality='primary',
+        )
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch'
+        ) as mock_api, patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch'
+        ) as mock_espn:
+            # No gaps → command exits before touching either provider.
+            call_command('diagnose_mlb_odds_gaps', stdout=out)
+            mock_api.assert_not_called()
+            mock_espn.assert_not_called()
+        self.assertIn('No matching games', out.getvalue())
+
+    def test_command_classifies_api_present_no_moneyline(self):
+        # Game IS a gap; API has the event with a bookmaker but no h2h
+        # market — final_reason must call out api_present_no_moneyline_pair.
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        api_event = {
+            'home_team': 'New York Yankees',
+            'away_team': 'Boston Red Sox',
+            'commence_time': self.game.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'bookmakers': [{'title': 'DraftKings', 'markets': []}],
+        }
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch',
+            return_value=[api_event],
+        ), patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch',
+            return_value=[],
+        ):
+            call_command('diagnose_mlb_odds_gaps', stdout=out)
+        text = out.getvalue()
+        self.assertIn('api_present_no_moneyline_pair', text)
+
+    def test_command_classifies_absent_from_both_apis(self):
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch',
+            return_value=[],
+        ), patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch',
+            return_value=[],
+        ):
+            call_command('diagnose_mlb_odds_gaps', stdout=out)
+        self.assertIn('absent_from_both_apis', out.getvalue())
+
+    def test_command_survives_api_fetch_error(self):
+        # If the Odds API fetch blows up, the command must continue and
+        # show ESPN status for each game. Never crashes.
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch',
+            side_effect=RuntimeError('boom'),
+        ), patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch',
+            return_value=[],
+        ):
+            call_command('diagnose_mlb_odds_gaps', stdout=out)
+        self.assertIn('api_fetch_errored', out.getvalue())
+
+    def test_command_does_not_persist_any_snapshots(self):
+        # Diagnostic must be side-effect-free. No OddsSnapshot rows
+        # should appear after running it, regardless of what the providers
+        # return.
+        from io import StringIO
+        from django.core.management import call_command
+        from apps.mlb.models import OddsSnapshot
+        baseline = OddsSnapshot.objects.count()
+        api_event = {
+            'home_team': 'New York Yankees',
+            'away_team': 'Boston Red Sox',
+            'commence_time': self.game.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'bookmakers': [{
+                'title': 'DraftKings',
+                'markets': [{
+                    'key': 'h2h',
+                    'outcomes': [
+                        {'name': 'New York Yankees', 'price': -130},
+                        {'name': 'Boston Red Sox', 'price': 110},
+                    ],
+                }],
+            }],
+        }
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch',
+            return_value=[api_event],
+        ), patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch',
+            return_value=[],
+        ):
+            call_command('diagnose_mlb_odds_gaps', stdout=StringIO())
+        self.assertEqual(OddsSnapshot.objects.count(), baseline)

@@ -362,7 +362,7 @@ def _recent_runs(limit=15):
         .order_by('-started_at')[:limit]
         .values(
             'id', 'command', 'trigger', 'started_at', 'completed_at',
-            'status', 'duration_seconds', 'summary',
+            'status', 'duration_seconds', 'summary', 'stdout_tail',
         )
     )
     return list(rows)

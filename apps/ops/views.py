@@ -98,6 +98,29 @@ def trigger_refresh_data(request):
 @require_POST
 @login_required
 @superuser_required
+def trigger_diagnose_mlb_odds_gaps(request):
+    """Spawn the per-game gap diagnostic. The output table is captured
+    in the resulting CronRunLog row's stdout_tail and visible in the
+    Recent Runs panel — click the row to expand and read the table."""
+    if is_command_running('diagnose_mlb_odds_gaps'):
+        messages.warning(
+            request,
+            'A diagnostic run is already in progress — wait for it to complete '
+            'and check Recent Runs for the table.',
+        )
+        return redirect(reverse('ops:command_center'))
+    _spawn_management_command('diagnose_mlb_odds_gaps', request.user.id)
+    messages.success(
+        request,
+        'Triggered: MLB Odds Gap Diagnostic. The per-game table will appear '
+        "in Recent Runs in ~30 seconds — click the row's summary to expand.",
+    )
+    return redirect(reverse('ops:command_center'))
+
+
+@require_POST
+@login_required
+@superuser_required
 def trigger_refresh_scores(request):
     if is_command_running('refresh_scores_and_settle'):
         messages.warning(

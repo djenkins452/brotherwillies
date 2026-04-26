@@ -162,6 +162,11 @@
         {% csrf_token %}
         <button type="submit" class="btn btn-secondary">Test Odds API</button>
       </form>
+      <form method="post" action="{% url 'ops:trigger_diagnose_mlb_odds_gaps' %}"
+            onsubmit="return confirm('Run the per-game gap diagnostic? Probes Odds API + ESPN once (no quota cost beyond one fetch each), then writes a per-game table into the next Recent Runs row. No data is persisted.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Diagnose MLB Odds Gaps</button>
+      </form>
     </div>
   </div>
 
@@ -209,7 +214,16 @@
               <td>{{ r.started_at|date:"M j H:i:s" }}</td>
               <td class="num">{% if r.duration_seconds %}{{ r.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
               <td><span class="ops-pill ops-pill-{{ r.status }}">{{ r.status|upper }}</span></td>
-              <td>{{ r.summary|default:"—"|truncatechars:60 }}</td>
+              <td>
+                {% if r.stdout_tail %}
+                  <details>
+                    <summary style="cursor:pointer;">{{ r.summary|default:"—"|truncatechars:60 }}</summary>
+                    <pre style="margin:8px 0 0 0;padding:8px;background:#1a1d2e;border-radius:6px;font-size:0.78rem;line-height:1.4;overflow-x:auto;max-height:400px;white-space:pre;color:#cfd2e8;">{{ r.stdout_tail }}</pre>
+                  </details>
+                {% else %}
+                  {{ r.summary|default:"—"|truncatechars:60 }}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
