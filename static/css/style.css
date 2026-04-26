@@ -1445,6 +1445,18 @@ input[type="range"]::-webkit-slider-thumb {
     background: var(--bg-input);
     color: var(--text-primary);
 }
+/* Active state for the dropdown — used by the Ops Command Center link
+   when the user is on /ops/. Subtle accent so it reads as "you are here"
+   rather than a hover state. */
+.profile-dropdown-item--active {
+    background: rgba(201,148,58,0.12);
+    color: var(--accent);
+    font-weight: 600;
+}
+.profile-dropdown-item--active:hover {
+    background: rgba(201,148,58,0.22);
+    color: var(--accent);
+}
 .profile-dropdown-divider {
     height: 1px;
     background: var(--border);

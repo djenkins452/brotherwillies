@@ -270,6 +270,14 @@ class CommandCenterViewTests(TestCase):
         resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 302)
 
+    def test_staff_user_can_access(self):
+        # Broadened on 2026-04-26 so the new profile-dropdown link doesn't
+        # dead-end for non-superuser staff. is_staff alone is sufficient.
+        staff = User.objects.create_user('staffer', password='pw', is_staff=True)
+        self.client.force_login(staff)
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+
     def test_superuser_renders_with_no_data(self):
         admin = User.objects.create_superuser('admin', 'a@a.com', 'pw')
         self.client.force_login(admin)
@@ -397,3 +405,55 @@ class ManualTriggerTests(TestCase):
             row = OddsApiUsage.objects.get()
             self.assertFalse(row.success)
             self.assertEqual(row.status_code, 401)
+
+
+class ProfileDropdownLinkTests(TestCase):
+    """The Ops Command Center link in the header profile dropdown should
+    appear for staff/superusers and stay hidden for everyone else.
+
+    We render any authenticated page (here: the user_guide page, which is
+    login-required and uses base.html) and assert against the rendered
+    HTML — keeps the test focused on the dropdown markup, not the Ops
+    page itself.
+    """
+
+    LINK_HREF = '/ops/command-center/'
+    LINK_LABEL = 'Command Center'
+    AUTHED_PAGE = '/profile/user-guide/'
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_link_hidden_from_normal_user(self):
+        joe = User.objects.create_user('joe', password='pw')
+        self.client.force_login(joe)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, self.LINK_HREF)
+
+    def test_link_visible_for_staff(self):
+        staff = User.objects.create_user('s', password='pw', is_staff=True)
+        self.client.force_login(staff)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertContains(resp, self.LINK_HREF)
+        self.assertContains(resp, self.LINK_LABEL)
+
+    def test_link_visible_for_superuser(self):
+        su = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(su)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertContains(resp, self.LINK_HREF)
+
+    def test_link_hidden_from_anonymous(self):
+        # The login page renders base.html and is guaranteed public.
+        resp = self.client.get('/accounts/login/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, self.LINK_HREF)
+
+    def test_link_active_state_on_ops_page(self):
+        su = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(su)
+        resp = self.client.get('/ops/command-center/')
+        self.assertEqual(resp.status_code, 200)
+        # Active marker class present on the dropdown item when on /ops/.
+        self.assertContains(resp, 'profile-dropdown-item--active')

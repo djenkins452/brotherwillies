@@ -37,7 +37,8 @@
                         {% if user.username == 'djenkins' or user.username == 'jsnyder' or user.username == 'msnyder' %}
                         <a href="/feedback/console/" class="profile-dropdown-item">Feedback</a>
                         {% endif %}
-                        {% if user.is_staff %}
+                        {% if user.is_staff or user.is_superuser %}
+                        <a href="/ops/command-center/" class="profile-dropdown-item{% if request.path|slice:':4' == '/ops' %} profile-dropdown-item--active{% endif %}">⚙️ Command Center</a>
                         <a href="/bw-manage/" class="profile-dropdown-item">Admin Console</a>
                         {% endif %}
                         <div class="profile-dropdown-divider"></div>

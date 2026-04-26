@@ -77,7 +77,7 @@
         <a href="/profile/performance/" class="btn btn-secondary btn-sm">Performance</a>
         <a href="/profile/user-guide/" class="btn btn-secondary btn-sm">User Guide</a>
         <a href="/parlays/" class="btn btn-secondary btn-sm">Parlays</a>
-        {% if user.is_superuser %}
+        {% if user.is_staff or user.is_superuser %}
             <a href="{% url 'ops:command_center' %}" class="btn btn-secondary btn-sm">Ops</a>
         {% endif %}
     </div>

@@ -28,11 +28,18 @@ from apps.ops.services.cron_logging import is_command_running
 from apps.ops.services.command_center import build_snapshot
 
 
-def _is_superuser(user):
-    return user.is_authenticated and user.is_superuser
+def _is_staff_or_superuser(user):
+    """Gate the ops surface to staff OR superusers.
+
+    Originally this was superuser-only. Broadened on 2026-04-26 when the
+    profile-dropdown link landed: the dropdown convention for staff tools
+    (MLB Diagnostic, Admin Console) is `is_staff`, and showing a link a
+    user can't actually use is worse than the small extra surface.
+    """
+    return user.is_authenticated and (user.is_staff or user.is_superuser)
 
 
-superuser_required = user_passes_test(_is_superuser, login_url='/accounts/login/')
+superuser_required = user_passes_test(_is_staff_or_superuser, login_url='/accounts/login/')
 
 
 @login_required

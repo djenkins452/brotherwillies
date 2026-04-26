@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-04-26 - Profile dropdown link to Ops Command Center
+
+**Summary:** Adds a "⚙️ Command Center" entry to the header profile dropdown for staff/superusers, slotted into the existing staff-tools cluster (between MLB Diagnostic and Admin Console). The Ops view's auth gate was also broadened from `is_superuser` only to `is_staff or is_superuser` so the link doesn't dead-end for staff users — matching the dropdown convention used by every other staff item there.
+
+- Active state: when the user is on `/ops/`, the dropdown item gets a `--active` modifier with the brand accent color so it reads as "you are here" rather than a hover state.
+- The previously-added Ops button on the Profile page (`/profile/`) was updated to use the same broader gate.
+
+**Tests:** 6 new in `apps.ops.tests.ProfileDropdownLinkTests` — link hidden from anonymous users, hidden from regular users, visible for staff, visible for superusers, active-state class present on `/ops/`. Plus a positive `test_staff_user_can_access` confirming the broadened view gate.
+
+**Files:** `templates/base.html`, `apps/ops/views.py`, `templates/accounts/profile.html`, `static/css/style.css`, `apps/ops/tests.py`.
+
+---
+
 ## 2026-04-26 - Odds Intelligence — decision integration + UI + analytics (Commit 2)
 
 **Summary:** Movement signals now flow into the recommendation engine, the MLB hub tile, the MLB game detail page, and a new analytics panel on `/profile/performance/`. The provider hook also rolled out to CFB/CBB/college_baseball. Strictly additive — recommendations are never downgraded by movement.
