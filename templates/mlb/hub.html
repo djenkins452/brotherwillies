@@ -15,10 +15,20 @@
     </div>
     {% if user.is_authenticated %}
     <div class="mlb-bulk-actions">
+      {# Verified primary-source bets — shown when there's at least one #}
+      {% if elite_games or recommended_games %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet"
-              onclick="bulkPlaceRecommended()">
-        Bet All Recommended
+              onclick="bulkPlaceRecommended('verified', this)">
+        🟢 Bet All Verified Plays
       </button>
+      {% endif %}
+      {# ESPN-secondary bets — separate button + confirm modal copy #}
+      {% if recommended_espn_games %}
+      <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--espn"
+              onclick="bulkPlaceRecommended('espn', this)">
+        🟡 Bet All ESPN Plays
+      </button>
+      {% endif %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--cancel"
               onclick="bulkCancelOpen()">
         Cancel All Open
@@ -39,11 +49,26 @@
       el.style.color = isErr ? 'var(--red)' : '#22c55e';
       el.style.display = 'inline';
   }
-  function bulkPlaceRecommended() {
-      if (!window.confirm('Place a $100 mock bet on every recommended game you don\'t already have a pending bet on. Proceed?')) return;
-      var btn = event.currentTarget;
+  function bulkPlaceRecommended(sourceFilter, btn) {
+      // sourceFilter is 'verified' (primary, default) or 'espn' (secondary).
+      // The confirm copy and the URL param differ between the two so users
+      // are warned explicitly when betting on ESPN-fallback odds.
+      var originalText = btn.textContent;
+      var confirmMsg, msgPrefix;
+      if (sourceFilter === 'espn') {
+          confirmMsg = 'These bets are based on ESPN fallback odds. Odds may not '
+              + 'reflect true market pricing. Place a $100 mock bet on every ESPN '
+              + 'recommended game you don\'t already have a pending bet on. Continue?';
+          msgPrefix = 'ESPN: ';
+      } else {
+          confirmMsg = 'Place a $100 mock bet on every VERIFIED-source recommended '
+              + 'game you don\'t already have a pending bet on. Proceed?';
+          msgPrefix = 'Verified: ';
+      }
+      if (!window.confirm(confirmMsg)) return;
       btn.disabled = true; btn.textContent = 'Placing…';
-      fetch('{% url "mockbets:bulk_place_recommended" %}', {
+      var url = '{% url "mockbets:bulk_place_recommended" %}?source_filter=' + encodeURIComponent(sourceFilter);
+      fetch(url, {
           method: 'POST',
           headers: { 'X-CSRFToken': _csrfToken() },
           credentials: 'same-origin',
@@ -51,14 +76,14 @@
       .then(function(r){ return r.json().then(function(d){ return [r,d]; }); })
       .then(function(arr) {
           var r = arr[0], d = arr[1];
-          if (!r.ok) { _showBulkMsg(d.error || 'Bulk placement failed.', true); btn.disabled=false; btn.textContent='Bet All Recommended'; return; }
-          var msg = 'Placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
+          if (!r.ok) { _showBulkMsg(d.error || 'Bulk placement failed.', true); btn.disabled=false; btn.textContent=originalText; return; }
+          var msg = msgPrefix + 'placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
           if (d.skipped_existing) msg += ' · ' + d.skipped_existing + ' already had pending bets';
           if (d.skipped_no_odds) msg += ' · ' + d.skipped_no_odds + ' had no odds yet';
           _showBulkMsg(msg, false);
           setTimeout(function(){ window.location.reload(); }, 1200);
       })
-      .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent='Bet All Recommended'; });
+      .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent=originalText; });
   }
   function bulkCancelOpen() {
       if (!window.confirm('Cancel all your pending mock bets whose games haven\'t started yet?')) return;
@@ -136,16 +161,16 @@
   </details>
   {% endif %}
 
-  {% if not elite_games and not recommended_games and not not_recommended_games and not unrated_games and not future_games %}
+  {% if not elite_games and not recommended_games and not recommended_espn_games and not not_recommended_games and not unrated_games and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
     </div>
   {% else %}
 
-    {# Section 1 — 🔥 Top Plays (elite tier, capped at 2 by assign_tiers) #}
+    {# Section 1 — 🔥 Top Plays (elite tier, VERIFIED only, capped at 2) #}
     <section class="mlb-section mlb-section--elite">
       <div class="mlb-section__head">
-        <h2 class="mlb-section__title">&#x1F525; Top Plays Today</h2>
+        <h2 class="mlb-section__title">&#x1F525; Top Plays Today <span class="mlb-section__source-tag mlb-section__source-tag--verified">Verified Odds</span></h2>
         {% if elite_games %}<span class="mlb-section__count">{{ elite_games|length }}</span>{% endif %}
       </div>
       {% if elite_games %}
@@ -168,15 +193,43 @@
       {% endif %}
     </section>
 
-    {# Section 2 — 👍 Recommended (status=recommended, tier != elite) #}
+    {# Section 2 — 👍 Recommended (status=recommended, tier != elite, VERIFIED only) #}
     {% if recommended_games %}
       <section class="mlb-section mlb-section--recommended">
         <div class="mlb-section__head">
-          <h2 class="mlb-section__title">&#x1F44D; Recommended Bets</h2>
+          <h2 class="mlb-section__title">&#x1F44D; Recommended Bets <span class="mlb-section__source-tag mlb-section__source-tag--verified">Verified Odds</span></h2>
           <span class="mlb-section__count">{{ recommended_games|length }}</span>
         </div>
         <div class="mlb-rail tiles-container" role="list">
           {% for s in recommended_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {# Section 2b — 🟡 Recommended Bets (ESPN Fallback) — Source-Aware Betting.
+       Only renders when there are secondary recommendations. The header
+       note tells users explicitly that this set uses lower-trust data so
+       they don't conflate these picks with the verified set above. #}
+    {% if recommended_espn_games %}
+      <section class="mlb-section mlb-section--espn">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">&#x1F7E1; Recommended Bets <span class="mlb-section__source-tag mlb-section__source-tag--espn">ESPN Fallback</span></h2>
+          <span class="mlb-section__count">{{ recommended_espn_games|length }}</span>
+        </div>
+        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">
+          These bets use ESPN odds because primary market data is missing.
+          Displayed confidence is reduced to reflect lower trust in the source. Use with caution.
+        </p>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for s in recommended_espn_games %}
             <div role="listitem">
               {% if s.game.status == 'live' %}
                 {% include "mlb/_tile_live.html" with s=s %}

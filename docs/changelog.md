@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-04-26 - Source-Aware Betting (Commit B): UI partitions + bulk split
+
+**Summary:** The MLB hub now visibly separates verified primary bets from ESPN fallback bets at every layer — sections, per-tile badges, bulk-bet buttons, and the focus banner. Derived (synthesized) odds are removed from every public surface, surfacing only in the staff diagnostic panel. The data layer was already in place (Commit A); this commit makes it visible and actionable.
+
+### Section partitioning
+`partition_games_by_decision()` now returns six buckets instead of four:
+- `elite` — verified-source elites only (Top Plays). An ESPN-source elite is *demoted* to `recommended_espn` so Top Plays remains trustworthy by definition.
+- `recommended` — verified-source recommended bets.
+- `recommended_espn` — secondary (ESPN) recommended bets. **NEW**.
+- `not_recommended` — primary + secondary bets that didn't clear decision rules. ESPN-not-recommended games merge here since the user-facing answer is the same.
+- `unrated` — no recommendation at all.
+- `blocked` — derived-odds rows. **Never appears in public UI.**
+
+### Focus banner trust filter
+The focus banner is the most prominent surface — it now refuses to anchor on:
+- Secondary (ESPN) recommendations.
+- Blocked (derived) recommendations.
+
+Even if the only available rec is ESPN, the banner stays empty rather than misrepresent trust.
+
+### Per-tile source badge
+Every recommendation card now carries a top-of-actions badge:
+- 🟢 **Verified Odds** (green) — primary path
+- 🟡 **ESPN Odds** (yellow) — secondary path
+
+Derived rows render no badge anywhere on the public hub (they don't render at all — they're filtered out upstream).
+
+### Section header tag
+Each recommended section's title carries a small inline tag matching the badge color so the section, the tag, and the per-tile badge all map to the same trust level at a glance.
+
+### Bulk buttons split
+The single "Bet All Recommended" header button became two:
+- 🟢 **Bet All Verified Plays** — only Tier 1 (verified). Standard confirm copy.
+- 🟡 **Bet All ESPN Plays** — only secondary. **Stronger confirm copy:** "These bets are based on ESPN fallback odds. Odds may not reflect true market pricing. Continue?"
+
+Each button only renders when its bucket has at least one game. Both can render at once on a mixed slate; either or neither can render alone.
+
+The bulk-place service + view gained a `source_filter` param (`'all'` / `'verified'` / `'espn'`) — `'all'` preserves the legacy entrypoint shape so any existing automation keeps working untouched. **Defense in depth:** derived rows are excluded from bulk placement under all three filter values.
+
+### CSS
+- `.mlb-source-badge--verified` / `.mlb-source-badge--espn` for per-tile badges
+- `.mlb-section__source-tag--verified` / `.mlb-section__source-tag--espn` for inline section tags
+- `.mlb-section--espn` for the muted-yellow section accent
+- `.mlb-bulk-btn--espn` for the new bulk button color
+
+### Tests (16 new in `apps.mlb.tests`)
+- `PartitionSourceAwareSplitTests` (5) — verified/secondary land in correct buckets, blocked stays in blocked-only, secondary elite demotes to ESPN bucket, mixed input partitions stably.
+- `FocusBannerTrustFilterTests` (3) — focus skips secondary even if it has a higher edge, skips blocked, returns None when only ESPN available.
+- `BulkActionsSourceFilterTests` (3) — verified filter excludes secondary, ESPN filter excludes verified, derived never bulk-bet under any filter.
+- `HubTemplateSourceAwareTests` (5) — ESPN section renders/hides correctly, both bulk buttons render on mixed slate, only verified button renders when no secondary, source badge renders on ESPN tile.
+
+574 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- Edited: `apps/mlb/services/prioritization.py` (partition + focus filter), `apps/mlb/views.py` (new context keys), `apps/mlb/tests.py`, `apps/mockbets/services/bulk_actions.py` (`source_filter` param), `apps/mockbets/views.py`, `templates/mlb/hub.html` (sections + buttons + JS), `templates/mlb/_tile_actions.html` (badge), `static/css/mlb.css` (visual differentiation).
+- No model changes, no recommendation-engine math changes, no ingestion changes — strict additive UI work as the spec required.
+
+---
+
 ## 2026-04-26 - Source-Aware Betting (Commit A): trust tiers + guardrails
 
 **Summary:** Snapshots now carry an explicit `is_derived` flag, the recommendation engine refuses to bet on synthesized moneylines, and ESPN-sourced recommendations get a 0.85 confidence multiplier. Pure data-layer + recommendation-engine work — no UI changes yet (those land in Commit B).

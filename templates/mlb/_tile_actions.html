@@ -2,6 +2,22 @@
 {% load mlb_reasons %}
 {% if s.actions or user.is_authenticated %}
 <div class="mlb-tile__actions">
+  {# Source-Aware Betting badge. Verified or ESPN — never derived
+     (those are filtered out of every primary surface upstream). The
+     badge anchors the user's trust in the line they're seeing. #}
+  {% if s.recommendation %}
+    {% if s.recommendation.is_secondary %}
+      <span class="mlb-source-badge mlb-source-badge--espn"
+            title="This game's odds came from ESPN's free fallback feed because The Odds API didn't have them. Displayed confidence is reduced 15% to reflect lower trust in the source.">
+        🟡 ESPN Odds
+      </span>
+    {% else %}
+      <span class="mlb-source-badge mlb-source-badge--verified"
+            title="This game's odds came from our paid primary provider (The Odds API).">
+        🟢 Verified Odds
+      </span>
+    {% endif %}
+  {% endif %}
   {% for a in s.actions %}
     {% if a.type == 'bet_placed' %}
       <span class="mlb-action mlb-action--betplaced mlb-action--{{ a.strength }}"

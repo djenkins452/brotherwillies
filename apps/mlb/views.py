@@ -79,8 +79,15 @@ def mlb_hub(request):
         'today_tiles': today_tiles,
         'elite_games': decision_sections['elite'],
         'recommended_games': decision_sections['recommended'],
+        # Source-Aware Betting (Commit B): ESPN-secondary recommendeds
+        # render in their own section under the verified Recommended
+        # bets, with a "secondary market — lower confidence" note.
+        'recommended_espn_games': decision_sections.get('recommended_espn', []),
         'not_recommended_games': decision_sections['not_recommended'],
         'unrated_games': decision_sections.get('unrated', []),
+        # Blocked recommendations are derived-odds rows. They render
+        # ONLY when ?diag=1 is on; the public hub never shows them.
+        'blocked_games': decision_sections.get('blocked', []),
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,

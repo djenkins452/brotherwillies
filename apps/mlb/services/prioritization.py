@@ -636,6 +636,22 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
     def _no_user_bet(s):
         return not getattr(s, 'has_user_bet', False) and not s.user_bet_id
 
+    def _is_trusted_primary(s):
+        """Source-Aware: Focus banner is the most prominent surface on
+        the page — it must never anchor on ESPN-secondary or
+        derived/blocked recommendations. Trust must be earned to occupy
+        this slot."""
+        rec = s.recommendation
+        if rec is None:
+            return False
+        if getattr(rec, 'is_secondary', False):
+            return False
+        if getattr(rec, 'tier', '') == 'blocked':
+            return False
+        if getattr(rec, 'status_reason', '') == 'derived_odds':
+            return False
+        return True
+
     def _edge_key(s):
         """Sort by edge DESC, confidence DESC, live first, earliest first_pitch."""
         rec = s.recommendation
@@ -652,6 +668,7 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
     elites = [s for s in signals_list
               if s.recommendation is not None
               and getattr(s.recommendation, 'tier', '') == 'elite'
+              and _is_trusted_primary(s)
               and _no_user_bet(s)]
     if elites:
         elites.sort(key=_edge_key)
@@ -661,6 +678,7 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
     recommended = [s for s in signals_list
                    if s.recommendation is not None
                    and getattr(s.recommendation, 'status', '') == 'recommended'
+                   and _is_trusted_primary(s)
                    and _no_user_bet(s)]
     if recommended:
         recommended.sort(key=_edge_key)
@@ -668,9 +686,19 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
 
     # Layer 3 — legacy fallback: primary actions above the signal floor. This
     # keeps the old behavior alive for games with strong signals (ace matchup,
-    # tight spread) but lacking a Recommended-status pick.
+    # tight spread) but lacking a Recommended-status pick. We still gate on
+    # the trust filter so a derived/blocked-rec game can never anchor Focus
+    # via the signal-based path either.
     candidates = []
     for s in signals_list:
+        # Block if the (possibly non-recommended) rec on this game is
+        # blocked or based on derived odds. Games with rec=None pass —
+        # the signal-based path is supposed to cover them.
+        if s.recommendation is not None and (
+            getattr(s.recommendation, 'tier', '') == 'blocked'
+            or getattr(s.recommendation, 'status_reason', '') == 'derived_odds'
+        ):
+            continue
         primary = next((a for a in s.actions if a['strength'] == 'primary'), None)
         if primary is None or primary['type'] == 'bet_placed':
             continue
@@ -717,43 +745,64 @@ def _decision_sort_key(s: GameSignals):
 
 
 def partition_games_by_decision(signals: list[GameSignals]) -> dict:
-    """Split MLB signals into four decision-driven sections.
+    """Split MLB signals into source-aware decision sections.
 
     Every input signal ends up in exactly one list — no games are dropped.
-    Distinct buckets matter because they communicate different things:
+    Source-Aware Betting (Commit B) layers a trust-tier split on top of
+    the existing decision partition:
 
-      elite           — the system's strongest picks (capped at 2)
-      recommended     — model says bet, edge cleared the rules
-      not_recommended — model says fade (we have odds; rules said skip)
-      unrated         — we can't evaluate (no odds, or game already live and
-                        odds providers dropped it). Visually demoted but
-                        labeled honestly so users don't conflate
-                        "no signal" with "negative signal."
+      elite              — verified-source elites (Top Plays). Strongest picks.
+      recommended        — verified-source recommended bets.
+      recommended_espn   — ESPN-source (is_secondary) recommended bets.
+                           These render in their own section with a
+                           "secondary market — lower confidence" note.
+      not_recommended    — primary-source not_recommended games. ESPN-source
+                           not-recommended games are merged in here too —
+                           the user-facing answer (don't bet) is the same;
+                           splitting them would clutter without gain.
+      unrated            — we can't evaluate (no odds, or game already
+                           live and odds providers dropped it).
+      blocked            — recommendations whose underlying snapshot was
+                           synthesized (status_reason='derived_odds').
+                           NEVER appears in primary surfaces — only in
+                           the staff /diag=1 table.
 
-    CALL ORDER: invoke AFTER `assign_tiers(list_of_recs)` so the slate-level
-    elite cap (MAX_ELITE_PER_SLATE=2) has already been applied. Otherwise
-    more than 2 games can show up in the Top Plays section.
+    CALL ORDER: invoke AFTER `assign_tiers(list_of_recs)` so the slate-
+    level elite cap (MAX_ELITE_PER_SLATE=2) has already been applied.
     """
-    elite, recommended, not_recommended, unrated = [], [], [], []
+    elite, recommended, recommended_espn = [], [], []
+    not_recommended, unrated, blocked = [], [], []
     for s in signals:
         rec = s.recommendation
         if rec is None:
             unrated.append(s)
             continue
-        if rec.tier == 'elite':
+        # Trust-tier guard: synthesized odds are removed from every
+        # primary surface. Only diagnostics see them.
+        if getattr(rec, 'status_reason', '') == 'derived_odds' or rec.tier == 'blocked':
+            blocked.append(s)
+            continue
+        is_secondary = bool(getattr(rec, 'is_secondary', False))
+        if rec.tier == 'elite' and not is_secondary:
+            # Top Plays are verified-only by spec — an ESPN-sourced
+            # "elite" tier still falls into the ESPN recommended bucket
+            # so users never see a Top Play they can't fully trust.
             elite.append(s)
         elif rec.status == 'recommended':
-            recommended.append(s)
+            if is_secondary:
+                recommended_espn.append(s)
+            else:
+                recommended.append(s)
         else:
             not_recommended.append(s)
 
-    elite.sort(key=_decision_sort_key)
-    recommended.sort(key=_decision_sort_key)
-    not_recommended.sort(key=_decision_sort_key)
-    unrated.sort(key=_decision_sort_key)
+    for bucket in (elite, recommended, recommended_espn, not_recommended, unrated, blocked):
+        bucket.sort(key=_decision_sort_key)
     return {
         'elite': elite,
         'recommended': recommended,
+        'recommended_espn': recommended_espn,
         'not_recommended': not_recommended,
         'unrated': unrated,
+        'blocked': blocked,
     }

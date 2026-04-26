@@ -292,6 +292,12 @@ def bulk_place_recommended(request):
     tier_filter = request.GET.get('tier_filter', 'all')
     if tier_filter not in ('all', 'elite', 'elite_or_strong', 'strong'):
         tier_filter = 'all'
+    # Source-Aware Betting: 'verified' = primary only, 'espn' = secondary
+    # only, 'all' = both. Defaulting to 'all' preserves the legacy
+    # behavior for any caller that hits the endpoint without the param.
+    source_filter = request.GET.get('source_filter', 'all')
+    if source_filter not in ('all', 'verified', 'espn'):
+        source_filter = 'all'
     try:
         raw_stake = request.GET.get('stake', '100')
         stake = Decimal(str(raw_stake))
@@ -301,7 +307,8 @@ def bulk_place_recommended(request):
         return JsonResponse({'error': 'Invalid stake'}, status=400)
 
     summary = place_bulk_recommended_bets(
-        request.user, sport=sport, stake=stake, tier_filter=tier_filter,
+        request.user, sport=sport, stake=stake,
+        tier_filter=tier_filter, source_filter=source_filter,
     )
     if summary.get('error'):
         return JsonResponse(summary, status=400)

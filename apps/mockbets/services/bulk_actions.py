@@ -25,14 +25,24 @@ _SUPPORTED_SPORTS = ('mlb',)
 _DEFAULT_STAKE = Decimal('100.00')
 
 
-def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all'):
+def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
+                              source_filter: str = 'all'):
     """Yield (game, recommendation) tuples for games the user could bet today.
+
+    source_filter (Source-Aware Betting, Commit B):
+      'all'      — primary + secondary (legacy behavior)
+      'verified' — only is_secondary=False (Odds API path)
+      'espn'     — only is_secondary=True (ESPN fallback path)
+    Derived-odds rows (tier='blocked' / status_reason='derived_odds') are
+    ALWAYS excluded — synthesized odds must never feed a bulk action,
+    regardless of which filter mode is active.
 
     Filters out:
       - games not in 'scheduled' status (already started/finished)
       - games whose start time has already passed
       - games without odds (no recommendation can be computed)
       - games where status != 'recommended' (per spec)
+      - blocked recommendations (derived odds)
       - games user already has a pending bet on (handled in place fn —
         would otherwise be a join here, but cleaner as a per-iter check)
     """
@@ -53,6 +63,21 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all')
         if rec is None:
             continue
         if rec.status != 'recommended':
+            continue
+        # Source-Aware Betting: derived odds NEVER bulk-bet, regardless
+        # of source_filter. Defense in depth — the recommendation engine
+        # already sets status='not_recommended' for derived rows so this
+        # branch should be unreachable, but the explicit check guarantees
+        # the contract no matter how upstream evolves.
+        if (
+            getattr(rec, 'tier', '') == 'blocked'
+            or getattr(rec, 'status_reason', '') == 'derived_odds'
+        ):
+            continue
+        is_secondary = bool(getattr(rec, 'is_secondary', False))
+        if source_filter == 'verified' and is_secondary:
+            continue
+        if source_filter == 'espn' and not is_secondary:
             continue
         if tier_filter == 'elite' and rec.tier != 'elite':
             continue
@@ -84,9 +109,14 @@ def place_bulk_recommended_bets(
     sport: str = 'mlb',
     stake: Decimal = _DEFAULT_STAKE,
     tier_filter: str = 'all',
+    source_filter: str = 'all',
 ) -> dict:
     """Place a $stake mock bet on every game whose model recommendation is
     `status='recommended'` and the user doesn't already have a pending bet.
+
+    source_filter ('all' / 'verified' / 'espn') restricts placement to the
+    matching trust tier — used by the split UI buttons. Derived odds are
+    always excluded regardless of filter.
 
     Wraps the whole batch in a single atomic block — either all bets land
     or none do, so a partial failure can't leave the user with a stale UI.
@@ -113,6 +143,7 @@ def place_bulk_recommended_bets(
             'skipped_started': 0,
             'skipped_no_odds': 0,
             'tier_filter': tier_filter,
+            'source_filter': source_filter,
             'stake': float(stake),
             'error': f'Bulk placement not supported for sport: {sport}',
         }
@@ -135,7 +166,9 @@ def place_bulk_recommended_bets(
             skipped_no_odds += 1
 
     # Second pass — actually place the bets, transactional.
-    eligible = list(_eligible_games_for_user(user, sport=sport, tier_filter=tier_filter))
+    eligible = list(_eligible_games_for_user(
+        user, sport=sport, tier_filter=tier_filter, source_filter=source_filter,
+    ))
     with transaction.atomic():
         for game, rec in eligible:
             # Re-check inside the transaction. If a concurrent placement
@@ -182,6 +215,7 @@ def place_bulk_recommended_bets(
         'skipped_started': skipped_started,
         'skipped_no_odds': skipped_no_odds,
         'tier_filter': tier_filter,
+        'source_filter': source_filter,
         'stake': float(stake),
     }
 

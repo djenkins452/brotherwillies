@@ -1758,3 +1758,286 @@ class DisplayConfidenceTests(TestCase):
         s = build_signals(game, user=None)
         self.assertIsNone(s.recommendation)
         self.assertEqual(s.display_confidence_pct, s.confidence_pct)
+
+
+# =========================================================================
+# Source-Aware Betting (Commit B) — UI partition + bulk filter + focus
+# =========================================================================
+# These tests cover the visible behavior: section split, badge rendering,
+# bulk-button source filter, and the focus banner refusing to anchor on
+# secondary or derived recommendations.
+
+from types import SimpleNamespace as _SimpleNS
+
+
+def _signal_with_rec(*, tier='standard', status='recommended', is_secondary=False,
+                    status_reason='', game_id='g1', live=False):
+    """Build a minimal GameSignals stand-in for partition tests.
+
+    The partition function only inspects rec.tier / rec.status /
+    rec.is_secondary / rec.status_reason and a few sort-key attrs, so we
+    can avoid the full ORM dance with a SimpleNamespace fixture."""
+    rec = _SimpleNS(
+        tier=tier,
+        status=status,
+        is_secondary=is_secondary,
+        status_reason=status_reason,
+        confidence_score=70.0,
+        model_edge=5.0,
+    )
+    game = _SimpleNS(
+        id=game_id,
+        status='live' if live else 'scheduled',
+        first_pitch=timezone.now() + timedelta(hours=2),
+    )
+    return _SimpleNS(
+        game=game,
+        recommendation=rec,
+        is_top_opportunity=False,
+        confidence=2.0,
+        actions=[],
+        has_user_bet=False,
+        user_bet_id=None,
+    )
+
+
+class PartitionSourceAwareSplitTests(TestCase):
+    """The partition function must split recommended bets by source and
+    bucket blocked rows separately so they never appear in primary UI."""
+
+    def test_verified_recommended_lands_in_recommended_bucket(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = _signal_with_rec(is_secondary=False)
+        sections = partition_games_by_decision([s])
+        self.assertEqual(len(sections['recommended']), 1)
+        self.assertEqual(len(sections['recommended_espn']), 0)
+
+    def test_secondary_recommended_lands_in_espn_bucket(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = _signal_with_rec(is_secondary=True)
+        sections = partition_games_by_decision([s])
+        self.assertEqual(len(sections['recommended']), 0)
+        self.assertEqual(len(sections['recommended_espn']), 1)
+
+    def test_blocked_rec_never_appears_in_primary_buckets(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = _signal_with_rec(
+            tier='blocked', status='not_recommended',
+            status_reason='derived_odds',
+        )
+        sections = partition_games_by_decision([s])
+        self.assertEqual(len(sections['recommended']), 0)
+        self.assertEqual(len(sections['recommended_espn']), 0)
+        self.assertEqual(len(sections['not_recommended']), 0)
+        self.assertEqual(len(sections['elite']), 0)
+        self.assertEqual(len(sections['blocked']), 1)
+
+    def test_secondary_elite_drops_to_espn_recommended_section(self):
+        # An elite-tier ESPN-secondary rec should NOT show up in Top Plays.
+        # Top Plays must remain trustworthy. Falls through to ESPN bucket.
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = _signal_with_rec(tier='elite', is_secondary=True)
+        sections = partition_games_by_decision([s])
+        self.assertEqual(len(sections['elite']), 0)
+        self.assertEqual(len(sections['recommended_espn']), 1)
+
+    def test_verified_elite_still_lands_in_elite(self):
+        from apps.mlb.services.prioritization import partition_games_by_decision
+        s = _signal_with_rec(tier='elite', is_secondary=False)
+        sections = partition_games_by_decision([s])
+        self.assertEqual(len(sections['elite']), 1)
+
+
+class FocusBannerTrustFilterTests(TestCase):
+    """Focus banner is the most prominent surface — it must never anchor
+    on ESPN-secondary or derived/blocked recommendations."""
+
+    def test_focus_skips_secondary_recommendation(self):
+        from apps.mlb.services.prioritization import get_focus_game
+        # Two recs with the same edge: one verified, one ESPN. Focus
+        # must always pick the verified one.
+        verified = _signal_with_rec(tier='elite', is_secondary=False, game_id='v')
+        verified.recommendation.model_edge = 8.0
+        espn = _signal_with_rec(tier='elite', is_secondary=True, game_id='e')
+        espn.recommendation.model_edge = 10.0  # higher edge but secondary
+        focus = get_focus_game([verified, espn])
+        self.assertIsNotNone(focus)
+        self.assertEqual(focus.game.id, 'v')
+
+    def test_focus_skips_blocked_recommendation(self):
+        from apps.mlb.services.prioritization import get_focus_game
+        blocked = _signal_with_rec(
+            tier='blocked', status='not_recommended',
+            status_reason='derived_odds', game_id='b',
+        )
+        focus = get_focus_game([blocked])
+        self.assertIsNone(focus)
+
+    def test_focus_only_secondary_returns_none(self):
+        # Even when the only rec available is ESPN, focus refuses to
+        # anchor — Focus is for the user's most actionable CONFIRMED
+        # bet, not "least bad option."
+        from apps.mlb.services.prioritization import get_focus_game
+        s = _signal_with_rec(is_secondary=True)
+        focus = get_focus_game([s])
+        self.assertIsNone(focus)
+
+
+class BulkActionsSourceFilterTests(TestCase):
+    """The bulk-place service must respect source_filter and never bet
+    on derived rows regardless of filter."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from apps.mlb.models import Conference, Game, Team
+        self.user = User.objects.create_user('joe', password='pw')
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.team_pairs = []
+        for i in range(3):
+            # Wide rating gap so model has clear edge → bet lands as
+            # 'recommended' rather than no_rec.
+            home = Team.objects.create(
+                name=f'Home {i}', slug=f'home-{i}', conference=conf, rating=80.0,
+            )
+            away = Team.objects.create(
+                name=f'Away {i}', slug=f'away-{i}', conference=conf, rating=40.0,
+            )
+            game = Game.objects.create(
+                home_team=home, away_team=away,
+                first_pitch=timezone.now() + timedelta(hours=2 + i*0.5),
+            )
+            self.team_pairs.append(game)
+
+    def _seed_snapshot(self, game, *, source='odds_api', is_derived=False):
+        from apps.mlb.models import OddsSnapshot
+        # Weak market price (close to 50/50) → strong house edge.
+        OddsSnapshot.objects.create(
+            game=game,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.52,
+            moneyline_home=-110, moneyline_away=-110,
+            odds_source=source, is_derived=is_derived,
+        )
+
+    def test_verified_filter_excludes_secondary_bets(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        self._seed_snapshot(self.team_pairs[0], source='odds_api')
+        self._seed_snapshot(self.team_pairs[1], source='odds_api')
+        self._seed_snapshot(self.team_pairs[2], source='espn')
+        result = place_bulk_recommended_bets(
+            self.user, source_filter='verified',
+        )
+        self.assertEqual(result['placed'], 2)
+        self.assertEqual(result['source_filter'], 'verified')
+
+    def test_espn_filter_excludes_verified_bets(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        self._seed_snapshot(self.team_pairs[0], source='odds_api')
+        self._seed_snapshot(self.team_pairs[1], source='espn')
+        self._seed_snapshot(self.team_pairs[2], source='espn')
+        result = place_bulk_recommended_bets(
+            self.user, source_filter='espn',
+        )
+        self.assertEqual(result['placed'], 2)
+
+    def test_derived_never_bulk_bet_regardless_of_filter(self):
+        # Defense in depth: even if source_filter='all' or 'espn', a
+        # derived snapshot must never produce a bet.
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        from apps.mockbets.models import MockBet
+        self._seed_snapshot(self.team_pairs[0], source='espn', is_derived=True)
+        self._seed_snapshot(self.team_pairs[1], source='espn', is_derived=True)
+        for filt in ('all', 'verified', 'espn'):
+            MockBet.objects.all().delete()
+            result = place_bulk_recommended_bets(self.user, source_filter=filt)
+            self.assertEqual(
+                result['placed'], 0,
+                msg=f'derived must not bulk-bet under filter={filt}',
+            )
+
+
+class HubTemplateSourceAwareTests(TestCase):
+    """Template smoke tests: ESPN section renders when there are
+    secondary rec games; both bulk buttons render together when both
+    sets exist; derived rows never appear."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from django.test import Client
+        from apps.mlb.models import Conference, Game, Team
+        self.client = Client()
+        self.user = User.objects.create_user('joe', password='pw')
+        self.client.force_login(self.user)
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+
+        def mkgame(label, hours_ahead):
+            # Wide rating gap so the model produces a clear edge → the
+            # bet lands in 'recommended' status rather than no_rec/edge_too_low.
+            home = Team.objects.create(
+                name=f'Home {label}', slug=f'home-{label}',
+                conference=conf, rating=80.0,
+            )
+            away = Team.objects.create(
+                name=f'Away {label}', slug=f'away-{label}',
+                conference=conf, rating=40.0,
+            )
+            return Game.objects.create(
+                home_team=home, away_team=away,
+                first_pitch=timezone.now() + timedelta(hours=hours_ahead),
+            )
+
+        self.verified_game = mkgame('v', 2)
+        self.espn_game = mkgame('e', 3)
+        self.derived_game = mkgame('d', 4)
+
+    def _seed(self, game, *, source, is_derived=False):
+        # Weak market price (close to 50/50) vs strong model favorite →
+        # generates a recommended bet with material edge.
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=game,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.52,
+            moneyline_home=-110, moneyline_away=-110,
+            odds_source=source, is_derived=is_derived,
+        )
+
+    def test_espn_section_renders_when_secondary_present(self):
+        self._seed(self.verified_game, source='odds_api')
+        self._seed(self.espn_game, source='espn')
+        resp = self.client.get('/mlb/')
+        self.assertEqual(resp.status_code, 200)
+        # Section CSS class is the most reliable marker — text like
+        # "ESPN Fallback" appears in the help modal regardless.
+        self.assertContains(resp, 'mlb-section--espn')
+        self.assertContains(resp, 'mlb-section__source-tag--espn')
+        # The "secondary market" note tells users explicitly.
+        self.assertContains(resp, 'These bets use ESPN odds')
+
+    def test_espn_section_hidden_when_no_secondary(self):
+        # Only verified rec → ESPN section markup should NOT render.
+        self._seed(self.verified_game, source='odds_api')
+        resp = self.client.get('/mlb/')
+        self.assertNotContains(resp, 'mlb-section--espn')
+        self.assertNotContains(resp, 'These bets use ESPN odds')
+
+    def test_both_bulk_buttons_render_when_both_sources_present(self):
+        self._seed(self.verified_game, source='odds_api')
+        self._seed(self.espn_game, source='espn')
+        resp = self.client.get('/mlb/')
+        self.assertContains(resp, 'Bet All Verified Plays')
+        self.assertContains(resp, 'Bet All ESPN Plays')
+
+    def test_only_verified_button_renders_when_no_secondary(self):
+        self._seed(self.verified_game, source='odds_api')
+        resp = self.client.get('/mlb/')
+        self.assertContains(resp, 'Bet All Verified Plays')
+        self.assertNotContains(resp, 'Bet All ESPN Plays')
+
+    def test_source_badge_renders_on_espn_tile(self):
+        self._seed(self.espn_game, source='espn')
+        resp = self.client.get('/mlb/')
+        self.assertContains(resp, 'mlb-source-badge--espn')
+        self.assertContains(resp, 'ESPN Odds')

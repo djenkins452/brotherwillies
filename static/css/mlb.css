@@ -57,6 +57,17 @@
     background: #6b7280;
     color: #fff;
 }
+/* Source-Aware Betting (Commit B): the green primary button still bets
+   ALL recommended of any source; this --espn variant is the new yellow
+   button for secondary-only bulk placement. Visual distinction
+   matches the per-tile badge so the user maps the section, the button,
+   and the badge to the same trust level at a glance. */
+.mlb-bulk-btn--espn {
+    background: #ca8a04;
+    border-color: #ca8a04;
+    color: #fff;
+}
+.mlb-bulk-btn--espn:hover { background: #a16207; border-color: #a16207; }
 .mlb-bulk-btn:disabled { opacity: 0.6; cursor: wait; }
 .mlb-bulk-msg { font-size: 0.78rem; margin-left: 4px; }
 .mlb-hub__title {
@@ -925,4 +936,68 @@
     .mlb-tile { width: 260px; padding: 12px 14px; }
     .mlb-tile__name { display: none; }   /* keep abbreviation + score, drop long name */
     .mlb-tile--upcoming .mlb-tile__name { display: block; }
+}
+
+/* =====================================================================
+   Source-Aware Betting (Commit B) — visual differentiation
+   ===================================================================== */
+
+/* Per-tile source badge — appears at the top of the actions row inside
+   every tile that has a recommendation. Matches the tooltip pattern of
+   the other action chips so users recognise the shape. */
+.mlb-source-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1.4;
+}
+.mlb-source-badge--verified {
+    background: rgba(34,197,94,0.16);
+    color: #86efac;
+    border: 1px solid rgba(34,197,94,0.45);
+}
+.mlb-source-badge--espn {
+    background: rgba(234,179,8,0.16);
+    color: #fde68a;
+    border: 1px solid rgba(234,179,8,0.45);
+}
+
+/* Section header inline tag — shown in the section title to remind users
+   what trust level they're looking at. Visually quieter than the per-
+   tile badge since the section header already announces the bucket. */
+.mlb-section__source-tag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+}
+.mlb-section__source-tag--verified {
+    background: rgba(34,197,94,0.14);
+    color: #86efac;
+    border: 1px solid rgba(34,197,94,0.35);
+}
+.mlb-section__source-tag--espn {
+    background: rgba(234,179,8,0.14);
+    color: #fde68a;
+    border: 1px solid rgba(234,179,8,0.35);
+}
+
+/* ESPN section gets a slightly muted overall feel so it visually
+   reads as "use with caution" without being alarming. */
+.mlb-section--espn {
+    border-left: 3px solid rgba(234,179,8,0.45);
+    padding-left: 12px;
+    margin-left: -15px;
+    background: rgba(234,179,8,0.025);
 }
