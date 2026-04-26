@@ -211,12 +211,15 @@ class Command(BaseCommand):
                         f"ESPN per-game gap-fill triggered: {len(gap_pks)} of "
                         f"{upcoming_total} upcoming games have no fresh primary odds"
                     )
+                    # ESPN persist now self-filters per-game via a freshness
+                    # check (skips games that already have a fresh primary
+                    # snapshot). No need for a target ID set — and removing
+                    # it eliminates a class of false skips when the matched
+                    # game's pk happened to fall outside the gap set.
                     provider = MLBEspnOddsProvider()
                     raw = provider.fetch()
                     normalized = provider.normalize(raw)
-                    fallback_stats = provider.persist(
-                        normalized, target_game_ids=set(gap_pks),
-                    )
+                    fallback_stats = provider.persist(normalized)
                     self.stdout.write(self.style.SUCCESS(
                         f"ESPN gap-fill: {fallback_stats}"
                     ))

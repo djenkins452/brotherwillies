@@ -984,26 +984,29 @@ class MlbGapDetectionTests(TestCase):
         self.assertNotIn(far_game.pk, gaps)
 
 
-class MlbEspnTargetFilterTests(TestCase):
-    """When persist is given target_game_ids, it must skip games NOT in
-    the set (so we don't double-write for games primary already covered)."""
+class MlbEspnFreshnessSelfFilterTests(TestCase):
+    """Replaced target_game_ids with a per-row freshness check inside
+    persist. The provider now self-filters: if a matched game already
+    has a fresh primary snapshot, it skips with reason=has_fresh_primary."""
 
     def setUp(self):
         self.fx = _MlbGapFillFixture().make()
 
-    def test_filter_skips_non_target_games(self):
+    def test_skips_when_game_has_fresh_primary_snapshot(self):
+        # Pre-seed game_a with a fresh primary snapshot (5 minutes ago).
+        _seed_primary_snapshot(self.fx.game_a)
+
         from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
         provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
-        commence = self.fx.game_a.first_pitch
         normalized = [
-            {
+            {  # ESPN sees game_a too — must skip because primary already covered it.
                 'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
-                'commence_time': commence.isoformat().replace('+00:00', 'Z'),
+                'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
                 'sportsbook': 'DraftKings',
                 'moneyline_home': -130, 'moneyline_away': 110,
                 'spread': -1.5, 'total': 8.5,
             },
-            {
+            {  # game_b has no primary — ESPN should fill it.
                 'home_team': 'Los Angeles Dodgers', 'away_team': 'San Francisco Giants',
                 'commence_time': self.fx.game_b.first_pitch.isoformat().replace('+00:00', 'Z'),
                 'sportsbook': 'DraftKings',
@@ -1011,23 +1014,31 @@ class MlbEspnTargetFilterTests(TestCase):
                 'spread': -1.5, 'total': 8.5,
             },
         ]
-        # Only game_b is in the target set.
-        result = provider.persist(normalized, target_game_ids={self.fx.game_b.pk})
+        result = provider.persist(normalized)
         self.assertEqual(result['created'], 1)
-        # game_a's row was skipped because it's not in target_game_ids.
-        self.assertEqual(result['skip_reasons'].get('not_in_target_set'), 1)
-        # The DB confirms — only game_b has a fresh ESPN row.
-        from apps.mlb.models import OddsSnapshot
+        self.assertEqual(result['skip_reasons'].get('has_fresh_primary'), 1)
+        # game_a still has only its primary row — no double-write.
         self.assertEqual(
-            OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 0,
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 1,
         )
         self.assertEqual(
-            OddsSnapshot.objects.filter(game=self.fx.game_b).count(), 1,
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a).first().odds_source,
+            'odds_api',
+        )
+        # game_b got a fresh ESPN row.
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_b).count(), 1,
+        )
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_b).first().odds_source,
+            'espn',
         )
 
-    def test_filter_none_preserves_original_whole_slate_behavior(self):
-        # No filter → ESPN persists for every matched game (the original
-        # whole-slate fallback contract).
+    def test_stale_primary_does_not_block_fallback(self):
+        # Primary snapshot from 4 hours ago → outside the freshness
+        # window. ESPN should treat the game as a gap and fill it.
+        _seed_primary_snapshot(self.fx.game_a, minutes_ago=240)
+
         from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
         provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
         normalized = [{
@@ -1037,8 +1048,72 @@ class MlbEspnTargetFilterTests(TestCase):
             'moneyline_home': -130, 'moneyline_away': 110,
             'spread': -1.5, 'total': 8.5,
         }]
-        result = provider.persist(normalized)  # no filter
+        result = provider.persist(normalized)
         self.assertEqual(result['created'], 1)
+        # game_a now has both rows: stale primary + fresh ESPN.
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 2,
+        )
+
+    def test_only_primary_blocks_fallback_not_other_espn(self):
+        # An EXISTING ESPN snapshot for the game must NOT block another
+        # ESPN run from refreshing it — only primary counts as "covered."
+        # Otherwise ESPN-only games would freeze on the first fallback
+        # snapshot until it ages out.
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=self.fx.game_a,
+            captured_at=timezone.now() - timedelta(minutes=5),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.55,
+            moneyline_home=-130, moneyline_away=110,
+            odds_source='espn', source_quality='fallback',
+        )
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -135, 'moneyline_away': 115,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        result = provider.persist(normalized)
+        # New ESPN row added — refresh allowed.
+        self.assertEqual(result['created'], 1)
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 2,
+        )
+
+    def test_ignores_yesterdays_finished_game_with_same_matchup(self):
+        # Defensive: pre-create a finished game for the SAME matchup
+        # yesterday. ESPN's payload for today's game must NOT match
+        # against yesterday's row (which was the prod regression that
+        # made `not_in_target_set` fire on every row).
+        from apps.mlb.models import Game
+        finished = Game.objects.create(
+            home_team=self.fx.teams['New York Yankees'],
+            away_team=self.fx.teams['Boston Red Sox'],
+            first_pitch=timezone.now() - timedelta(days=1),
+        )
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -130, 'moneyline_away': 110,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        result = provider.persist(normalized)
+        # The TODAY game (game_a) gets the row, NOT yesterday's finished game.
+        self.assertEqual(result['created'], 1)
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 1,
+        )
+        self.assertEqual(
+            self.fx.OddsSnapshot.objects.filter(game=finished).count(), 0,
+        )
 
 
 class MlbSourceMetadataTests(TestCase):
@@ -1219,3 +1294,252 @@ class MlbIngestOddsCommandGapFillTests(TestCase):
         joined = '\n'.join(cm.output)
         self.assertIn('mlb_odds_ingest_summary', joined)
         self.assertIn('still_missing=', joined)
+
+
+class MlbEspnDetailsParserTests(TestCase):
+    """Cover ESPN's `details` field as a moneyline source. The parser
+    must accept moneylines, reject spreads, and disambiguate by team
+    abbreviation when present."""
+
+    def test_parses_abbreviation_plus_moneyline(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        side, value = _parse_moneyline_from_details(
+            'BAL -143', home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertEqual(side, 'home')
+        self.assertEqual(value, -143)
+
+    def test_parses_positive_moneyline(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        side, value = _parse_moneyline_from_details(
+            'BOS +120', home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertEqual(side, 'away')
+        self.assertEqual(value, 120)
+
+    def test_rejects_spread_with_decimal(self):
+        # "BAL -1.5" is a spread, not a moneyline. Must NOT be parsed
+        # as a moneyline of -1 or -15.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        side, value = _parse_moneyline_from_details(
+            'BAL -1.5', home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertIsNone(side)
+        self.assertIsNone(value)
+
+    def test_rejects_small_integer_as_likely_spread(self):
+        # "+5" / "-7" are small enough to be a runline-equivalent point
+        # spread; never a moneyline (which is conventionally |v| >= 100).
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        for raw in ('BAL -5', 'BOS +7', '+99'):
+            side, value = _parse_moneyline_from_details(
+                raw, home_abbr='BAL', away_abbr='BOS',
+            )
+            self.assertIsNone(value, msg=f'expected reject for {raw!r}')
+
+    def test_parses_value_only_no_abbreviation(self):
+        # "+120" alone — value parses but side is None. Caller assigns
+        # the side from positional context (or skips).
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        side, value = _parse_moneyline_from_details('+120')
+        self.assertIsNone(side)
+        self.assertEqual(value, 120)
+
+    def test_unknown_abbreviation_returns_value_without_side(self):
+        # Abbreviation that matches neither home nor away — caller can
+        # still see the numeric value but won't know where to put it.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        side, value = _parse_moneyline_from_details(
+            'XYZ -150', home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertIsNone(side)
+        self.assertEqual(value, -150)
+
+    def test_garbage_input_returns_nones(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _parse_moneyline_from_details,
+        )
+        for raw in ('', None, 'not a number', 'BAL', '   '):
+            side, value = _parse_moneyline_from_details(raw)
+            self.assertIsNone(side)
+            self.assertIsNone(value)
+
+
+class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
+    """When the standard moneyline shapes (homeTeamOdds.moneyLine etc.)
+    are absent, _pick_best_odds_entry must combine `details` strings
+    from multiple entries to assemble both home and away moneylines."""
+
+    def test_combines_details_from_two_entries(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [
+            {
+                'provider': {'name': 'DraftKings'},
+                'details': 'BAL -143',
+                'spread': -1.5,
+                'overUnder': 8.5,
+            },
+            {
+                'provider': {'name': 'DraftKings'},
+                'details': 'BOS +130',
+            },
+        ]
+        entry, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertEqual(home_ml, -143)
+        self.assertEqual(away_ml, 130)
+        # Carrier should be the preferred-provider entry so spread/total
+        # come from that one.
+        self.assertEqual(entry['details'], 'BAL -143')
+
+    def test_falls_back_when_only_home_details_present(self):
+        # ESPN sometimes only has one side's moneyline. We still emit
+        # what we have; downstream persist will skip on no_moneyline_home
+        # if it's the home side that's missing.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'BAL -143', 'spread': -1.5}]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertEqual(home_ml, -143)
+        self.assertIsNone(away_ml)
+
+    def test_pass_1_still_wins_over_details(self):
+        # Standard shape is preferred over details parsing — guards
+        # against details containing stale data while a real moneyline
+        # field is present.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{
+            'provider': {'name': 'DraftKings'},
+            'details': 'BAL -999',  # stale/junk
+            'homeTeamOdds': {'moneyLine': -130},
+            'awayTeamOdds': {'moneyLine': 110},
+        }]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='BAL', away_abbr='BOS',
+        )
+        self.assertEqual(home_ml, -130)
+        self.assertEqual(away_ml, 110)
+
+
+class MlbEspnNormalizeWiresParserAndLogsTests(TestCase):
+    """End-to-end inside normalize: when ESPN returns events whose only
+    moneyline source is `details`, the parser must run and the success
+    log must fire. When parsing also fails, the parse_error log fires."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def _event_with_details(self, home_name, away_name, home_abbr, away_abbr,
+                            home_details, away_details):
+        return {
+            'date': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'competitions': [{
+                'date': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+                'competitors': [
+                    {'homeAway': 'home', 'team': {'displayName': home_name, 'abbreviation': home_abbr}},
+                    {'homeAway': 'away', 'team': {'displayName': away_name, 'abbreviation': away_abbr}},
+                ],
+                'odds': [
+                    {'provider': {'name': 'DraftKings'}, 'details': home_details,
+                     'spread': -1.5, 'overUnder': 8.5},
+                    {'provider': {'name': 'DraftKings'}, 'details': away_details},
+                ],
+            }],
+        }
+
+    def test_normalize_recovers_moneylines_from_details(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        events = [self._event_with_details(
+            'New York Yankees', 'Boston Red Sox', 'NYY', 'BOS',
+            'NYY -143', 'BOS +130',
+        )]
+        with self.assertLogs('apps.datahub.providers.mlb.odds_espn_provider',
+                             level='INFO') as cm:
+            normalized = provider.normalize(events)
+        self.assertEqual(len(normalized), 1)
+        self.assertEqual(normalized[0]['moneyline_home'], -143)
+        self.assertEqual(normalized[0]['moneyline_away'], 130)
+        # The success log fired.
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_parsed', joined)
+
+    def test_parse_error_log_when_details_unrecognized(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        # Both entries have only spread-format details (decimals) → no
+        # moneyline can be extracted. Parse-error should fire once.
+        events = [self._event_with_details(
+            'New York Yankees', 'Boston Red Sox', 'NYY', 'BOS',
+            'NYY -1.5', 'BOS +1.5',
+        )]
+        with self.assertLogs('apps.datahub.providers.mlb.odds_espn_provider',
+                             level='WARNING') as cm:
+            provider.normalize(events)
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_parse_error', joined)
+
+
+class MlbEspnPersistMatchSuccessLogTests(TestCase):
+    """The match_success log must fire on every persisted ESPN row so
+    deploy logs answer 'which games did ESPN actually fill?' without
+    a separate query."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def test_match_success_log_emitted(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -130, 'moneyline_away': 110,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        with self.assertLogs('apps.datahub.providers.mlb.odds_espn_provider',
+                             level='INFO') as cm:
+            result = provider.persist(normalized)
+        self.assertEqual(result['created'], 1)
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_match_success', joined)
+        self.assertIn(f'game_id={self.fx.game_a.id}', joined)
+
+    def test_no_match_log_emitted_on_team_failure(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'Mystery Home Team',
+            'away_team': 'Mystery Away Team',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -130, 'moneyline_away': 110,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        with self.assertLogs('apps.datahub.providers.mlb.odds_espn_provider',
+                             level='INFO') as cm:
+            provider.persist(normalized)
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_no_match', joined)
+        self.assertIn('stage=team', joined)

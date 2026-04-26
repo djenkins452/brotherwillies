@@ -54,6 +54,54 @@ def american_to_prob(ml):
     return abs(ml) / (abs(ml) + 100.0)
 
 
+def _parse_moneyline_from_details(details, home_abbr=None, away_abbr=None):
+    """Parse a moneyline from ESPN's `odds[].details` string.
+
+    ESPN has been observed serving the moneyline inside `details` as a
+    string like "BAL -143" (or "+120" / "-115" without an abbreviation).
+    This is distinct from a spread which uses a decimal value
+    ("BAL -1.5"). Disambiguating heuristic:
+      - Decimal point → spread, return (None, None).
+      - |value| < 100 → spread (run line / point spread), return (None, None).
+      - Integer with |value| >= 100 → treat as moneyline.
+
+    Returns (side, value) where side is 'home', 'away', or None when the
+    abbreviation can't be matched. Returns (None, None) on any parse
+    failure — caller logs `mlb_odds_espn_parse_error` and moves on.
+    """
+    if not details or not isinstance(details, str):
+        return None, None
+    parts = details.strip().split()
+    if not parts:
+        return None, None
+    # Forms: "BAL -143" (2 parts) or "-143" / "+120" (1 part).
+    if len(parts) >= 2:
+        abbr = parts[0]
+        raw = parts[1]
+    else:
+        abbr = None
+        raw = parts[0]
+    # Spreads always carry a decimal; moneylines never do. Reject early.
+    if '.' in raw:
+        return None, None
+    try:
+        value = int(raw.lstrip('+'))
+    except (ValueError, TypeError):
+        return None, None
+    # Reject values too small to be a moneyline (1.5-pt spread serialized
+    # as "1.5" was already caught; "-99" / "5" are also rejected here).
+    if abs(value) < 100:
+        return None, None
+    side = None
+    if abbr and home_abbr and abbr.upper() == str(home_abbr).upper():
+        side = 'home'
+    elif abbr and away_abbr and abbr.upper() == str(away_abbr).upper():
+        side = 'away'
+    # If no abbreviation was present (form "+120"), caller decides which
+    # side this belongs to from positional context.
+    return side, value
+
+
 def _coerce_to_int(value):
     """Best-effort: pull an int out of a value that might be wrapped in a dict.
 
@@ -122,13 +170,21 @@ def _extract_moneyline(odds_entry, side):
     return _coerce_to_int(flat)
 
 
-def _pick_best_odds_entry(odds_list):
+def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
     """Return the first odds entry with both home + away moneylines set.
 
     ESPN sometimes returns multiple entries per event (e.g. a spread-only
     book first, then a moneyline book). Picking the first DraftKings entry
     misses the moneyline when that entry is spread-only. Scan all entries,
     prefer the preferred provider, and return the tuple (entry, home_ml, away_ml).
+
+    Pass-by-pass strategy:
+      1. Preferred provider with both moneylines via standard shapes.
+      2. Any provider with both moneylines via standard shapes.
+      3. Combined `details` parsing across ALL entries — ESPN was observed
+         emitting the moneyline inside `details` strings like "BAL -143"
+         instead of `homeTeamOdds.moneyLine`. We accumulate side-by-side.
+      4. Fall back to the first entry's spread/total (no moneyline).
     """
     # Pass 1 — preferred provider with both moneylines present.
     for o in odds_list or []:
@@ -138,13 +194,41 @@ def _pick_best_odds_entry(odds_list):
         a = _extract_moneyline(o, 'away')
         if h is not None and a is not None:
             return o, h, a
-    # Pass 2 — any provider with both moneylines.
+    # Pass 2 — any provider with both moneylines via standard shapes.
     for o in odds_list or []:
         h = _extract_moneyline(o, 'home')
         a = _extract_moneyline(o, 'away')
         if h is not None and a is not None:
             return o, h, a
-    # Pass 3 — fall back to the first entry so we still emit spread/total.
+    # Pass 3 — combined details-string parsing. Each entry's details
+    # might carry one side's moneyline (e.g. "BAL -143" for home,
+    # "BOS +130" for away in a separate entry). Accumulate.
+    if odds_list and (home_abbr or away_abbr):
+        details_home = details_away = None
+        for o in odds_list:
+            details = o.get('details')
+            if not details:
+                continue
+            side, value = _parse_moneyline_from_details(details, home_abbr, away_abbr)
+            if side == 'home' and details_home is None:
+                details_home = value
+            elif side == 'away' and details_away is None:
+                details_away = value
+        if details_home is not None or details_away is not None:
+            # Prefer the preferred-provider entry as the carrier so
+            # downstream spread/total still come from that source.
+            carrier = next(
+                (o for o in odds_list
+                 if (o.get('provider') or {}).get('name') == PREFERRED_PROVIDER),
+                odds_list[0],
+            )
+            logger.info(
+                'mlb_odds_espn_parsed source=details home=%r away=%r '
+                'ml_home=%s ml_away=%s',
+                home_abbr, away_abbr, details_home, details_away,
+            )
+            return carrier, details_home, details_away
+    # Pass 4 — fall back to the first entry so we still emit spread/total.
     if odds_list:
         first = odds_list[0]
         return first, _extract_moneyline(first, 'home'), _extract_moneyline(first, 'away')
@@ -200,6 +284,10 @@ class MLBEspnOddsProvider(AbstractProvider):
             away_team = (away.get('team') or {}).get('displayName') or ''
             if not home_team or not away_team:
                 continue
+            # Team abbreviations let _pick_best_odds_entry parse the
+            # moneyline out of "BAL -143" style `details` strings.
+            home_abbr = (home.get('team') or {}).get('abbreviation') or ''
+            away_abbr = (away.get('team') or {}).get('abbreviation') or ''
 
             # Commence time — prefer event.date, fall back to competition.date.
             commence = event.get('date') or comp.get('date') or ''
@@ -210,9 +298,24 @@ class MLBEspnOddsProvider(AbstractProvider):
             # Scan ALL odds entries for one with both home+away moneylines, not
             # just the first DraftKings entry — ESPN sometimes emits a spread-
             # only entry before the moneyline entry under the same provider.
-            preferred, home_ml, away_ml = _pick_best_odds_entry(odds_list)
+            preferred, home_ml, away_ml = _pick_best_odds_entry(
+                odds_list, home_abbr=home_abbr, away_abbr=away_abbr,
+            )
             if preferred is None:
                 continue
+            # If neither standard shapes nor `details` parsing produced a
+            # moneyline, AND there were details strings present, emit a
+            # parse-error log so we can see the raw shape that defeated us.
+            if home_ml is None and away_ml is None:
+                for o in odds_list:
+                    details = o.get('details')
+                    if details:
+                        logger.warning(
+                            'mlb_odds_espn_parse_error '
+                            'home_abbr=%r away_abbr=%r raw_details=%r',
+                            home_abbr, away_abbr, details,
+                        )
+                        break
 
             spread = preferred.get('spread')
             total = preferred.get('overUnder')
@@ -246,18 +349,34 @@ class MLBEspnOddsProvider(AbstractProvider):
         logger.info(f"mlb_odds_espn_normalize events={len(raw) if raw else 0} out={len(normalized)}")
         return normalized
 
-    def persist(self, normalized, target_game_ids=None):
+    def persist(self, normalized):
         """Persist normalized ESPN odds rows.
 
-        target_game_ids: when provided (a set or list of Game PKs), ONLY
-        persist for games whose PK is in the set. Used by the per-game
-        gap-fill flow in ingest_odds — we run ESPN to top up games the
-        primary provider didn't cover, and we explicitly do NOT want to
-        write a second ESPN snapshot for games that already have a fresh
-        primary one. Default None preserves the original whole-slate
-        behavior so existing call sites still work.
+        Matching strategy (deterministic, no caller-provided ID set):
+          1. Normalize team names → DB Team.
+          2. Restrict candidate Games to upcoming-or-just-started games
+             (first_pitch in [now-2h, now+72h]). This prevents matching
+             ESPN events to YESTERDAY's already-played game with the same
+             matchup — a real bug in the prior implementation that caused
+             the matched game.pk to fall outside the gap set.
+          3. Pick the candidate whose first_pitch is closest to ESPN's
+             commence_time (Python-side, portable across SQLite + PG).
+          4. Per-row freshness check: if the matched game already has a
+             fresh primary OddsSnapshot in the FRESH_ODDS_MAX_AGE_MINUTES
+             window, skip — primary already covered it, ESPN is fallback
+             only. This replaces the old `target_game_ids` filter and
+             requires no caller cooperation.
+          5. Persist with odds_source='espn', source_quality='fallback'.
+
+        Logs (per spec):
+          mlb_odds_espn_match_success  — per matched game
+          mlb_odds_espn_no_match       — when team or game lookup fails
+          mlb_odds_espn_persist_skip   — reason=has_fresh_primary etc.
+          mlb_odds_espn_persist_summary — final created/skipped counts
         """
-        target_game_ids = set(target_game_ids) if target_game_ids is not None else None
+        from django.conf import settings as django_settings
+
+        fresh_window = getattr(django_settings, 'FRESH_ODDS_MAX_AGE_MINUTES', 180)
         created = skipped = 0
         skip_reasons: dict[str, int] = {}
         now = timezone.now()
@@ -268,8 +387,9 @@ class MLBEspnOddsProvider(AbstractProvider):
                 skipped += 1
                 skip_reasons['no_team_match'] = skip_reasons.get('no_team_match', 0) + 1
                 logger.info(
-                    f"mlb_odds_espn_persist_skip reason=no_team_match "
-                    f"home={item['home_team']!r} away={item['away_team']!r}"
+                    'mlb_odds_espn_no_match stage=team api_home=%r api_away=%r '
+                    'home_matched=%s away_matched=%s',
+                    item['home_team'], item['away_team'], bool(home), bool(away),
                 )
                 continue
 
@@ -277,52 +397,57 @@ class MLBEspnOddsProvider(AbstractProvider):
             if commence and timezone.is_naive(commence):
                 commence = timezone.make_aware(commence)
 
-            # Same generous matching as the primary provider (±36h; Python-side
-            # nearest-delta fallback within ±4 days).
+            # Restrict to upcoming or just-started games. Without this,
+            # the matchup query could return yesterday's already-played
+            # game (same teams, same ±36h window) and we'd persist an
+            # ESPN snapshot against a finished game.
+            window_start = now - timedelta(hours=2)
+            window_end = now + timedelta(hours=72)
+            candidates = list(
+                Game.objects
+                .filter(home_team=home, away_team=away,
+                        first_pitch__gte=window_start,
+                        first_pitch__lte=window_end)
+            )
             game = None
-            if commence:
-                window_start = commence - timedelta(hours=36)
-                window_end = commence + timedelta(hours=36)
-                game = (
-                    Game.objects
-                    .filter(home_team=home, away_team=away,
-                            first_pitch__gte=window_start,
-                            first_pitch__lte=window_end)
-                    .order_by('first_pitch').first()
-                )
-            if not game and commence:
-                cutoff_start = commence - timedelta(days=4)
-                cutoff_end = commence + timedelta(days=4)
-                candidates = list(
-                    Game.objects
-                    .filter(home_team=home, away_team=away,
-                            first_pitch__gte=cutoff_start,
-                            first_pitch__lte=cutoff_end)
-                )
-                if candidates:
-                    candidates.sort(key=lambda g: abs((g.first_pitch - commence).total_seconds()))
-                    game = candidates[0]
+            if candidates:
+                if commence:
+                    candidates.sort(
+                        key=lambda g: abs((g.first_pitch - commence).total_seconds()),
+                    )
+                else:
+                    candidates.sort(key=lambda g: g.first_pitch)
+                game = candidates[0]
 
             if not game:
                 skipped += 1
                 skip_reasons['no_game_match'] = skip_reasons.get('no_game_match', 0) + 1
                 logger.info(
-                    f"mlb_odds_espn_persist_skip reason=no_game_match "
-                    f"home={home.name} away={away.name} commence={commence}"
+                    'mlb_odds_espn_no_match stage=game api_home=%r api_away=%r '
+                    'matched_home=%r matched_away=%r commence=%s',
+                    item['home_team'], item['away_team'],
+                    home.name, away.name, commence,
                 )
                 continue
 
-            # Per-game gap-fill filter: when caller provided target_game_ids,
-            # silently skip games already covered by primary. This prevents
-            # duplicate snapshots — primary already wrote one for these games
-            # and we only want ESPN rows for the actual gaps. Logged at INFO
-            # so the deploy log proves the filter is doing its job.
-            if target_game_ids is not None and game.pk not in target_game_ids:
+            # Per-row freshness: skip if THIS game already has a fresh
+            # primary snapshot. Replaces the old target_game_ids filter.
+            # Idempotent and self-contained — no caller cooperation needed,
+            # so a manually-invoked `MLBEspnOddsProvider().run()` can no
+            # longer accidentally double-write.
+            fresh_cutoff = now - timedelta(minutes=fresh_window)
+            already_covered = OddsSnapshot.objects.filter(
+                game=game,
+                captured_at__gte=fresh_cutoff,
+                odds_source='odds_api',
+            ).exists()
+            if already_covered:
                 skipped += 1
-                skip_reasons['not_in_target_set'] = skip_reasons.get('not_in_target_set', 0) + 1
+                skip_reasons['has_fresh_primary'] = skip_reasons.get('has_fresh_primary', 0) + 1
                 logger.info(
-                    f"mlb_odds_espn_persist_skip reason=not_in_target_set "
-                    f"game={game.id} home={home.name} away={away.name}"
+                    'mlb_odds_espn_persist_skip reason=has_fresh_primary '
+                    'game=%s home=%s away=%s',
+                    game.id, home.name, away.name,
                 )
                 continue
 
@@ -331,7 +456,9 @@ class MLBEspnOddsProvider(AbstractProvider):
                 skipped += 1
                 skip_reasons['no_moneyline_home'] = skip_reasons.get('no_moneyline_home', 0) + 1
                 logger.info(
-                    f"mlb_odds_espn_persist_skip reason=no_moneyline_home game={game.id}"
+                    'mlb_odds_espn_persist_skip reason=no_moneyline_home '
+                    'game=%s home=%s away=%s',
+                    game.id, home.name, away.name,
                 )
                 continue
 
@@ -345,12 +472,16 @@ class MLBEspnOddsProvider(AbstractProvider):
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
                 # Tag the source so the UI and recommendation engine can
-                # tell ESPN-fallback rows apart from primary ones. Without
-                # this, fallback snapshots silently inherit the model's
-                # default 'odds_api'/'primary' which would mislead the
-                # whole downstream pipeline.
+                # tell ESPN-fallback rows apart from primary ones.
                 odds_source='espn',
                 source_quality='fallback',
+            )
+            logger.info(
+                'mlb_odds_espn_match_success game_id=%s home=%s away=%s '
+                'ml_home=%s ml_away=%s sportsbook=%s',
+                game.id, home.name, away.name,
+                item.get('moneyline_home'), item.get('moneyline_away'),
+                item.get('sportsbook'),
             )
             created += 1
 

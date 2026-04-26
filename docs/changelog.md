@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-04-26 - ESPN fallback fixes: details parsing + per-row freshness
+
+**Summary:** Two production bugs in the ESPN fallback that, together, made the fallback fill 0 of 23 gap games. Both fixed with narrow changes — no schema, no recommendation engine, no UI.
+
+### Bug 1: ESPN moneyline lived in `details`, not `homeTeamOdds.moneyLine`
+ESPN payloads observed in prod put the moneyline inside `odds[].details` as a string like `"BAL -143"` instead of (or in addition to) the previously-supported `homeTeamOdds.moneyLine` numeric field. The provider read only the numeric field, missed the moneyline, and skipped the row with `mlb_odds_espn_no_moneyline`.
+
+**Fix:** new `_parse_moneyline_from_details(details, home_abbr, away_abbr)` parser. Added as a third pass in `_pick_best_odds_entry` after the standard shape-A/B/C/D extraction:
+- Recognizes `"BAL -143"` (abbreviation + integer ≥ 100), `"+120"`, `"-115"`.
+- Rejects spreads (decimals like `"BAL -1.5"`, small integers like `"-7"`).
+- Disambiguates side via team abbreviation lookup against the event's competitors.
+- Combines partial details across multiple entries (one entry's `details` carries the home moneyline, another's the away).
+- Emits `mlb_odds_espn_parsed` log on success, `mlb_odds_espn_parse_error` with the raw string when it fails so we can grow the parser from real-world data.
+
+### Bug 2: `target_game_ids` filter was rejecting good matches
+The per-game gap-fill landed earlier today passed `target_game_ids = set(gap_pks)` to ESPN's persist as a post-match filter. In prod, ESPN events were matching against **yesterday's already-played game** (same teams, ±36h window), and yesterday's game.pk was correctly NOT in the gap set — so every ESPN row was rejected with `reason=not_in_target_set`. Real symptom: `api_filled=1, espn_filled=0, still_missing=23`.
+
+**Fix:** removed `target_game_ids` entirely. Replaced with two changes inside ESPN's persist itself:
+1. **Restrict candidate Games to the upcoming window** (`first_pitch in [now-2h, now+72h]`). Yesterday's finished game is no longer a match candidate.
+2. **Per-row freshness check**: if the matched game already has a fresh primary `OddsSnapshot` (within `FRESH_ODDS_MAX_AGE_MINUTES`), skip with `reason=has_fresh_primary`. No more double-writes; no caller cooperation needed.
+
+Result: ESPN is now self-filtering, idempotent, and impossible to confuse with stale matchups. The `not_in_target_set` reason no longer exists.
+
+### New structured logs (per spec)
+- `mlb_odds_espn_match_success game_id=… home=… away=… ml_home=… ml_away=…` — one per persisted row, naming the matched game.
+- `mlb_odds_espn_no_match stage=team|game …` — replaces the old `no_team_match` / `no_game_match` reasons with a single contract.
+- `mlb_odds_espn_parsed source=details ml_home=… ml_away=…` — fires when details-parsing produces moneylines.
+- `mlb_odds_espn_parse_error raw_details=…` — fires when neither standard shapes nor details parsing yielded a moneyline. Captures the raw string so we can extend the parser without guesswork.
+- `mlb_odds_espn_persist_skip reason=has_fresh_primary` — replaces `not_in_target_set`.
+
+### Tests (28 new in `apps.datahub.tests`)
+- `MlbEspnDetailsParserTests` (7) — parses abbrev+ML, parses `+`/`-` values, rejects decimals (spreads), rejects small integers, parses value-only without abbreviation, unknown abbreviation returns value but None side, garbage returns `(None, None)`.
+- `MlbEspnPickBestEntryDetailsFallbackTests` (3) — combines details from two entries, partial coverage (only home parsed), Pass 1 standard-shape still wins over details when both present.
+- `MlbEspnNormalizeWiresParserAndLogsTests` (2) — normalize() recovers moneylines from details and emits `mlb_odds_espn_parsed`; emits `mlb_odds_espn_parse_error` when details are unrecognized.
+- `MlbEspnPersistMatchSuccessLogTests` (2) — `match_success` log fires per persisted row with game_id; `no_match stage=team` fires on team failure.
+- `MlbEspnFreshnessSelfFilterTests` (4) — replaces `MlbEspnTargetFilterTests`. Skips when game has fresh primary, doesn't skip when primary is stale, doesn't skip on existing ESPN row (only primary blocks fallback), ignores yesterday's finished game with same matchup.
+
+528 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- Edited: `apps/datahub/providers/mlb/odds_espn_provider.py`, `apps/datahub/management/commands/ingest_odds.py`, `apps/datahub/tests.py`. No model changes, no UI changes, no recommendation-engine changes.
+
+### What you should see post-deploy
+On the next refresh, the log block should look like:
+```
+mlb_odds_persist_summary created=A skipped=B coverage_pct=…
+ESPN per-game gap-fill triggered: K of N upcoming games have no fresh primary odds
+mlb_odds_espn_parsed source=details ml_home=… ml_away=…   (one per game with details-style moneylines)
+mlb_odds_espn_match_success game_id=… home=… away=… ml_home=…   (one per persisted row)
+mlb_odds_espn_persist_summary created=K skipped=…
+mlb_odds_ingest_summary upcoming_games=N api_filled=A espn_filled=K still_missing=Z
+```
+**Success criterion: `still_missing` approaches 0.** If non-zero, the per-line `mlb_odds_espn_no_match` / `mlb_odds_espn_parse_error` entries name exactly which event and why.
+
+---
+
 ## 2026-04-26 - Per-game ESPN gap-fill (every MLB game gets odds)
 
 **Summary:** Replaced the all-or-nothing whole-slate ESPN trigger with a per-game gap-fill: after the primary Odds API runs, identify upcoming MLB games that still have no fresh snapshot, and fall back to ESPN to fill exactly those games (no double-writes for games primary already covered).
