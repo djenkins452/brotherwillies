@@ -121,18 +121,109 @@ class MLBOddsProvider(AbstractProvider):
                 f"date_distribution={date_buckets} "
                 f"window={commence_from}..{commence_to}"
             )
+
+            # ---- DIAGNOSTIC: aggregate per-event pipeline counters ----
+            # Answers Stage 1 of the debugging spec ("is the API returning
+            # usable data?"). Every counter is computed from the raw
+            # response so we can attribute losses to a specific stage.
+            events_no_books = 0
+            events_with_h2h = 0
+            events_with_spreads = 0
+            events_with_totals = 0
+            events_with_moneyline_pair = 0
+            events_with_only_one_moneyline = 0
+            bm_counts = []
+            for e in data:
+                books = e.get('bookmakers') or []
+                bm_counts.append(len(books))
+                if not books:
+                    events_no_books += 1
+                    continue
+                # We use union-of-markets across books because The Odds API
+                # can give different markets per book, and any of them
+                # supports the moneyline path.
+                seen_market_keys: set = set()
+                ml_home_seen = ml_away_seen = False
+                for book in books:
+                    for m in book.get('markets') or []:
+                        key = m.get('key')
+                        if key:
+                            seen_market_keys.add(key)
+                        if key == 'h2h':
+                            for o in m.get('outcomes') or []:
+                                name = o.get('name', '')
+                                # Compare normalized to the event's home/away.
+                                if name == e.get('home_team'):
+                                    ml_home_seen = True
+                                elif name == e.get('away_team'):
+                                    ml_away_seen = True
+                if 'h2h' in seen_market_keys:
+                    events_with_h2h += 1
+                if 'spreads' in seen_market_keys:
+                    events_with_spreads += 1
+                if 'totals' in seen_market_keys:
+                    events_with_totals += 1
+                if ml_home_seen and ml_away_seen:
+                    events_with_moneyline_pair += 1
+                elif ml_home_seen or ml_away_seen:
+                    events_with_only_one_moneyline += 1
+            avg_books = (sum(bm_counts) / len(bm_counts)) if bm_counts else 0.0
+            logger.info(
+                'mlb_odds_fetch_pipeline events_returned=%d '
+                'events_with_bookmakers=%d events_no_bookmakers=%d '
+                'avg_bookmakers=%.1f '
+                'events_with_h2h=%d events_with_spreads=%d events_with_totals=%d '
+                'events_with_moneyline_pair=%d events_with_only_one_moneyline=%d',
+                len(data), len(data) - events_no_books, events_no_books,
+                avg_books, events_with_h2h, events_with_spreads, events_with_totals,
+                events_with_moneyline_pair, events_with_only_one_moneyline,
+            )
+
+            # ---- DIAGNOSTIC: dump 1-2 full event payloads when the
+            # DEBUG_ODDS_MATCHING flag is on. Sanitized to first bookmaker
+            # only so the log line stays readable. The flag is meant to
+            # be flipped on briefly via Railway env, harvested, then off.
+            from django.conf import settings as django_settings
+            if getattr(django_settings, 'DEBUG_ODDS_MATCHING', False):
+                import json
+                for i, e in enumerate(data[:2]):
+                    sample = dict(e)
+                    if sample.get('bookmakers'):
+                        sample['bookmakers'] = sample['bookmakers'][:1]
+                    logger.info(
+                        'mlb_odds_fetch_debug_payload event_index=%d payload=%s',
+                        i, json.dumps(sample),
+                    )
         elif not data:
             logger.warning(f"mlb_odds_fetch_empty payload window={commence_from}..{commence_to}")
         return data
 
     def normalize(self, raw):
         normalized = []
+        # ---- DIAGNOSTIC: per-event extraction stats (Stage 2 of the
+        # debugging spec — "are we dropping valid data here?"). Currently
+        # this stage has no logging; if events are silently lost between
+        # fetch and persist, this is the blind spot we're filling.
+        events_skipped_no_team_name = 0
+        events_emitted_records = 0
+        events_emitted_with_moneylines = 0
+        events_emitted_no_moneylines = 0
+
         for event in raw or []:
             home = event.get('home_team', '')
             away = event.get('away_team', '')
             commence = event.get('commence_time', '')
             if not home or not away:
+                events_skipped_no_team_name += 1
+                logger.info(
+                    'mlb_odds_normalize_skip reason=missing_team_name '
+                    'home=%r away=%r commence=%r',
+                    home, away, commence,
+                )
                 continue
+
+            event_records_before = len(normalized)
+            event_has_moneyline_in_any_book = False
 
             for bm in event.get('bookmakers', []) or []:
                 record = {
@@ -164,7 +255,34 @@ class MLBOddsProvider(AbstractProvider):
                         for o in outcomes:
                             if o.get('name') == 'Over':
                                 record['total'] = o.get('point')
+                if record['moneyline_home'] is not None and record['moneyline_away'] is not None:
+                    event_has_moneyline_in_any_book = True
                 normalized.append(record)
+
+            event_records_emitted = len(normalized) - event_records_before
+            if event_records_emitted > 0:
+                events_emitted_records += 1
+                if event_has_moneyline_in_any_book:
+                    events_emitted_with_moneylines += 1
+                else:
+                    events_emitted_no_moneylines += 1
+
+        # ---- DIAGNOSTIC: per-event normalization rollup. Reading order:
+        #   in:  events received from fetch()
+        #   out: events that emitted at least one record  (events_emitted_records)
+        #        of those, how many had at least one book with both
+        #        moneylines populated (events_emitted_with_moneylines)
+        # Mismatch between fetch's events_returned and normalize's
+        # events_emitted_records is the silent-loss signal.
+        logger.info(
+            'mlb_odds_normalize_summary events_in=%d records_out=%d '
+            'events_skipped_no_team_name=%d '
+            'events_emitted_records=%d events_emitted_with_moneylines=%d '
+            'events_emitted_no_moneylines=%d',
+            len(raw or []), len(normalized), events_skipped_no_team_name,
+            events_emitted_records, events_emitted_with_moneylines,
+            events_emitted_no_moneylines,
+        )
         return normalized
 
     def persist(self, normalized):
@@ -193,6 +311,26 @@ class MLBOddsProvider(AbstractProvider):
         """
         from django.conf import settings as django_settings
         debug_matching = getattr(django_settings, 'DEBUG_ODDS_MATCHING', False)
+
+        # ---- DIAGNOSTIC: System state pre-flight. Stage 5 of the debugging
+        # spec — "is the system even attempting the API call?". We surface
+        # ProviderHealth state for both odds_api and espn so the deploy log
+        # answers "circuit closed?" "fallback used?" without a separate query.
+        try:
+            from apps.ops.services.provider_health import state_summary
+            for prov in ('odds_api', 'espn'):
+                s = state_summary(prov)
+                logger.info(
+                    'mlb_odds_persist_preflight provider=%s state=%s '
+                    'consecutive_failures=%d circuit_open=%s '
+                    'last_status_code=%s last_open_reason=%r '
+                    'last_success_at=%s last_failure_at=%s',
+                    s['provider'], s['state'], s['consecutive_failures'],
+                    s['is_circuit_open'], s['last_status_code'],
+                    s['last_open_reason'], s['last_success_at'], s['last_failure_at'],
+                )
+        except Exception as exc:  # noqa: BLE001 — diagnostic must not break ingestion
+            logger.warning('mlb_odds_persist_preflight_failed err=%s', exc)
 
         created = skipped = 0
         skip_reasons: dict[str, int] = {}
