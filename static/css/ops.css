@@ -1,0 +1,229 @@
+/* Ops Command Center styles. Pulled out of style.css because the dashboard
+   has lots of one-off layout (banners, dials, meters) that no other page
+   needs and would just bloat the global bundle. */
+
+.ops-page { display: block; }
+
+.ops-subtitle {
+  color: var(--text-muted, #9ba0bd);
+  font-size: 0.92rem;
+  margin: -8px 0 16px 0;
+  max-width: 720px;
+}
+
+/* ---- Overall banner ----------------------------------------------------- */
+.ops-banner {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 18px 22px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border: 1px solid transparent;
+}
+.ops-banner-icon {
+  flex: 0 0 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.6rem;
+  color: #0f1118;
+}
+.ops-banner-text { flex: 1; }
+.ops-banner-label { font-weight: 700; font-size: 1.15rem; }
+.ops-banner-detail { color: var(--text-muted, #9ba0bd); font-size: 0.9rem; margin-top: 2px; }
+
+.ops-banner-green   { background: rgba(34,197,94,0.10);  border-color: var(--green); }
+.ops-banner-green   .ops-banner-icon { background: var(--green); }
+.ops-banner-yellow  { background: rgba(234,179,8,0.10);  border-color: var(--yellow); }
+.ops-banner-yellow  .ops-banner-icon { background: var(--yellow); }
+.ops-banner-red     { background: rgba(239,68,68,0.10);  border-color: var(--red); }
+.ops-banner-red     .ops-banner-icon { background: var(--red); color: #fff; }
+.ops-banner-unknown { background: rgba(155,160,189,0.08); border-color: #555a76; }
+.ops-banner-unknown .ops-banner-icon { background: #555a76; color: #fff; }
+
+/* ---- Config pills ------------------------------------------------------- */
+.ops-config-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.ops-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #2a2e45;
+  color: #cfd2e8;
+}
+.ops-pill-ok       { background: rgba(34,197,94,0.18);  color: var(--green); }
+.ops-pill-warn     { background: rgba(234,179,8,0.18);  color: var(--yellow); }
+.ops-pill-bad      { background: rgba(239,68,68,0.18);  color: var(--red); }
+.ops-pill-success  { background: rgba(34,197,94,0.18);  color: var(--green); }
+.ops-pill-failure  { background: rgba(239,68,68,0.18);  color: var(--red); }
+.ops-pill-partial  { background: rgba(234,179,8,0.18);  color: var(--yellow); }
+.ops-pill-running  { background: rgba(201,148,58,0.18); color: var(--accent); }
+.ops-pill-unknown  { background: #2a2e45; color: #cfd2e8; }
+
+/* ---- Dials -------------------------------------------------------------- */
+.ops-dial-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+  margin-bottom: 18px;
+}
+@media (min-width: 769px) {
+  .ops-dial-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.ops-card {
+  background: var(--bg-card, #222640);
+  border-radius: 12px;
+  padding: 16px 18px;
+  border: 1px solid #2e3350;
+}
+.ops-dial { position: relative; }
+.ops-dial-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #9ba0bd);
+  margin-bottom: 6px;
+}
+.ops-dial-value { font-size: 1.15rem; font-weight: 700; line-height: 1.25; }
+.ops-dial-detail { font-size: 0.85rem; color: var(--text-muted, #9ba0bd); margin-top: 4px; }
+
+.ops-dial-green   { border-left: 4px solid var(--green); }
+.ops-dial-yellow  { border-left: 4px solid var(--yellow); }
+.ops-dial-red     { border-left: 4px solid var(--red); }
+.ops-dial-unknown { border-left: 4px solid #555a76; }
+
+.ops-stat-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  gap: 8px;
+}
+.ops-stat-row > div { text-align: center; flex: 1; }
+.ops-stat-num { display: block; font-size: 1.2rem; font-weight: 700; color: var(--text-bright, #ffffff); }
+.ops-stat-lbl {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--text-muted, #9ba0bd);
+  letter-spacing: 0.05em;
+}
+
+/* ---- Quota meter -------------------------------------------------------- */
+.ops-meter {
+  height: 10px;
+  background: #2a2e45;
+  border-radius: 5px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+.ops-meter-fill { height: 100%; transition: width .4s; }
+.ops-meter-green   { background: var(--green); }
+.ops-meter-yellow  { background: var(--yellow); }
+.ops-meter-red     { background: var(--red); }
+.ops-meter-unknown { background: #555a76; }
+
+/* ---- Sections ----------------------------------------------------------- */
+.ops-section-title {
+  margin: 22px 0 8px 0;
+  font-size: 1.0rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted, #9ba0bd);
+  font-weight: 700;
+}
+.ops-grid-2 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 769px) {
+  .ops-grid-2 { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---- Cron command cards ------------------------------------------------- */
+.ops-cmd-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.ops-cmd-head code { font-size: 0.95rem; color: var(--accent); }
+.ops-cmd-meta { font-size: 0.85rem; color: var(--text-muted, #9ba0bd); margin-top: 4px; }
+.ops-cmd-summary {
+  font-size: 0.85rem;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: #1a1d2e;
+  border-radius: 6px;
+  color: #cfd2e8;
+  word-break: break-word;
+}
+.ops-cmd-foot { font-size: 0.85rem; margin-top: 10px; color: var(--text-muted, #9ba0bd); }
+
+/* ---- Tables ------------------------------------------------------------- */
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.ops-table thead th {
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #9ba0bd);
+  padding: 6px 8px;
+  border-bottom: 1px solid #2e3350;
+}
+.ops-table td { padding: 8px; border-bottom: 1px solid #1f2236; vertical-align: top; }
+.ops-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ops-table code { color: var(--accent); }
+
+/* ---- Failures list ------------------------------------------------------ */
+.ops-fail-list { list-style: none; padding: 0; margin: 0; }
+.ops-fail-item { padding: 10px 0; border-bottom: 1px solid #1f2236; }
+.ops-fail-item:last-child { border-bottom: 0; }
+.ops-fail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ops-fail-when { color: var(--text-muted, #9ba0bd); font-size: 0.8rem; margin-left: auto; }
+.ops-fail-detail {
+  font-size: 0.82rem;
+  color: #cfd2e8;
+  margin-top: 6px;
+  background: #1a1d2e;
+  padding: 6px 10px;
+  border-radius: 6px;
+  word-break: break-word;
+}
+
+/* ---- Empty state -------------------------------------------------------- */
+.ops-empty {
+  color: var(--text-muted, #9ba0bd);
+  font-style: italic;
+  padding: 12px 0;
+  text-align: center;
+}
+
+/* ---- Manual controls ---------------------------------------------------- */
+.ops-help { color: var(--text-muted, #9ba0bd); font-size: 0.88rem; margin-top: 0; }
+.ops-control-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.ops-control-row form { margin: 0; }
+.ops-control-row .btn { min-height: 44px; }

@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Ops Command Center - Brother Willies{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/ops.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="ops-page">
+
+  <h1 class="page-title">Ops Command Center</h1>
+  <p class="ops-subtitle">
+    Live picture of API health, cron pipeline status, and Odds API quota.
+    All data drawn from durable telemetry — nothing is calculated client-side.
+  </p>
+
+  {# --- Overall banner --- #}
+  <div class="ops-banner ops-banner-{{ snapshot.overall.health }}">
+    <div class="ops-banner-icon">
+      {% if snapshot.overall.health == 'green' %}OK{% endif %}
+      {% if snapshot.overall.health == 'yellow' %}!{% endif %}
+      {% if snapshot.overall.health == 'red' %}X{% endif %}
+      {% if snapshot.overall.health == 'unknown' %}?{% endif %}
+    </div>
+    <div class="ops-banner-text">
+      <div class="ops-banner-label">{{ snapshot.overall.label }}</div>
+      <div class="ops-banner-detail">{{ snapshot.overall.detail }}</div>
+    </div>
+  </div>
+
+  {# --- Configuration sanity row --- #}
+  <div class="ops-config-row">
+    <span class="ops-pill {% if odds_api_key_set %}ops-pill-ok{% else %}ops-pill-bad{% endif %}">
+      ODDS_API_KEY: {% if odds_api_key_set %}set{% else %}missing{% endif %}
+    </span>
+    <span class="ops-pill {% if live_data_enabled %}ops-pill-ok{% else %}ops-pill-warn{% endif %}">
+      LIVE_DATA_ENABLED: {{ live_data_enabled|yesno:"true,false" }}
+    </span>
+  </div>
+
+  {# --- Three core dials --- #}
+  <div class="ops-dial-grid">
+
+    {# API health #}
+    <div class="ops-card ops-dial ops-dial-{{ snapshot.api.health }}">
+      <div class="ops-dial-title">Odds API Health</div>
+      <div class="ops-dial-value">{{ snapshot.api.label }}</div>
+      <div class="ops-dial-detail">{{ snapshot.api.detail }}</div>
+      <div class="ops-stat-row">
+        <div><span class="ops-stat-num">{{ snapshot.api_stats.last_24h }}</span><span class="ops-stat-lbl">calls 24h</span></div>
+        <div><span class="ops-stat-num">{{ snapshot.api_stats.last_24h_failures }}</span><span class="ops-stat-lbl">failures 24h</span></div>
+        <div><span class="ops-stat-num">{{ snapshot.api_stats.avg_latency_ms_24h|default:"—" }}</span><span class="ops-stat-lbl">ms avg</span></div>
+      </div>
+    </div>
+
+    {# Quota dial #}
+    <div class="ops-card ops-dial ops-dial-{{ snapshot.quota.health }}">
+      <div class="ops-dial-title">Quota</div>
+      {% if snapshot.quota.pct_used is not None %}
+        <div class="ops-dial-value">{{ snapshot.quota.pct_used|floatformat:1 }}% used</div>
+        <div class="ops-dial-detail">
+          {{ snapshot.quota.used }} used · {{ snapshot.quota.remaining }} remaining
+          (captured {{ snapshot.quota.captured_at|timesince }} ago)
+        </div>
+        <div class="ops-meter">
+          <div class="ops-meter-fill ops-meter-{{ snapshot.quota.health }}"
+               style="width: {{ snapshot.quota.pct_used|floatformat:0 }}%"></div>
+        </div>
+      {% else %}
+        <div class="ops-dial-value">No quota data yet</div>
+        <div class="ops-dial-detail">
+          Quota headers come back only on successful Odds API calls.
+          Test the API or run a refresh to populate.
+        </div>
+      {% endif %}
+    </div>
+
+    {# Cron health #}
+    <div class="ops-card ops-dial ops-dial-{{ snapshot.cron.health }}">
+      <div class="ops-dial-title">Cron Pipeline</div>
+      <div class="ops-dial-value">{{ snapshot.cron.label }}</div>
+      <div class="ops-dial-detail">{{ snapshot.cron.detail }}</div>
+    </div>
+
+  </div>
+
+  {# --- Per-command cron cards --- #}
+  <h2 class="ops-section-title">Cron Commands</h2>
+  <div class="ops-grid-2">
+    {% for cmd in snapshot.cron_commands %}
+      <div class="ops-card">
+        <div class="ops-cmd-head">
+          <code>{{ cmd.command }}</code>
+          {% if cmd.is_running %}
+            <span class="ops-pill {% if cmd.is_stuck %}ops-pill-bad{% else %}ops-pill-warn{% endif %}">
+              {% if cmd.is_stuck %}STUCK{% else %}RUNNING{% endif %}
+            </span>
+          {% else %}
+            <span class="ops-pill ops-pill-{{ cmd.last_status|default:'unknown' }}">
+              {{ cmd.last_status|upper }}
+            </span>
+          {% endif %}
+        </div>
+        <div class="ops-cmd-meta">
+          {% if cmd.last_run_at %}
+            Last run: {{ cmd.last_run_at|timesince }} ago
+            {% if cmd.last_duration_seconds %} · {{ cmd.last_duration_seconds|floatformat:1 }}s{% endif %}
+          {% else %}
+            <em>No runs captured yet</em>
+          {% endif %}
+        </div>
+        {% if cmd.last_summary %}
+          <div class="ops-cmd-summary">{{ cmd.last_summary }}</div>
+        {% endif %}
+        <div class="ops-cmd-foot">
+          <span><strong>{{ cmd.success_count_7d }}</strong> success / <strong>{{ cmd.failure_count_7d }}</strong> fail (7d)</span>
+        </div>
+      </div>
+    {% empty %}
+      <div class="ops-card ops-empty">No cron run history captured yet.</div>
+    {% endfor %}
+  </div>
+
+  {# --- API usage by sport --- #}
+  <h2 class="ops-section-title">API Usage by Sport (last 24h)</h2>
+  <div class="ops-card">
+    {% if snapshot.api_stats.by_sport_24h %}
+      <table class="ops-table">
+        <thead><tr><th>Sport</th><th class="num">Calls</th></tr></thead>
+        <tbody>
+          {% for sport, n in snapshot.api_stats.by_sport_24h.items %}
+            <tr><td>{{ sport }}</td><td class="num">{{ n }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="ops-empty">No Odds API calls captured in the last 24 hours.</div>
+    {% endif %}
+  </div>
+
+  {# --- Manual controls --- #}
+  <h2 class="ops-section-title">Manual Controls</h2>
+  <div class="ops-card">
+    <p class="ops-help">
+      Each control spawns a real management command in a background process.
+      A new row appears in Recent Runs within seconds. Concurrent triggers
+      are blocked while a run is still in progress.
+    </p>
+    <div class="ops-control-row">
+      <form method="post" action="{% url 'ops:trigger_refresh_data' %}"
+            onsubmit="return confirm('Trigger Full Data Refresh? This hits every sport that is enabled and uses Odds API quota.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">Run Full Data Refresh</button>
+      </form>
+      <form method="post" action="{% url 'ops:trigger_refresh_scores' %}"
+            onsubmit="return confirm('Trigger Score Refresh + Settle? Lightweight — no odds calls, no quota cost.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Run Score Refresh + Settle</button>
+      </form>
+      <form method="post" action="{% url 'ops:trigger_test_odds_api' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Test Odds API</button>
+      </form>
+    </div>
+  </div>
+
+  {# --- Recent failures --- #}
+  <h2 class="ops-section-title">Recent Failures</h2>
+  <div class="ops-card">
+    {% if snapshot.recent_failures %}
+      <ul class="ops-fail-list">
+        {% for f in snapshot.recent_failures %}
+          <li class="ops-fail-item">
+            <div class="ops-fail-head">
+              <span class="ops-pill ops-pill-bad">{{ f.kind|upper }}</span>
+              <strong>{{ f.title }}</strong>
+              <span class="ops-fail-when">{{ f.when|timesince }} ago</span>
+            </div>
+            {% if f.detail %}<div class="ops-fail-detail">{{ f.detail }}</div>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="ops-empty">No failures recorded — clean window.</div>
+    {% endif %}
+  </div>
+
+  {# --- Recent runs timeline --- #}
+  <h2 class="ops-section-title">Recent Runs</h2>
+  <div class="ops-card">
+    {% if snapshot.recent_runs %}
+      <table class="ops-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Trigger</th>
+            <th>Started</th>
+            <th>Duration</th>
+            <th>Status</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in snapshot.recent_runs %}
+            <tr>
+              <td><code>{{ r.command }}</code></td>
+              <td>{{ r.trigger }}</td>
+              <td>{{ r.started_at|date:"M j H:i:s" }}</td>
+              <td class="num">{% if r.duration_seconds %}{{ r.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
+              <td><span class="ops-pill ops-pill-{{ r.status }}">{{ r.status|upper }}</span></td>
+              <td>{{ r.summary|default:"—"|truncatechars:60 }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="ops-empty">No run history captured yet.</div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

@@ -20,6 +20,7 @@ urlpatterns = [
     path('profile/', include('apps.accounts.profile_urls')),
     path('feedback/', include('apps.feedback.urls')),
     path('mockbets/', include('apps.mockbets.urls')),
+    path('ops/', include('apps.ops.urls')),
 ]
 
 if settings.DEBUG:

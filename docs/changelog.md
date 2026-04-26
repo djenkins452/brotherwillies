@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-04-25 - Ops Command Center + template comment fix
+
+**Summary:** New superuser-only `/ops/command-center/` page that gives an at-a-glance read on Odds API health, Odds API quota, and the cron pipeline — built so we never again have to read deploy logs to understand "is something broken right now."
+
+### What it shows
+- **Overall banner** — green / yellow / red / unknown, computed from the worst component.
+- **Odds API health dial** — calls in the last 24h, failure count, average latency. Goes red on any failure in the last hour, yellow on any older 24h failure. Empty DB renders "No API activity yet" rather than a misleading green.
+- **Quota dial** — `x-requests-used` / `x-requests-remaining` headers from the most recent successful call, plus a percent-used meter. ≥90% = red, ≥70% = yellow.
+- **Cron pipeline dial** — last status of `refresh_data` and `refresh_scores_and_settle` plus 7-day success/failure counts. Detects rows stuck in `running` for >10 min as crashed workers.
+- **Recent failures + recent runs tables** — durable history pulled from the new tables.
+
+### Foundation
+- New app `apps.ops` with `OddsApiUsage` (one row per outbound Odds API call) and `CronRunLog` (one row per management-command run).
+- `apps.datahub.providers.client.APIClient.get()` now logs every Odds API call (success or failure) to `OddsApiUsage`. Logging never raises — telemetry can't break ingestion.
+- `refresh_data` and `refresh_scores_and_settle` are wrapped in a `cron_run_log()` context manager that records start/finish, captures stdout tail, and marks `partial` when sub-tasks fail.
+- All commands accept `--trigger=cron|manual|deploy` and `--triggered-by-user-id=N` so manual runs from the dashboard credit the right user.
+
+### Manual controls (superuser-only, POST + confirm)
+- **Run Full Data Refresh** — spawns `refresh_data` in a subprocess. Anti-overlap guard: blocked while another `refresh_data` is in flight.
+- **Run Score Refresh + Settle** — spawns `refresh_scores_and_settle`. Same overlap guard.
+- **Test Odds API** — synchronous one-shot probe of `/v4/sports`. On 401/429 the dashboard surfaces actionable copy ("Rotate the key in Railway → Variables").
+
+### Tests
+32 new tests in `apps.ops.tests` cover URL detection, sport extraction, success/failure logging, the context manager's success/partial/exception paths, the stuck-running guard, all health classifications (green/yellow/red/unknown for empty/healthy/failure DBs), and the manual-trigger views (auth gating, anti-overlap, GET rejection, missing-key path, 401 path).
+
+### Template comment fix (visible bug)
+Two multi-line `{# ... #}` comments were being rendered as literal text on the MLB hub page (Section 4 — Unrated) and the MLB focus banner. Django's `{# #}` syntax only works on a single physical line — switched both to `{% comment %}…{% endcomment %}`. Added a check (script in `docs/`) so this doesn't sneak back.
+
+### Files
+- New: `apps/ops/{__init__.py, apps.py, models.py, admin.py, views.py, urls.py, tests.py}`, `apps/ops/services/{__init__.py, api_logging.py, cron_logging.py, command_center.py}`, `apps/ops/migrations/0001_initial.py`, `templates/ops/command_center.html`, `static/css/ops.css`.
+- Edited: `apps/datahub/providers/client.py`, `apps/datahub/management/commands/refresh_data.py`, `apps/datahub/management/commands/refresh_scores_and_settle.py`, `brotherwillies/settings.py`, `brotherwillies/urls.py`, `templates/accounts/profile.html`, `templates/mlb/hub.html`, `templates/mlb/_focus_banner.html`.
+
+---
+
 ## 2026-04-23 - De-vigged edge + Closing Line Value tracking
 
 **Summary:** Two precision math upgrades that directly affect bet quality and how we measure it.

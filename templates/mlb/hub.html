@@ -211,9 +211,11 @@
       </section>
     {% endif %}
 
-    {# Section 4 — ❓ Unrated: live games without odds, or pre-game games we
-       couldn't price. Different from Not Recommended — there's no signal,
-       not a negative one. #}
+    {% comment %}
+      Section 4 — Unrated: live games without odds, or pre-game games we
+      couldn't price. Different from Not Recommended — there's no signal,
+      not a negative one.
+    {% endcomment %}
     {% if unrated_games %}
       <section class="mlb-section mlb-section--unrated">
         <div class="mlb-section__head">

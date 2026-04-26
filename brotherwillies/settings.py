@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     'apps.datahub',
     'apps.feedback',
     'apps.mockbets',
+    'apps.ops',
     'axes',
 ]
 

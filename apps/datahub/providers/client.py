@@ -63,11 +63,16 @@ class APIClient:
         (including HTML pages served with 2xx). Raises for HTTP errors after
         exhausting retries. Does NOT retry NonJSONResponseError — an HTML
         landing page rarely fixes itself within seconds.
+
+        Side effect: every Odds API call (success or failure) is logged to
+        the OddsApiUsage table via apps.ops.services.api_logging. Logging
+        never raises — a DB hiccup writing telemetry must not break ingestion.
         """
         url = f"{self.base_url}/{path.lstrip('/')}" if path else self.base_url
         for attempt in range(1, MAX_RETRIES + 1):
             self._wait_for_rate_limit()
             start = time.time()
+            resp = None
             try:
                 resp = requests.get(
                     url,
@@ -83,18 +88,49 @@ class APIClient:
                 )
                 resp.raise_for_status()
                 self._validate_json_response(resp, url)
+                # Successful path — log before returning so the row reflects
+                # the same status code that the caller sees.
+                _log_odds_api_call(
+                    url=url, status_code=resp.status_code, success=True,
+                    duration_s=duration, error_message='',
+                    response_headers=resp.headers,
+                )
                 return resp.json()
             except requests.exceptions.HTTPError as e:
-                if resp.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
+                duration = time.time() - start
+                status = resp.status_code if resp is not None else None
+                # Always log the failed attempt — even if we retry, the
+                # individual attempt was a real outbound call.
+                _log_odds_api_call(
+                    url=url, status_code=status, success=False,
+                    duration_s=duration, error_message=str(e),
+                    response_headers=resp.headers if resp is not None else None,
+                )
+                if status in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
                     wait = BACKOFF_BASE ** attempt
                     logger.warning(
-                        f"Retryable error {resp.status_code} on {url}, "
+                        f"Retryable error {status} on {url}, "
                         f"waiting {wait}s (attempt {attempt}/{MAX_RETRIES})"
                     )
                     time.sleep(wait)
                     continue
                 raise
+            except NonJSONResponseError as e:
+                duration = time.time() - start
+                status = resp.status_code if resp is not None else None
+                _log_odds_api_call(
+                    url=url, status_code=status, success=False,
+                    duration_s=duration, error_message=str(e),
+                    response_headers=resp.headers if resp is not None else None,
+                )
+                raise
             except requests.exceptions.RequestException as e:
+                duration = time.time() - start
+                _log_odds_api_call(
+                    url=url, status_code=None, success=False,
+                    duration_s=duration, error_message=str(e),
+                    response_headers=None,
+                )
                 if attempt < MAX_RETRIES:
                     wait = BACKOFF_BASE ** attempt
                     logger.warning(
@@ -104,3 +140,25 @@ class APIClient:
                     time.sleep(wait)
                     continue
                 raise
+
+
+def _log_odds_api_call(*, url, status_code, success, duration_s,
+                       error_message, response_headers):
+    """Wrapper that imports the ops service lazily and never raises.
+
+    Lazy import: this module is loaded by Django at app-startup time and
+    apps.ops may not be ready in some bootstrap orderings. The import lives
+    inside the function so the cost is paid only on outbound calls.
+    """
+    try:
+        from apps.ops.services.api_logging import record_call
+        record_call(
+            url=url,
+            status_code=status_code,
+            success=success,
+            response_time_ms=int(duration_s * 1000) if duration_s else None,
+            error_message=error_message,
+            headers=response_headers,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break ingestion on telemetry
+        logger.warning('Ops api logging failed: %s', exc)

@@ -33,10 +33,12 @@ top of the hub when get_focus_game() returns non-None. `focus.recommendation`
     {% endif %}
     <div class="mlb-focus__meta">
       {% if focus.recommendation and focus.recommendation.status == 'recommended' %}
-        {# Recommendation-driven: show the action label ("Recommended Bet" or
-           "Elite Play" for elite tier) + edge number instead of the old
-           signal-layer chip (which could say "Watch Now — Ace matchup" on a
-           game where the real story is the betting edge). #}
+        {% comment %}
+          Recommendation-driven: show the action label ("Recommended Bet" or
+          "Elite Play" for elite tier) + edge number instead of the old
+          signal-layer chip (which could say "Watch Now — Ace matchup" on a
+          game where the real story is the betting edge).
+        {% endcomment %}
         <span class="mlb-focus__action mlb-focus__action--best_bet">
           {% if focus.recommendation.tier == 'elite' %}&#x1F525;{% else %}&#x1F4B0;{% endif %}
           {{ focus.pick_action_label }}

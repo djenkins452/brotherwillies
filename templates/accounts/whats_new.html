@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-25-ops">Apr 25, 2026 &mdash; Ops Command Center</a> <span class="text-sm text-muted">&bull; Live API health, quota dial, cron history, manual triggers (superuser-only)</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-decision-intel">Apr 25, 2026 &mdash; Decision Intelligence Era</a> <span class="text-sm text-muted">&bull; Recommendation engine, CLV tracking, de-vigged edges, Postgame Command Center, bulk actions</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-injuries">Apr 19, 2026 &mdash; MLB Injury Ingestion</a> <span class="text-sm text-muted">&bull; Per-team injury data from ESPN, surfaced on every tile</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-focus">Apr 19, 2026 &mdash; Confidence, Focus Engine, ESPN odds</a> <span class="text-sm text-muted">&bull; 0–100% confidence, 🔥 Focus banner, 🎯 Bet Placed, ESPN DraftKings fallback</span></li>
@@ -28,6 +29,37 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 25 — Ops Command Center                                          #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-25-ops">
+    <p class="card-title">Apr 25, 2026 &mdash; Ops Command Center</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A live, single-page picture of system health for superusers. Built so we never again have to read deploy logs to figure out "is the data stale because the API is down, the cron crashed, or quota is exhausted?"</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">What it shows</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Overall banner</strong> — green / yellow / red / unknown, computed from the worst component.</li>
+            <li><strong>Odds API health dial</strong> — call count, failure count, average latency over the last 24h. Goes red on any failure in the last hour.</li>
+            <li><strong>Quota dial</strong> — % of monthly Odds API allowance used (read from response headers), with a colored meter.</li>
+            <li><strong>Cron pipeline dial</strong> — last status of <code>refresh_data</code> and <code>refresh_scores_and_settle</code>, plus 7-day success/failure counts. Detects rows stuck in <code>running</code> for >10 min as crashed workers.</li>
+            <li><strong>Recent failures</strong> — combined timeline of API + cron failures with status codes and timestamps.</li>
+            <li><strong>Recent runs</strong> — table of the last 15 cron runs with trigger, duration, and summary.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Manual controls</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Run Full Data Refresh</strong> — spawns the heavy refresh in a background subprocess. Anti-overlap guard blocks duplicate concurrent runs.</li>
+            <li><strong>Run Score Refresh + Settle</strong> — lightweight 15-min pipeline (no quota cost).</li>
+            <li><strong>Test Odds API</strong> — synchronous probe of <code>/v4/sports</code>. On 401 the dashboard tells you exactly what to do (rotate key in Railway → Variables).</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">Access: superusers only, at <code>/ops/command-center/</code> (also linked from the Profile page).</p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}
