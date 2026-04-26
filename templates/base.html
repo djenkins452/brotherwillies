@@ -16,6 +16,21 @@
         </a>
         <div class="header-actions">
             <button class="icon-btn help-btn" onclick="toggleHelp()" aria-label="Help">?</button>
+            {% comment %}
+              System status dot — rendered ONLY for superusers. The
+              ops_status context processor is a no-op for everyone else,
+              so ops_status_color is unset and the {% templatetag openblock %} if {% templatetag closeblock %} hides the
+              element entirely. Click navigates to the Ops Command Center;
+              hover shows a 3-line summary tooltip.
+            {% endcomment %}
+            {% if ops_status_color %}
+            <a href="/ops/command-center/"
+               class="system-status-indicator status-{{ ops_status_color }}"
+               title="{{ ops_status_tooltip }}"
+               aria-label="System status: {{ ops_status_color }}">
+                <span class="status-dot status-dot--{{ ops_status_color }}"></span>
+            </a>
+            {% endif %}
             {% if user.is_authenticated %}
                 <div class="profile-dropdown-wrap">
                     <button class="icon-btn profile-btn" onclick="toggleProfileDropdown()" aria-label="Profile menu">

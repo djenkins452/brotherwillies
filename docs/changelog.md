@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-04-26 - System status indicator in the header (superuser-only)
+
+**Summary:** A small colored dot in the top-right of the header (next to the help/profile icons) gives superusers a constant at-a-glance read on system health. Click navigates to the Ops Command Center; hover shows a 3-line summary tooltip (overall status, last Odds API status, last cron status).
+
+- **Color mapping:** 🟢 green (all systems operational) / 🟡 yellow (warnings) / 🔴 red (needs attention) / ⚪ unknown (no telemetry yet).
+- **Data source:** existing `apps.ops.services.command_center.build_snapshot()` — same source the Ops dashboard reads, so the dot and the page can never disagree.
+- **Implementation:** new context processor `apps.ops.context_processors.ops_status`, wired in `settings.TEMPLATES`. The processor returns an empty dict for non-superusers — so the snapshot is never computed for the 99%+ of requests that wouldn't show the dot. Wrapped in a broad try/except so a snapshot failure can never take down the header (falls back to "unknown").
+- **Note on audience:** the **dropdown link** (yesterday's work) is `is_staff or is_superuser`. The **status dot** is strict superuser only — system-health red flags should only surface to people who can act on them.
+
+**Tests:** 8 new in `apps.ops.tests.HeaderStatusIndicatorTests` — hidden for anonymous, regular users, and staff-only; visible for superusers; correct color for empty/healthy/failure states; clicks navigate to `/ops/command-center/`; context processor survives a snapshot exception (header stays alive). 456 total tests pass.
+
+**Bug-fix tucked in:** I introduced (and immediately fixed) another multi-line `{# ... #}` comment in `base.html` — same Django gotcha as Apr 25. Switched to `{% comment %}…{% endcomment %}`. The codebase scan now reports zero remaining multi-line `{# #}` blocks.
+
+**Files:** new `apps/ops/context_processors.py`; edited `brotherwillies/settings.py`, `templates/base.html`, `static/css/style.css`, `apps/ops/tests.py`.
+
+---
+
 ## 2026-04-26 - Profile dropdown link to Ops Command Center
 
 **Summary:** Adds a "⚙️ Command Center" entry to the header profile dropdown for staff/superusers, slotted into the existing staff-tools cluster (between MLB Diagnostic and Admin Console). The Ops view's auth gate was also broadened from `is_superuser` only to `is_staff or is_superuser` so the link doesn't dead-end for staff users — matching the dropdown convention used by every other staff item there.

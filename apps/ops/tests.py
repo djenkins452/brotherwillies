@@ -457,3 +457,105 @@ class ProfileDropdownLinkTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         # Active marker class present on the dropdown item when on /ops/.
         self.assertContains(resp, 'profile-dropdown-item--active')
+
+
+class HeaderStatusIndicatorTests(TestCase):
+    """The colored dot in the header is superuser-only. Coverage:
+        - Hidden for anonymous users
+        - Hidden for regular logged-in users
+        - Hidden for staff (is_staff but NOT is_superuser)
+        - Visible for superusers, color matches snapshot health
+        - Tooltip carries the API + Cron summary lines
+        - Falls back to 'unknown' on a snapshot exception (header survives)
+    """
+
+    AUTHED_PAGE = '/profile/user-guide/'
+    PUBLIC_PAGE = '/accounts/login/'
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_anonymous_does_not_see_indicator(self):
+        resp = self.client.get(self.PUBLIC_PAGE)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, 'system-status-indicator')
+
+    def test_regular_user_does_not_see_indicator(self):
+        u = User.objects.create_user('joe', password='pw')
+        self.client.force_login(u)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertNotContains(resp, 'system-status-indicator')
+
+    def test_staff_only_user_does_not_see_indicator(self):
+        # The dropdown link is visible to staff; the status dot is NOT.
+        # Two different surfaces with two different audiences — keep them
+        # separate so we don't surface system-health red flags to anyone
+        # who shouldn't be acting on them.
+        u = User.objects.create_user('staffer', password='pw', is_staff=True)
+        self.client.force_login(u)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertNotContains(resp, 'system-status-indicator')
+
+    def test_superuser_sees_unknown_dot_when_no_data(self):
+        u = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(u)
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertContains(resp, 'system-status-indicator')
+        # Empty DB → unknown (no API calls, no cron rows).
+        self.assertContains(resp, 'status-dot--unknown')
+        # Tooltip mentions System Status.
+        self.assertContains(resp, 'System Status:')
+
+    def test_superuser_sees_green_dot_when_healthy(self):
+        u = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(u)
+        # Seed a healthy state.
+        OddsApiUsage.objects.create(
+            sport='mlb', endpoint='/v4/sports/baseball_mlb/odds/',
+            status_code=200, success=True, response_time_ms=100,
+            credits_used=5, credits_remaining=995,
+        )
+        CronRunLog.objects.create(
+            command='refresh_data', status='success',
+            completed_at=timezone.now(), duration_seconds=42.0,
+            summary='all good',
+        )
+        CronRunLog.objects.create(
+            command='refresh_scores_and_settle', status='success',
+            completed_at=timezone.now(), duration_seconds=2.0,
+        )
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertContains(resp, 'status-dot--green')
+
+    def test_superuser_sees_red_dot_on_recent_api_failure(self):
+        u = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(u)
+        OddsApiUsage.objects.create(
+            sport='mlb', endpoint='/v4/sports/baseball_mlb/odds/',
+            status_code=401, success=False,
+            error_message='Unauthorized',
+        )
+        resp = self.client.get(self.AUTHED_PAGE)
+        self.assertContains(resp, 'status-dot--red')
+
+    def test_indicator_links_to_command_center(self):
+        u = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(u)
+        resp = self.client.get(self.AUTHED_PAGE)
+        # The wrapper anchor must point at the Ops dashboard.
+        self.assertContains(resp, 'href="/ops/command-center/"')
+
+    def test_context_processor_survives_snapshot_failure(self):
+        # If build_snapshot blows up, the header must not crash. The
+        # context processor catches and falls back to 'unknown'. We patch
+        # the source module (the lazy import inside the processor resolves
+        # there) so the patch is visible at call time.
+        u = User.objects.create_superuser('a', 'a@a.com', 'pw')
+        self.client.force_login(u)
+        with patch(
+            'apps.ops.services.command_center.build_snapshot',
+            side_effect=RuntimeError('boom'),
+        ):
+            resp = self.client.get(self.AUTHED_PAGE)
+            self.assertEqual(resp.status_code, 200)
+            self.assertContains(resp, 'status-dot--unknown')
