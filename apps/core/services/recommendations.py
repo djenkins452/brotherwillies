@@ -157,6 +157,12 @@ class Recommendation:
     tier: str = 'standard'
     status: str = STATUS_RECOMMENDED
     status_reason: str = ''
+    # Market Movement integration. None / False when no signal is available
+    # — UI and analytics treat that case as "no signal" without breaking.
+    movement_class: Optional[str] = None
+    movement_score: Optional[float] = None
+    movement_supports_pick: bool = False
+    market_warning: bool = False
 
     @property
     def tier_label(self) -> str:
@@ -195,6 +201,22 @@ class Recommendation:
         """Deterministic, scannable rows for the elite card explanation block.
         Skips any metric that can't be computed — never fabricates a number."""
         return _build_explanation_rows(self.confidence_score, self.odds_american, self.model_edge)
+
+    # --- Market movement properties (parallel BettingRecommendation) ----
+    @property
+    def confidence_nudge_pp(self) -> float:
+        from apps.core.services.odds_movement import confidence_nudge_pp
+        return confidence_nudge_pp(self.movement_class, self.movement_supports_pick)
+
+    @property
+    def displayed_confidence(self):
+        from apps.core.services.odds_movement import displayed_confidence
+        return displayed_confidence(self.confidence_score, self.movement_class, self.movement_supports_pick)
+
+    @property
+    def market_movement_chip(self):
+        from apps.core.services.odds_movement import chip_label_for
+        return chip_label_for(self.movement_class, self.movement_supports_pick, self.market_warning)
 
     def to_context(self):
         """Template-safe dict. Keeps the game object alive for related-field access."""
@@ -288,14 +310,25 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         pick_odds = odds.moneyline_home
         edge = home_edge
         confidence = home_prob
+        pick_side = 'home'
     else:
         pick_name = game.away_team.name
         pick_odds = odds.moneyline_away
         edge = away_edge
         confidence = away_prob
+        pick_side = 'away'
 
     model_edge_pp = round(edge * 100, 1)
     status, reason = compute_status(model_edge_pp, pick_odds)
+
+    # Movement signal — purely additive. The model still drives the pick,
+    # the tier, and the recommendation status. Movement only affects the
+    # *displayed* confidence (bounded nudge) and an optional warning chip.
+    # type(odds) gives us the per-sport OddsSnapshot model class without
+    # needing to thread the model through SPORT_REGISTRY.
+    from apps.core.services.odds_movement import movement_signal_for_pick
+    sig = movement_signal_for_pick(type(odds), game, pick_side)
+
     return Recommendation(
         sport='',
         game=game,
@@ -309,6 +342,10 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         tier=_raw_tier(model_edge_pp),
         status=status,
         status_reason=reason,
+        movement_class=sig['movement_class'],
+        movement_score=sig['movement_score'],
+        movement_supports_pick=sig['supports_pick'],
+        market_warning=sig['market_warning'],
     )
 
 
@@ -365,5 +402,9 @@ def persist_recommendation(sport: str, game, user=None):
         model_source=rec.model_source,
         status=rec.status,
         status_reason=rec.status_reason,
+        movement_class=rec.movement_class or '',
+        movement_score=rec.movement_score,
+        movement_supports_pick=rec.movement_supports_pick,
+        market_warning=rec.market_warning,
         **{game_fk_field: game},
     )

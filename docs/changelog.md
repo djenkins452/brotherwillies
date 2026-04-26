@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-04-26 - Odds Intelligence — decision integration + UI + analytics (Commit 2)
+
+**Summary:** Movement signals now flow into the recommendation engine, the MLB hub tile, the MLB game detail page, and a new analytics panel on `/profile/performance/`. The provider hook also rolled out to CFB/CBB/college_baseball. Strictly additive — recommendations are never downgraded by movement.
+
+### Recommendation integration
+- `BettingRecommendation` gained four fields, populated at recommendation time and frozen there for historical analytics: `movement_class`, `movement_score`, `movement_supports_pick`, `market_warning`.
+- New properties on both `Recommendation` (dataclass) and `BettingRecommendation` (model): `confidence_nudge_pp`, `displayed_confidence`, `market_movement_chip`.
+- Confidence nudge math (capped, additive only):
+  - `sharp` + supports → +5pp
+  - `strong` + supports → +3pp
+  - `moderate` + supports → +1pp
+  - All other cases → 0pp
+- `displayed_confidence` clamps at 99 so the UI never reads "100% confident."
+- `market_warning` fires only at strong/sharp **against** the picked side. The recommendation status, tier, and base confidence are unchanged — the warning surfaces as a chip, not a downgrade.
+
+### UI
+- **MLB hub tile** — new chip slot in `_tile_actions.html` rendering `📈 Market Support` / `📉 Market Against You` / `↗ Market Moving`. Three CSS variants in `mlb.css` (`.mlb-action--movement{,-support,-warn}`). Tooltip explains the score.
+- **MLB game detail** — new "Market Movement" card between the probability table and the Odds Snapshot card. Status-tinted using new generic `.card-success` / `.card-warning` classes.
+
+### Analytics
+- `compute_market_movement_agreement(bets)` in `apps/mockbets/services/recommendation_performance.py` buckets settled bets into `agreed` / `disagreed` / `no_signal` based on the linked `BettingRecommendation`'s movement flags.
+- New "Market Movement Agreement" section on `/profile/performance/` — three rows × five metrics (bets / win rate / ROI / avg CLV / +CLV %) so users can see whether market agreement actually improves outcomes.
+- `compute_all()` now includes `by_market_movement`.
+
+### Provider rollout
+- `apps/datahub/providers/{cfb,cbb,college_baseball}/odds_provider.py` — each `OddsSnapshot.objects.create(...)` block now invokes `apply_movement_intelligence()` immediately after creation (same shape as MLB).
+- **Golf is intentionally NOT wired** — the schema has `outright_odds` + `implied_prob` per golfer (no two-sided market) and the provider also dedupes to one row per event per day. Adding golf cleanly would require both an outright-aware significance/score path and a relaxed dedup. Documented in `apps/datahub/providers/golf/odds_provider.py` with the work that's needed.
+
+### Tests
+22 new tests in `apps.core.tests` cover:
+- Confidence nudge math (table, no-nudge cases, clamp at 99, base=None passthrough)
+- Chip label precedence (warning > support > raw movement; noise → None)
+- `movement_signal_for_pick` (too-few snapshots, supports home, warns away pick on same data, invalid side, None game)
+- `get_recommendation` carries the new movement fields end-to-end
+- Analytics: bucket logic for agreed / disagreed / no_signal, including "no recommendation FK" case; pending bets excluded
+- MLB hub tile: chip renders when present, absent when not
+- Provider hook smoke tests for CFB / CBB / college_baseball
+
+442 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- New: `apps/core/migrations/0004_bettingrecommendation_market_warning_and_more.py`.
+- Edited: `apps/core/models.py`, `apps/core/services/odds_movement.py`, `apps/core/services/recommendations.py`, `apps/core/tests.py`, `apps/mockbets/services/recommendation_performance.py`, `apps/accounts/views.py`, `apps/datahub/providers/{cfb,cbb,college_baseball,golf}/odds_provider.py`, `templates/mlb/_tile_actions.html`, `templates/mlb/game_detail.html`, `templates/accounts/performance.html`, `static/css/mlb.css`, `static/css/style.css`.
+
+---
+
 ## 2026-04-25 - Ops Command Center + template comment fix
 
 **Summary:** New superuser-only `/ops/command-center/` page that gives an at-a-glance read on Odds API health, Odds API quota, and the cron pipeline — built so we never again have to read deploy logs to understand "is something broken right now."

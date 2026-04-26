@@ -106,6 +106,67 @@
 </div>
 {% endif %}
 
+<!-- Market Movement Agreement
+     Three buckets: agreed (sharp money moved with the pick), disagreed
+     (sharp money moved against the pick), no_signal (no significant
+     movement at recommendation time). We always render the section even
+     when buckets are empty so users learn the feature exists; "0 bets"
+     is more honest than hiding the panel. -->
+{% if market_movement %}
+<p class="section-title mt-2">Market Movement Agreement</p>
+<div class="card mb-2">
+    <p class="text-sm text-muted" style="margin-top:0;">
+        For each settled bet, we look at whether sharp money was moving
+        toward or against the recommended pick at the time the bet was
+        placed. This panel splits your performance by that signal — does
+        agreement with the market actually translate into better outcomes?
+    </p>
+</div>
+<div class="table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Market signal</th>
+                <th class="num">Bets</th>
+                <th class="num">Win Rate</th>
+                <th class="num">ROI</th>
+                <th class="num">Avg CLV</th>
+                <th class="num">+CLV %</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><span class="text-green">📈 Market agreed</span></td>
+                <td class="num">{{ market_movement.agreed.total_bets }}</td>
+                <td class="num">{{ market_movement.agreed.win_rate|floatformat:1 }}%</td>
+                <td class="num {% if market_movement.agreed.roi > 0 %}text-green{% elif market_movement.agreed.roi < 0 %}text-red{% endif %}">{{ market_movement.agreed.roi|floatformat:1 }}%</td>
+                <td class="num">{% if market_movement.agreed.clv_sample %}{{ market_movement.agreed.avg_clv }}{% else %}&mdash;{% endif %}</td>
+                <td class="num">{% if market_movement.agreed.clv_sample %}{{ market_movement.agreed.positive_clv_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}</td>
+            </tr>
+            <tr>
+                <td><span class="text-red">📉 Market disagreed</span></td>
+                <td class="num">{{ market_movement.disagreed.total_bets }}</td>
+                <td class="num">{{ market_movement.disagreed.win_rate|floatformat:1 }}%</td>
+                <td class="num {% if market_movement.disagreed.roi > 0 %}text-green{% elif market_movement.disagreed.roi < 0 %}text-red{% endif %}">{{ market_movement.disagreed.roi|floatformat:1 }}%</td>
+                <td class="num">{% if market_movement.disagreed.clv_sample %}{{ market_movement.disagreed.avg_clv }}{% else %}&mdash;{% endif %}</td>
+                <td class="num">{% if market_movement.disagreed.clv_sample %}{{ market_movement.disagreed.positive_clv_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}</td>
+            </tr>
+            <tr>
+                <td><span class="text-muted">No signal</span></td>
+                <td class="num">{{ market_movement.no_signal.total_bets }}</td>
+                <td class="num">{{ market_movement.no_signal.win_rate|floatformat:1 }}%</td>
+                <td class="num {% if market_movement.no_signal.roi > 0 %}text-green{% elif market_movement.no_signal.roi < 0 %}text-red{% endif %}">{{ market_movement.no_signal.roi|floatformat:1 }}%</td>
+                <td class="num">{% if market_movement.no_signal.clv_sample %}{{ market_movement.no_signal.avg_clv }}{% else %}&mdash;{% endif %}</td>
+                <td class="num">{% if market_movement.no_signal.clv_sample %}{{ market_movement.no_signal.positive_clv_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+<p class="text-sm text-muted mt-1">
+    Past performance does not predict future outcomes. Sample sizes may be small early on.
+</p>
+{% endif %}
+
 <!-- Calibration -->
 {% if calibration %}
 <p class="section-title mt-2">Calibration</p>

@@ -519,6 +519,27 @@
     outline: none;
 }
 
+/* Market Movement chip — three states, mutually exclusive in the template:
+     mlb-action--movement-warn    (sharp move AGAINST the rec — caution)
+     mlb-action--movement-support (sharp move WITH the rec — confirmation)
+     mlb-action--movement         (movement detected, neither support nor warn)
+   Same base shape as other action chips so it lines up visually. */
+.mlb-action--movement {
+    background: rgba(99,102,241,0.14);
+    color: #c7d2fe;
+    border: 1px solid rgba(99,102,241,0.35);
+}
+.mlb-action--movement-support {
+    background: rgba(34,197,94,0.18);
+    color: #bbf7d0;
+    border-color: rgba(34,197,94,0.5);
+}
+.mlb-action--movement-warn {
+    background: rgba(239,68,68,0.18);
+    color: #fecaca;
+    border-color: rgba(239,68,68,0.55);
+}
+
 /* Focus banner — single "do this right now" surface at the top of the hub. */
 .mlb-focus {
     display: flex;

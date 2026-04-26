@@ -145,7 +145,7 @@ class CFBOddsProvider(AbstractProvider):
                 skipped += 1
                 continue
 
-            OddsSnapshot.objects.create(
+            snapshot = OddsSnapshot.objects.create(
                 game=game,
                 captured_at=now,
                 sportsbook=item['sportsbook'],
@@ -155,6 +155,11 @@ class CFBOddsProvider(AbstractProvider):
                 moneyline_home=ml_home,
                 moneyline_away=item.get('moneyline_away'),
             )
+            # Movement intelligence — silent no-op on first snapshot for a
+            # (game, sportsbook); upgrades subsequent rows that cross the
+            # significance threshold. Exception-safe by contract.
+            from apps.core.services.odds_movement import apply_movement_intelligence
+            apply_movement_intelligence(OddsSnapshot, snapshot)
             created += 1
 
         return {'status': 'ok', 'created': created, 'skipped': skipped}

@@ -324,6 +324,22 @@ def performance_view(request):
     snaps_7d = [s for s in all_snaps if s.captured_at >= now - timedelta(days=7)]
     snaps_30d = [s for s in all_snaps if s.captured_at >= now - timedelta(days=30)]
 
+    # Market Movement Agreement — read from the requesting user's settled
+    # MockBets, which carry an FK to BettingRecommendation. We deliberately
+    # use the user's bets (not the global ModelResultSnapshot stream) since
+    # the question is "did *my* bets benefit from market agreement?"
+    from apps.mockbets.models import MockBet
+    from apps.mockbets.services.recommendation_performance import (
+        compute_market_movement_agreement,
+    )
+    user_bets = (
+        MockBet.objects
+        .filter(user=request.user)
+        .exclude(result='pending')
+        .select_related('recommendation')
+    )
+    market_movement = compute_market_movement_agreement(user_bets)
+
     return render(request, 'accounts/performance.html', {
         'overall': _compute_metrics(all_snaps),
         'cfb': _compute_metrics(cfb_snaps),
@@ -332,6 +348,7 @@ def performance_view(request):
         'last_30d': _compute_metrics(snaps_30d),
         'calibration': _compute_calibration(all_snaps),
         'clv': _compute_clv(all_snaps),
+        'market_movement': market_movement,
         'recent_snapshots': all_snaps[:50],
         'help_key': 'performance',
         'nav_active': 'profile',

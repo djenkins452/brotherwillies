@@ -175,6 +175,41 @@ def compute_loss_breakdown(bets: Iterable) -> dict:
     return {'total_losses': total, 'rows': rows}
 
 
+def compute_market_movement_agreement(bets: Iterable) -> dict:
+    """Group settled bets by whether the market agreed with the recommendation.
+
+    Three buckets:
+      - agreed:   the linked BettingRecommendation had movement_supports_pick=True
+                  (sharp money moved toward the picked side at recommendation time)
+      - disagreed: the linked BettingRecommendation had market_warning=True
+                  (sharp money moved against the picked side)
+      - no_signal: any other settled bet — either no linked recommendation, or
+                  movement was noise/below threshold
+
+    Each bucket carries the same `_group_stats` shape (win rate, ROI, CLV,
+    sample size). The UI panel reads this directly.
+
+    Why bucket bets that lack a linked recommendation? Because users place
+    mock bets without going through the recommendation flow too — and we
+    want to show "did the analytics gating help?" honestly. Bucketing those
+    as `no_signal` is the right answer rather than dropping them.
+    """
+    settled = _settled(bets)
+    buckets = {'agreed': [], 'disagreed': [], 'no_signal': []}
+    for b in settled:
+        rec = getattr(b, 'recommendation', None)
+        if rec is None:
+            buckets['no_signal'].append(b)
+            continue
+        if rec.market_warning:
+            buckets['disagreed'].append(b)
+        elif rec.movement_supports_pick:
+            buckets['agreed'].append(b)
+        else:
+            buckets['no_signal'].append(b)
+    return {key: _group_stats(buckets[key]) for key in ('agreed', 'disagreed', 'no_signal')}
+
+
 def compute_all(bets) -> dict:
     """Convenience: everything the analytics widget needs in one call."""
     materialized: List = list(bets)
@@ -183,4 +218,5 @@ def compute_all(bets) -> dict:
         'by_tier': compute_performance_by_tier(materialized),
         'system_confidence': compute_system_confidence_score(materialized),
         'loss_breakdown': compute_loss_breakdown(materialized),
+        'by_market_movement': compute_market_movement_agreement(materialized),
     }

@@ -137,7 +137,7 @@ class CollegeBaseballOddsProvider(AbstractProvider):
                 skipped += 1
                 continue
 
-            OddsSnapshot.objects.create(
+            snapshot = OddsSnapshot.objects.create(
                 game=game,
                 captured_at=now,
                 sportsbook=item['sportsbook'],
@@ -147,5 +147,7 @@ class CollegeBaseballOddsProvider(AbstractProvider):
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
             )
+            from apps.core.services.odds_movement import apply_movement_intelligence
+            apply_movement_intelligence(OddsSnapshot, snapshot)
             created += 1
         return {'status': 'ok', 'created': created, 'skipped': skipped}

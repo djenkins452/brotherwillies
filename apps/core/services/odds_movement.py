@@ -494,3 +494,142 @@ def apply_movement_intelligence(model_class, snapshot) -> Optional[MovementResul
     except Exception as exc:  # noqa: BLE001 — telemetry must not break ingestion
         logger.warning('apply_movement_intelligence failed: %s', exc)
         return None
+
+
+# --- Decision-layer helper --------------------------------------------------
+
+def movement_signal_for_pick(snapshot_model, game, pick_side: str) -> dict:
+    """Compute the movement signal *as it pertains to a specific picked side*.
+
+    The general compute_movement_score() returns the dominant market across
+    moneyline / spread / total — useful for "did anything move?". For
+    recommendation integration we need a sharper question: "did the
+    moneyline move toward or against MY pick?"
+
+    Args:
+        snapshot_model: the per-sport OddsSnapshot model class.
+        game: a sport Game instance.
+        pick_side: 'home' or 'away' — the side the recommendation backs.
+
+    Returns:
+        Dict with:
+            movement_class:        noise/moderate/strong/sharp or None
+            movement_score:        0..100 or None
+            supports_pick:         True if direction matches the pick AND
+                                   class is moderate or stronger
+            market_warning:        True if direction is OPPOSITE the pick AND
+                                   class is strong or sharp
+            direction:             +1 toward home, -1 toward away, 0 neutral
+
+    Returns all-None / False on failure or insufficient data — callers can
+    treat the result as "no signal" without special-casing.
+    """
+    empty = {
+        'movement_class': None,
+        'movement_score': None,
+        'supports_pick': False,
+        'market_warning': False,
+        'direction': 0,
+    }
+    if pick_side not in ('home', 'away'):
+        return empty
+    if game is None:
+        return empty
+
+    try:
+        # Pull the most recent significant snapshot's history. We deliberately
+        # look across *all* sportsbooks for a game and pick the consensus
+        # signal — recommendation fires once per game, not per book.
+        cutoff = timezone.now() - timedelta(hours=HISTORY_MAX_HOURS)
+        snaps = list(
+            snapshot_model.objects
+            .filter(game=game, captured_at__gte=cutoff)
+            .order_by('-captured_at')[:HISTORY_MAX_SNAPSHOTS * 3]  # over-pull for cross-book averaging
+        )
+        if len(snaps) < 2:
+            return empty
+        snaps = list(reversed(snaps))  # oldest → newest
+
+        # Compute moneyline-specific signal for the picked side, since
+        # spread/total moves shouldn't drive ML-rec confidence.
+        attr = 'moneyline_home' if pick_side == 'home' else 'moneyline_away'
+        sig = _per_market_signal(snaps, attr)
+        if sig is None:
+            return empty
+
+        score = (
+            W_MAGNITUDE * sig['magnitude']
+            + W_SPEED * sig['speed']
+            + W_CONSISTENCY * sig['consistency']
+            + W_TIMING * sig['timing']
+        )
+        cls = classify_score(score)
+        direction = _direction_for_attr(attr, sig['signed_delta'])
+
+        # "Pick side" → expected direction for support:
+        #   pick_side=='home' wants direction == +1 (market moved toward home)
+        #   pick_side=='away' wants direction == -1 (market moved toward away)
+        expected = 1 if pick_side == 'home' else -1
+        supports = (cls in ('moderate', 'strong', 'sharp')) and direction == expected
+        warning = (cls in ('strong', 'sharp')) and direction == -expected
+
+        return {
+            'movement_class': cls if cls != 'noise' else None,
+            'movement_score': round(score, 2),
+            'supports_pick': supports,
+            'market_warning': warning,
+            'direction': direction,
+        }
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning('movement_signal_for_pick failed: %s', exc)
+        return empty
+
+
+# --- Confidence nudge math (used by both Recommendation + BettingRecommendation)
+
+def confidence_nudge_pp(movement_class: Optional[str], supports_pick: bool) -> float:
+    """How much to nudge the displayed confidence based on movement.
+
+    Strictly additive, capped at +5pp. Never negative — when the market is
+    against the pick we surface a warning chip but do NOT downgrade the
+    model's stated confidence (the model is still our source of truth).
+    """
+    if not supports_pick or not movement_class:
+        return 0.0
+    return {'sharp': 5.0, 'strong': 3.0, 'moderate': 1.0}.get(movement_class, 0.0)
+
+
+def displayed_confidence(base_confidence, movement_class, supports_pick) -> Optional[float]:
+    """Apply the nudge and clamp at 99 (we never want to render '100%')."""
+    if base_confidence is None:
+        return None
+    nudge = confidence_nudge_pp(movement_class, supports_pick)
+    return min(99.0, float(base_confidence) + nudge)
+
+
+# --- UI label helpers (chips) ----------------------------------------------
+
+MOVEMENT_CHIP_LABELS = {
+    'sharp': '🔥 Sharp Action',
+    'strong': '📈 Strong Movement',
+    'moderate': '↗ Market Moving',
+}
+
+MARKET_SUPPORT_LABEL = '📈 Market Support'
+MARKET_WARNING_LABEL = '📉 Market Against You'
+
+
+def chip_label_for(movement_class: Optional[str], supports_pick: bool, market_warning: bool) -> Optional[str]:
+    """Pick the right chip text for a recommendation row.
+
+    Precedence (highest first): warning chip > support chip > raw movement.
+    Each is mutually exclusive in the UI to avoid a wall of badges.
+    """
+    if market_warning:
+        return MARKET_WARNING_LABEL
+    if supports_pick and movement_class in ('strong', 'sharp'):
+        return MARKET_SUPPORT_LABEL
+    if movement_class in MOVEMENT_CHIP_LABELS:
+        return MOVEMENT_CHIP_LABELS[movement_class]
+    return None

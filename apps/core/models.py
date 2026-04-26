@@ -106,6 +106,25 @@ class BettingRecommendation(models.Model):
     # apps/core/services/recommendations.py for the rule set.
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='recommended')
     status_reason = models.CharField(max_length=20, choices=STATUS_REASON_CHOICES, blank=True, default='')
+
+    # Market Movement integration (Commit 2 of Odds Intelligence) — strictly
+    # additive. The model's confidence is still the source of truth. These
+    # fields capture the movement signal AT RECOMMENDATION TIME so historical
+    # analytics ("did the market agree?") survives future tuning of the
+    # significance / scoring rules.
+    MOVEMENT_CLASS_CHOICES = [
+        ('', ''),
+        ('moderate', 'Moderate'),
+        ('strong', 'Strong'),
+        ('sharp', 'Sharp Action'),
+    ]
+    movement_class = models.CharField(
+        max_length=10, choices=MOVEMENT_CLASS_CHOICES, blank=True, default='',
+    )
+    movement_score = models.FloatField(null=True, blank=True)
+    movement_supports_pick = models.BooleanField(default=False)
+    market_warning = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -176,3 +195,33 @@ class BettingRecommendation(models.Model):
     def top_play_reasons(self):
         from apps.core.services.recommendations import top_play_reasons
         return top_play_reasons(self.model_edge, self.confidence_score, self.tier, self.status)
+
+    # ----- Market movement helpers (Commit 2) ----------------------------
+    # These derive UI-ready values from the persisted movement_* fields.
+    # They never re-fetch snapshots — display layer must stay cheap.
+
+    @property
+    def confidence_nudge_pp(self) -> float:
+        from apps.core.services.odds_movement import confidence_nudge_pp
+        return confidence_nudge_pp(self.movement_class or None, self.movement_supports_pick)
+
+    @property
+    def displayed_confidence(self):
+        """confidence_score + bounded movement nudge (capped at +5pp, clamped <99).
+
+        Falls back to raw confidence_score when there's no movement signal
+        — so the existing UI keeps working when movement data is absent
+        (e.g., golf, or any sport before its provider hook ships).
+        """
+        from apps.core.services.odds_movement import displayed_confidence
+        return displayed_confidence(self.confidence_score, self.movement_class or None, self.movement_supports_pick)
+
+    @property
+    def market_movement_chip(self):
+        """Short label rendered as a chip on hub tiles + game detail."""
+        from apps.core.services.odds_movement import chip_label_for
+        return chip_label_for(
+            self.movement_class or None,
+            self.movement_supports_pick,
+            self.market_warning,
+        )

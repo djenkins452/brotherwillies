@@ -220,6 +220,22 @@ class GolfOddsProvider(AbstractProvider):
                 outright_odds=item['outright_odds'],
                 implied_prob=item['implied_prob'] or 0.0,
             )
+            # NOTE: Movement intelligence is intentionally NOT wired for golf.
+            # Two structural reasons:
+            #   1. Schema differs — GolfOddsSnapshot has outright_odds +
+            #      implied_prob (per golfer), no moneyline_home/away/
+            #      spread/total. The current is_significant() and
+            #      compute_movement_score() helpers in
+            #      apps.core.services.odds_movement key off the latter.
+            #   2. The provider above already dedupes to "one row per event
+            #      per day," so even with a working detector there'd be
+            #      almost no within-day signal to read. Loosening dedup
+            #      AND adding a golf-flavored significance/score path is a
+            #      larger change than this commit's scope.
+            # When we extend movement to golf, the right move is to add
+            # is_significant_outright() + compute_outright_movement_score()
+            # in odds_movement.py and call apply_movement_intelligence on
+            # an outright-aware code path, plus revisit the dedup gate.
             created += 1
 
         return {'status': 'ok', 'created': created, 'skipped': skipped}

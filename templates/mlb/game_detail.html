@@ -175,6 +175,25 @@
     </table>
 </div>
 
+{% if recommendation and recommendation.market_movement_chip %}
+<p class="section-title mt-2">Market Movement</p>
+<div class="card{% if recommendation.market_warning %} card-warning{% elif recommendation.movement_supports_pick %} card-success{% endif %}">
+    <div>
+      <strong>{{ recommendation.market_movement_chip }}</strong>
+      <span class="text-sm text-muted">&middot; movement score {{ recommendation.movement_score|floatformat:0 }}/100</span>
+    </div>
+    <div class="text-sm mt-1">
+      {% if recommendation.market_warning %}
+        Sharp money is moving against the recommended pick ({{ recommendation.pick }}). The model still likes this side, but the market disagrees — proceed with caution and consider waiting for the line to settle.
+      {% elif recommendation.movement_supports_pick %}
+        Sharp money is moving toward the recommended pick ({{ recommendation.pick }}). The market agrees with the model's read; displayed confidence is nudged by +{{ recommendation.confidence_nudge_pp|floatformat:0 }}pp.
+      {% else %}
+        Meaningful market movement detected on this game ({{ recommendation.movement_class|title }}). Direction is mixed or doesn't strongly favor either side relative to the recommendation.
+      {% endif %}
+    </div>
+</div>
+{% endif %}
+
 {% if data.latest_odds %}
 <p class="section-title mt-2">Odds Snapshot</p>
 <div class="card">

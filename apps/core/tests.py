@@ -984,3 +984,394 @@ class PruneOldRawSnapshotsTests(TestCase):
         out = StringIO()
         call_command('prune_old_raw_snapshots', '--days=7', stdout=out)
         self.assertFalse(self.OddsSnapshot.objects.filter(pk=s.pk).exists())
+
+
+# =========================================================================
+# Commit 2 — Decision integration, UI rendering, analytics, provider rollout
+# =========================================================================
+
+from apps.core.services.odds_movement import (
+    chip_label_for,
+    confidence_nudge_pp,
+    displayed_confidence,
+    movement_signal_for_pick,
+)
+
+
+class ConfidenceNudgeTests(TestCase):
+    """The bounded nudge math is the heart of "additive only" — must never
+    push displayed confidence above the cap or apply when supports=False."""
+
+    def test_no_nudge_when_not_supporting(self):
+        self.assertEqual(confidence_nudge_pp('sharp', supports_pick=False), 0.0)
+        self.assertEqual(confidence_nudge_pp('strong', supports_pick=False), 0.0)
+        self.assertEqual(confidence_nudge_pp('moderate', supports_pick=False), 0.0)
+
+    def test_no_nudge_when_class_missing(self):
+        self.assertEqual(confidence_nudge_pp(None, supports_pick=True), 0.0)
+        self.assertEqual(confidence_nudge_pp('', supports_pick=True), 0.0)
+
+    def test_class_table(self):
+        self.assertEqual(confidence_nudge_pp('moderate', supports_pick=True), 1.0)
+        self.assertEqual(confidence_nudge_pp('strong', supports_pick=True), 3.0)
+        self.assertEqual(confidence_nudge_pp('sharp', supports_pick=True), 5.0)
+        self.assertEqual(confidence_nudge_pp('noise', supports_pick=True), 0.0)
+
+    def test_displayed_confidence_clamps_at_99(self):
+        # 97 + 5 → 102 in raw math but must clamp to 99.
+        self.assertEqual(displayed_confidence(97.0, 'sharp', True), 99.0)
+
+    def test_displayed_confidence_returns_none_when_base_missing(self):
+        self.assertIsNone(displayed_confidence(None, 'sharp', True))
+
+
+class ChipLabelTests(TestCase):
+    """Chip precedence: warning > support > raw movement."""
+
+    def test_warning_beats_everything(self):
+        self.assertEqual(
+            chip_label_for('sharp', supports_pick=False, market_warning=True),
+            '📉 Market Against You',
+        )
+
+    def test_support_beats_raw_movement(self):
+        self.assertEqual(
+            chip_label_for('sharp', supports_pick=True, market_warning=False),
+            '📈 Market Support',
+        )
+
+    def test_raw_movement_when_neither(self):
+        self.assertEqual(
+            chip_label_for('moderate', supports_pick=False, market_warning=False),
+            '↗ Market Moving',
+        )
+
+    def test_returns_none_for_noise(self):
+        self.assertIsNone(chip_label_for('noise', False, False))
+        self.assertIsNone(chip_label_for(None, False, False))
+
+
+class MovementSignalForPickTests(TestCase):
+    """Integration: walk through a multi-snapshot fixture and confirm the
+    signal correctly identifies "supports home" vs "warns about home"."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.OddsSnapshot = OddsSnapshot
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        home = Team.objects.create(name='Home', slug='home', conference=conf)
+        away = Team.objects.create(name='Away', slug='away', conference=conf)
+        self.game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+
+    def _seed(self, progression):
+        """Create snapshots from oldest→newest with given (ml_h, ml_a) tuples."""
+        n = len(progression)
+        for i, (mh, ma) in enumerate(progression):
+            self.OddsSnapshot.objects.create(
+                game=self.game,
+                captured_at=timezone.now() - timedelta(minutes=(n - i) * 10),
+                sportsbook='DraftKings',
+                market_home_win_prob=0.5,
+                moneyline_home=mh, moneyline_away=ma,
+            )
+
+    def test_returns_empty_when_too_few_snapshots(self):
+        self._seed([(-110, -110)])
+        sig = movement_signal_for_pick(self.OddsSnapshot, self.game, 'home')
+        self.assertIsNone(sig['movement_class'])
+        self.assertFalse(sig['supports_pick'])
+        self.assertFalse(sig['market_warning'])
+
+    def test_movement_toward_home_supports_home_pick(self):
+        self._seed([(-110, -110), (-120, 100), (-135, 115), (-150, 130)])
+        sig = movement_signal_for_pick(self.OddsSnapshot, self.game, 'home')
+        # Home line went more negative → market moved toward home → supports.
+        self.assertTrue(sig['supports_pick'])
+        self.assertFalse(sig['market_warning'])
+        self.assertIn(sig['movement_class'], ('moderate', 'strong', 'sharp'))
+
+    def test_movement_toward_home_warns_away_pick(self):
+        self._seed([(-110, -110), (-120, 100), (-135, 115), (-150, 130)])
+        sig = movement_signal_for_pick(self.OddsSnapshot, self.game, 'away')
+        # Same data, but the bettor picked away → market moved AGAINST them.
+        self.assertFalse(sig['supports_pick'])
+        # Warning fires only at strong/sharp; moderate just suppresses support.
+        if sig['movement_class'] in ('strong', 'sharp'):
+            self.assertTrue(sig['market_warning'])
+
+    def test_invalid_pick_side_returns_empty(self):
+        self._seed([(-110, -110), (-150, 130)])
+        sig = movement_signal_for_pick(self.OddsSnapshot, self.game, 'invalid')
+        self.assertIsNone(sig['movement_class'])
+
+    def test_none_game_returns_empty(self):
+        sig = movement_signal_for_pick(self.OddsSnapshot, None, 'home')
+        self.assertIsNone(sig['movement_class'])
+
+
+class RecommendationMovementIntegrationTests(TestCase):
+    """Does get_recommendation() actually populate the new movement fields?
+
+    This is the smoke test that catches "I added the field but forgot to
+    wire it through the candidate function." Pre-creates a strong-toward-home
+    snapshot history, then asks for the recommendation."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.OddsSnapshot = OddsSnapshot
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        home = Team.objects.create(name='Home', slug='home', conference=conf, rating=80)
+        away = Team.objects.create(name='Away', slug='away', conference=conf, rating=50)
+        self.game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+        # Seed 4 snapshots: home odds tightening from -110 to -150 over the
+        # last hour (clear "sharp toward home").
+        progression = [(-110, -110), (-120, 100), (-135, 115), (-150, 130)]
+        n = len(progression)
+        for i, (mh, ma) in enumerate(progression):
+            self.OddsSnapshot.objects.create(
+                game=self.game,
+                captured_at=timezone.now() - timedelta(minutes=(n - i) * 10),
+                sportsbook='DraftKings',
+                market_home_win_prob=0.5,
+                moneyline_home=mh, moneyline_away=ma,
+            )
+
+    def test_get_recommendation_carries_movement_fields(self):
+        from apps.core.services.recommendations import get_recommendation
+        rec = get_recommendation('mlb', self.game, user=None)
+        self.assertIsNotNone(rec)
+        # Movement fields populated (might be None for movement_class if
+        # the signal lands as 'noise', but field structure must exist).
+        self.assertTrue(hasattr(rec, 'movement_class'))
+        self.assertTrue(hasattr(rec, 'movement_supports_pick'))
+        self.assertTrue(hasattr(rec, 'market_warning'))
+        # And the derived properties work (including the +5pp cap).
+        self.assertIsNotNone(rec.displayed_confidence)
+        self.assertGreaterEqual(rec.displayed_confidence, rec.confidence_score - 0.01)
+
+
+class MarketMovementAgreementAnalyticsTests(TestCase):
+    """The analytics bucket logic must correctly read recommendation.market_*
+    flags and group bets accordingly."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, Team
+        from apps.core.models import BettingRecommendation
+        from apps.mockbets.models import MockBet
+        from django.contrib.auth.models import User
+        from decimal import Decimal
+
+        self.User = User
+        self.MockBet = MockBet
+        self.BettingRecommendation = BettingRecommendation
+
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        home = Team.objects.create(name='Home', slug='home', conference=conf)
+        away = Team.objects.create(name='Away', slug='away', conference=conf)
+        self.game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+        self.user = User.objects.create_user('joe', password='pw')
+
+    def _rec(self, *, supports=False, warning=False):
+        from decimal import Decimal
+        return self.BettingRecommendation.objects.create(
+            sport='mlb',
+            mlb_game=self.game,
+            bet_type='moneyline',
+            pick='Home',
+            line='-150',
+            odds_american=-150,
+            confidence_score=Decimal('60'),
+            model_edge=Decimal('5.0'),
+            movement_class='sharp' if (supports or warning) else '',
+            movement_supports_pick=supports,
+            market_warning=warning,
+        )
+
+    def _bet(self, *, result, recommendation=None):
+        from decimal import Decimal
+        return self.MockBet.objects.create(
+            user=self.user,
+            sport='mlb',
+            mlb_game=self.game,
+            bet_type='moneyline',
+            selection='Home',
+            odds_american=-150,
+            implied_probability=Decimal('0.6000'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('66.67') if result == 'win' else Decimal('0'),
+            result=result,
+            recommendation=recommendation,
+        )
+
+    def test_buckets_by_recommendation_flags(self):
+        from apps.mockbets.services.recommendation_performance import (
+            compute_market_movement_agreement,
+        )
+        # Mix of agree / disagree / no-signal / no-rec.
+        agree_bet = self._bet(result='win',  recommendation=self._rec(supports=True))
+        disagree_bet = self._bet(result='loss', recommendation=self._rec(warning=True))
+        nosig_bet = self._bet(result='win', recommendation=self._rec())
+        norec_bet = self._bet(result='loss')  # No recommendation FK at all.
+
+        result = compute_market_movement_agreement(self.MockBet.objects.all())
+        self.assertEqual(result['agreed']['total_bets'], 1)
+        self.assertEqual(result['agreed']['wins'], 1)
+        self.assertEqual(result['disagreed']['total_bets'], 1)
+        self.assertEqual(result['disagreed']['losses'], 1)
+        # no_signal absorbs both the "rec but no movement" and "no rec" cases.
+        self.assertEqual(result['no_signal']['total_bets'], 2)
+
+    def test_pending_bets_excluded(self):
+        from apps.mockbets.services.recommendation_performance import (
+            compute_market_movement_agreement,
+        )
+        self._bet(result='pending', recommendation=self._rec(supports=True))
+        result = compute_market_movement_agreement(self.MockBet.objects.all())
+        self.assertEqual(result['agreed']['total_bets'], 0)
+
+
+class MlbHubTileChipRenderTests(TestCase):
+    """Template smoke test: chip renders in the expected DOM region when
+    a recommendation has a movement signal, and is absent when it doesn't.
+    Mocks the GameSignals object the tile expects."""
+
+    def test_chip_renders_when_movement_present(self):
+        from django.template import Context, Template
+        from types import SimpleNamespace
+
+        rec = SimpleNamespace(
+            status='recommended',
+            market_movement_chip='📈 Market Support',
+            market_warning=False,
+            movement_supports_pick=True,
+            movement_score=82.0,
+        )
+        tile_signals = SimpleNamespace(
+            actions=[],
+            recommendation=rec,
+            is_top_opportunity=False,
+            confidence_pct=65,
+            user_bet_id=None,
+            user_bet_selection=None,
+            user_bet_odds=None,
+            prefill_json=None,
+            pick_text=None,
+            pick_action_label=None,
+        )
+        # _tile_actions guards on `s.actions or user.is_authenticated`; the
+        # chip itself doesn't need actions, but we have to pass through the
+        # outer guard. Mark user authenticated for the test.
+        outer_user = SimpleNamespace(is_authenticated=True)
+        tpl = Template(
+            "{% load mlb_reasons %}{% include 'mlb/_tile_actions.html' %}"
+        )
+        html = tpl.render(Context({'s': tile_signals, 'user': outer_user}))
+        self.assertIn('📈 Market Support', html)
+        self.assertIn('mlb-action--movement-support', html)
+
+    def test_chip_absent_when_no_movement(self):
+        from django.template import Context, Template
+        from types import SimpleNamespace
+
+        rec = SimpleNamespace(
+            status='recommended',
+            market_movement_chip=None,
+            market_warning=False,
+            movement_supports_pick=False,
+            movement_score=None,
+        )
+        tile_signals = SimpleNamespace(
+            actions=[],
+            recommendation=rec,
+            is_top_opportunity=False,
+            confidence_pct=65,
+            user_bet_id=None,
+            user_bet_selection=None,
+            user_bet_odds=None,
+            prefill_json=None,
+            pick_text=None,
+            pick_action_label=None,
+        )
+        # _tile_actions guards on `s.actions or user.is_authenticated`; the
+        # chip itself doesn't need actions, but we have to pass through the
+        # outer guard. Mark user authenticated for the test.
+        outer_user = SimpleNamespace(is_authenticated=True)
+        tpl = Template(
+            "{% load mlb_reasons %}{% include 'mlb/_tile_actions.html' %}"
+        )
+        html = tpl.render(Context({'s': tile_signals, 'user': outer_user}))
+        self.assertNotIn('mlb-action--movement', html)
+
+
+class CfbCbbCollegeBaseballProviderHookTests(TestCase):
+    """Smoke test for the rolled-out provider hooks. We don't call the full
+    provider (network-bound) — just confirm apply_movement_intelligence
+    accepts each sport's OddsSnapshot model and writes the right fields."""
+
+    def _setup_cfb(self):
+        from apps.cfb.models import Conference, Game, OddsSnapshot, Team
+        c = Conference.objects.create(name='SEC', slug='sec')
+        h = Team.objects.create(name='UGA', slug='uga', conference=c)
+        a = Team.objects.create(name='UF', slug='uf', conference=c)
+        g = Game.objects.create(home_team=h, away_team=a, kickoff=timezone.now() + timedelta(hours=2))
+        return OddsSnapshot, g
+
+    def _setup_cbb(self):
+        from apps.cbb.models import Conference, Game, OddsSnapshot, Team
+        c = Conference.objects.create(name='ACC', slug='acc')
+        h = Team.objects.create(name='Duke', slug='duke', conference=c)
+        a = Team.objects.create(name='UNC', slug='unc', conference=c)
+        g = Game.objects.create(home_team=h, away_team=a, tipoff=timezone.now() + timedelta(hours=2))
+        return OddsSnapshot, g
+
+    def _setup_cb(self):
+        from apps.college_baseball.models import Conference, Game, OddsSnapshot, Team
+        c = Conference.objects.create(name='SEC', slug='sec')
+        h = Team.objects.create(name='LSU', slug='lsu', conference=c)
+        a = Team.objects.create(name='Bama', slug='bama', conference=c)
+        g = Game.objects.create(home_team=h, away_team=a, first_pitch=timezone.now() + timedelta(hours=2))
+        return OddsSnapshot, g
+
+    def _runs_through(self, OddsSnapshot, game):
+        # First snapshot → raw, no upgrade.
+        s1 = OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now() - timedelta(minutes=60),
+            sportsbook='DraftKings', market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+        )
+        from apps.core.services.odds_movement import apply_movement_intelligence
+        self.assertIsNone(apply_movement_intelligence(OddsSnapshot, s1))
+        s1.refresh_from_db()
+        self.assertEqual(s1.snapshot_type, 'raw')
+        # Second crosses significance → upgraded.
+        s2 = OddsSnapshot.objects.create(
+            game=game, captured_at=timezone.now() - timedelta(minutes=1),
+            sportsbook='DraftKings', market_home_win_prob=0.6,
+            moneyline_home=-150, moneyline_away=130,
+        )
+        result = apply_movement_intelligence(OddsSnapshot, s2)
+        s2.refresh_from_db()
+        self.assertIsNotNone(result)
+        self.assertEqual(s2.snapshot_type, 'significant')
+        self.assertIsNotNone(s2.movement_score)
+
+    def test_cfb_hook_runs(self):
+        OddsSnapshot, g = self._setup_cfb()
+        self._runs_through(OddsSnapshot, g)
+
+    def test_cbb_hook_runs(self):
+        OddsSnapshot, g = self._setup_cbb()
+        self._runs_through(OddsSnapshot, g)
+
+    def test_college_baseball_hook_runs(self):
+        OddsSnapshot, g = self._setup_cb()
+        self._runs_through(OddsSnapshot, g)

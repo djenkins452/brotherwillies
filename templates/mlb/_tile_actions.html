@@ -30,6 +30,12 @@
       </span>
     {% endif %}
   {% endfor %}
+  {% if s.recommendation and s.recommendation.market_movement_chip %}
+    <span class="mlb-action mlb-action--movement{% if s.recommendation.market_warning %} mlb-action--movement-warn{% elif s.recommendation.movement_supports_pick %} mlb-action--movement-support{% endif %}"
+          title="{% if s.recommendation.market_warning %}Sharp market movement is going against the recommended pick — proceed with caution.{% elif s.recommendation.movement_supports_pick %}Sharp money is moving toward the recommended side — market agrees.{% else %}Recent meaningful market movement detected on this game.{% endif %} Movement score {{ s.recommendation.movement_score|floatformat:0 }}/100.">
+      {{ s.recommendation.market_movement_chip }}
+    </span>
+  {% endif %}
   {% if s.is_top_opportunity %}
     <span class="mlb-top-opp" title="Highest-confidence spot on the board">
       <span class="mlb-top-opp__star" aria-hidden="true">★</span>

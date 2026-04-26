@@ -11,6 +11,8 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-26-odds-intel">Apr 26, 2026 &mdash; Odds Intelligence (UI + Analytics)</a> <span class="text-sm text-muted">&bull; Market movement chips on MLB tiles, game detail panel, agreement performance table</span></li>
+        <li style="padding:4px 0;"><a href="#apr-25-odds-intel-foundation">Apr 25, 2026 &mdash; Odds Intelligence (Foundation)</a> <span class="text-sm text-muted">&bull; Sharp-action detection, snapshot scoring, raw-snapshot pruning, MLB end-to-end</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-ops">Apr 25, 2026 &mdash; Ops Command Center</a> <span class="text-sm text-muted">&bull; Live API health, quota dial, cron history, manual triggers (superuser-only)</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-decision-intel">Apr 25, 2026 &mdash; Decision Intelligence Era</a> <span class="text-sm text-muted">&bull; Recommendation engine, CLV tracking, de-vigged edges, Postgame Command Center, bulk actions</span></li>
         <li style="padding:4px 0;"><a href="#apr-19-mlb-injuries">Apr 19, 2026 &mdash; MLB Injury Ingestion</a> <span class="text-sm text-muted">&bull; Per-team injury data from ESPN, surfaced on every tile</span></li>
@@ -29,6 +31,60 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 26 — Odds Intelligence (UI + Analytics)                          #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-26-odds-intel">
+    <p class="card-title">Apr 26, 2026 &mdash; Odds Intelligence (UI + Analytics)</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">The market movement system from yesterday now shows up on tiles, the game detail page, and a new performance panel. The recommendation engine gets a small bounded nudge when sharp money agrees, and a warning chip when sharp money disagrees — but never a downgrade.</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">What you'll see</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>MLB hub tiles</strong> — new chip alongside the recommendation badges:
+                <ul>
+                    <li><code>📈 Market Support</code> (green) — sharp money is moving toward the recommended pick</li>
+                    <li><code>📉 Market Against You</code> (red) — sharp money is moving against the recommended pick; proceed with caution</li>
+                    <li><code>↗ Market Moving</code> (blue) — meaningful movement detected, direction doesn't strongly favor either side</li>
+                </ul>
+            </li>
+            <li><strong>MLB game detail</strong> — a "Market Movement" card explaining the signal and how it affected the displayed confidence.</li>
+            <li><strong>Profile → Performance</strong> — new "Market Movement Agreement" table comparing your win rate, ROI, and CLV across three buckets: market agreed / market disagreed / no signal.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Decision integration is conservative</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>Sharp + with the model → displayed confidence nudges up by +5pp (capped, clamped at 99% — we never claim certainty).</li>
+            <li>Strong + with the model → +3pp. Moderate + with → +1pp.</li>
+            <li>Sharp/strong + against the model → warning chip only. Confidence and tier are unchanged. The model stays the source of truth; the warning is just transparency about a signal you might want to factor in.</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">Provider rollout: hook is live for MLB, CFB, CBB, and college baseball. Golf has a different schema (per-golfer outright odds, not a two-sided market) and is intentionally deferred.</p>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 25 — Odds Intelligence (Foundation)                              #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-25-odds-intel-foundation">
+    <p class="card-title">Apr 25, 2026 &mdash; Odds Intelligence (Foundation)</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A new system to capture, score, and classify market movement. Phase 1 — invisible to users but the math is now wired in. The visible UI follows on Apr 26.</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">What it does</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>Every Odds API pull writes a snapshot row tagged <code>raw</code>. When a follow-up snapshot crosses a significance threshold (≥7 cents on the line OR ≥2pp de-vigged probability shift OR ≥0.5 pts spread/total), the row is upgraded to <code>significant</code> and scored 0–100.</li>
+            <li>Score components weighted: 40% magnitude / 25% speed / 20% direction consistency / 15% timing (recent moves count more).</li>
+            <li>Classification cuts: 0–25 noise / 25–55 moderate / 55–80 strong / 80+ sharp.</li>
+            <li>Storage policy: raw snapshots pruned after 14 days. Significant / closing / bet-context snapshots kept forever.</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">Live for MLB end-to-end on this date. Schema additions for all sports so the next phase ports cleanly.</p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}
