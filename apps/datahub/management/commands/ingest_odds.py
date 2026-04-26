@@ -49,6 +49,40 @@ def _current_day_snapshot_count(sport: str) -> int:
     return -1
 
 
+def _find_mlb_games_without_fresh_odds(fresh_max_age_minutes: int = 180):
+    """Return (upcoming_pks, gap_pks) for MLB games in the next ~36h.
+
+    A gap game is one with NO OddsSnapshot captured within
+    `fresh_max_age_minutes`. The window starts 2h ago so a game that
+    just first-pitched still gets covered. Used by the per-game ESPN
+    fallback to fill exactly the holes primary missed — never the games
+    primary already covered.
+    """
+    from datetime import timedelta
+    from apps.mlb.models import Game, OddsSnapshot
+
+    now = timezone.now()
+    fresh_cutoff = now - timedelta(minutes=fresh_max_age_minutes)
+    window_start = now - timedelta(hours=2)
+    window_end = now + timedelta(hours=36)
+
+    upcoming = Game.objects.filter(
+        first_pitch__gte=window_start,
+        first_pitch__lte=window_end,
+    )
+    upcoming_pks = list(upcoming.values_list('pk', flat=True))
+
+    games_with_fresh = (
+        OddsSnapshot.objects
+        .filter(game_id__in=upcoming_pks, captured_at__gte=fresh_cutoff)
+        .values_list('game_id', flat=True)
+        .distinct()
+    )
+    fresh_set = set(games_with_fresh)
+    gap_pks = [pk for pk in upcoming_pks if pk not in fresh_set]
+    return upcoming_pks, gap_pks
+
+
 class Command(BaseCommand):
     help = 'Ingest odds data from external APIs'
 
@@ -136,41 +170,93 @@ class Command(BaseCommand):
                 ))
                 stats = {'created': 0, 'skipped': 0, 'status': 'error'}
 
-        # --- ESPN fallback for MLB ---------------------------------------
-        # Triggered on either of two conditions:
-        #   1. Primary returned 0 rows (original intent).
-        #   2. Primary created rows but TODAY's games specifically still have
-        #      zero odds — this happens when The Odds API covers a week-ahead
-        #      window but not today's already-started matchups. ESPN's
-        #      scoreboard is today-focused and often fills that gap.
-        today_count_after_primary = _current_day_snapshot_count(sport) if sport == 'mlb' else None
+        # --- ESPN per-game gap-fill for MLB ------------------------------
+        # Strictly stronger than the previous whole-slate trigger (which
+        # only fired when primary created 0 rows OR today_count was 0).
+        # This new trigger looks at the slate game-by-game: for every
+        # upcoming MLB game in the next 36h that has NO fresh OddsSnapshot
+        # in the last FRESH_ODDS_MAX_AGE_MINUTES window, ask ESPN to fill
+        # the gap.
+        #
+        # Behavior preserved vs the old code path:
+        #   - Primary returns 0 rows → ALL upcoming games are gaps → ESPN
+        #     runs and persists for all of them. Same end state as before.
+        #   - Primary returns rows for some games but not others → ESPN
+        #     fills exactly the missing games. NEW: previously these gaps
+        #     were silently left empty unless ALL of today's games were
+        #     missing (the prior trigger).
+        #   - Primary covers the slate completely → ESPN call is skipped.
+        #     NEW: saves a wasted scoreboard fetch.
+        #
+        # ESPN persist receives the gap pk set so it can NOT double-write
+        # for games primary already handled. This guarantees no duplicate
+        # snapshots regardless of how the slate splits.
         primary_created = (stats or {}).get('created', 0)
-        should_fall_back = sport == 'mlb' and (
-            primary_created == 0
-            or (today_count_after_primary is not None and today_count_after_primary == 0)
-        )
-        if should_fall_back:
-            try:
-                from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
-                reason = (
-                    'primary returned zero rows' if primary_created == 0
-                    else f'primary created {primary_created} rows but today has 0 snapshots'
+        primary_skipped = (stats or {}).get('skipped', 0)
+        api_filled_count = 0
+        espn_filled_count = 0
+        still_missing_count = 0
+        upcoming_total = 0
+
+        if sport == 'mlb':
+            fresh_window = getattr(settings, 'FRESH_ODDS_MAX_AGE_MINUTES', 180)
+            upcoming_pks, gap_pks = _find_mlb_games_without_fresh_odds(fresh_window)
+            upcoming_total = len(upcoming_pks)
+            api_filled_count = upcoming_total - len(gap_pks)
+
+            if gap_pks:
+                try:
+                    from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+                    self.stdout.write(
+                        f"ESPN per-game gap-fill triggered: {len(gap_pks)} of "
+                        f"{upcoming_total} upcoming games have no fresh primary odds"
+                    )
+                    provider = MLBEspnOddsProvider()
+                    raw = provider.fetch()
+                    normalized = provider.normalize(raw)
+                    fallback_stats = provider.persist(
+                        normalized, target_game_ids=set(gap_pks),
+                    )
+                    self.stdout.write(self.style.SUCCESS(
+                        f"ESPN gap-fill: {fallback_stats}"
+                    ))
+                    fallback_created = fallback_stats.get('created', 0)
+                    # Combine totals so the fail-fast check below sees the full
+                    # picture. We keep 'source' = primary+espn_fallback for trace.
+                    stats = {
+                        'status': 'ok' if (primary_created + fallback_created) else 'empty',
+                        'created': primary_created + fallback_created,
+                        'skipped': primary_skipped + fallback_stats.get('skipped', 0),
+                        'source': 'primary+espn_fallback',
+                    }
+                    # Re-query gaps to compute the post-fallback summary —
+                    # gives us the truth of what actually got filled vs is
+                    # still missing, instead of inferring from counts.
+                    _, post_gap_pks = _find_mlb_games_without_fresh_odds(fresh_window)
+                    espn_filled_count = len(gap_pks) - len(post_gap_pks)
+                    still_missing_count = len(post_gap_pks)
+                except Exception as e:
+                    logger.error(f"mlb_odds_espn_fallback_failed err={e}")
+                    self.stdout.write(self.style.WARNING(f"ESPN fallback failed: {e}"))
+                    still_missing_count = len(gap_pks)
+            else:
+                # No gaps — every upcoming game already has fresh primary
+                # odds. Skip the ESPN call entirely.
+                self.stdout.write(
+                    f"ESPN gap-fill skipped: all {upcoming_total} upcoming "
+                    f"games already have fresh primary odds"
                 )
-                self.stdout.write(f"ESPN fallback triggered: {reason}")
-                fallback_stats = MLBEspnOddsProvider().run()
-                self.stdout.write(self.style.SUCCESS(f"ESPN fallback: {fallback_stats}"))
-                # Combine with primary so the fail-fast check sees the full picture.
-                # Additive on created/skipped; keep 'source' as espn_fallback for tracing.
-                fallback_created = fallback_stats.get('created', 0)
-                stats = {
-                    'status': 'ok' if (primary_created + fallback_created) else 'empty',
-                    'created': primary_created + fallback_created,
-                    'skipped': (stats or {}).get('skipped', 0) + fallback_stats.get('skipped', 0),
-                    'source': 'primary+espn_fallback',
-                }
-            except Exception as e:
-                logger.error(f"mlb_odds_espn_fallback_failed err={e}")
-                self.stdout.write(self.style.WARNING(f"ESPN fallback failed: {e}"))
+
+            # ---- Required debug summary ---------------------------------
+            # Single line answers "did every game get odds?" — the spec
+            # requirement. ERROR level when still_missing > 0 so the row
+            # surfaces in the Ops Command Center recent-failures panel.
+            log_fn = logger.error if still_missing_count > 0 else logger.info
+            log_fn(
+                'mlb_odds_ingest_summary upcoming_games=%d '
+                'api_filled=%d espn_filled=%d still_missing=%d',
+                upcoming_total, api_filled_count, espn_filled_count, still_missing_count,
+            )
 
         # --- fail-fast integrity checks ----------------------------------
         created = (stats or {}).get('created', 0)

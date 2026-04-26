@@ -843,3 +843,379 @@ class MlbFuzzyRecoveryEndToEndTests(TestCase):
         team = _find_team('New York Yankees Inc')
         self.assertIsNotNone(team)
         self.assertEqual(team.name, 'New York Yankees')
+
+
+# =========================================================================
+# Per-game ESPN gap-fill — every game must end up with odds (API or ESPN)
+# =========================================================================
+
+import logging as _stdlib_logging_for_gap_tests
+
+
+class _MlbGapFillFixture:
+    """Shared MLB setup: 3 games, 6 teams, all in the upcoming window.
+
+    Mixed-slate tests pre-seed primary OddsSnapshot rows for some games
+    (simulating "primary covered them") and leave others empty
+    (simulating "primary missed them"). The gap-fill flow should then
+    fill ONLY the empty ones from the (mocked) ESPN scoreboard.
+    """
+
+    def make(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.OddsSnapshot = OddsSnapshot
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+
+        # Build 3 distinct matchups with full canonical names so the
+        # alias dict + DB iexact lookup succeed.
+        teams = {}
+        for n, slug in [
+            ('New York Yankees', 'new-york-yankees'),
+            ('Boston Red Sox', 'boston-red-sox'),
+            ('Los Angeles Dodgers', 'los-angeles-dodgers'),
+            ('San Francisco Giants', 'san-francisco-giants'),
+            ('Chicago Cubs', 'chicago-cubs'),
+            ('St. Louis Cardinals', 'st-louis-cardinals'),
+        ]:
+            teams[n] = Team.objects.create(name=n, slug=slug, conference=conf)
+        self.teams = teams
+
+        # All three games start in the next ~2-6 hours so they all sit
+        # inside the gap-detector's 36h upcoming window.
+        first_pitch = timezone.now() + timedelta(hours=3)
+        self.game_a = Game.objects.create(
+            home_team=teams['New York Yankees'], away_team=teams['Boston Red Sox'],
+            first_pitch=first_pitch,
+        )
+        self.game_b = Game.objects.create(
+            home_team=teams['Los Angeles Dodgers'], away_team=teams['San Francisco Giants'],
+            first_pitch=first_pitch + timedelta(minutes=15),
+        )
+        self.game_c = Game.objects.create(
+            home_team=teams['Chicago Cubs'], away_team=teams['St. Louis Cardinals'],
+            first_pitch=first_pitch + timedelta(minutes=30),
+        )
+        return self
+
+
+def _seed_primary_snapshot(game, sportsbook='DraftKings', minutes_ago=5):
+    """Simulate a row left by the primary Odds API path."""
+    from apps.mlb.models import OddsSnapshot
+    return OddsSnapshot.objects.create(
+        game=game,
+        captured_at=timezone.now() - timedelta(minutes=minutes_ago),
+        sportsbook=sportsbook,
+        market_home_win_prob=0.55,
+        moneyline_home=-150, moneyline_away=130,
+        odds_source='odds_api', source_quality='primary',
+    )
+
+
+def _espn_payload(home, away, commence_dt, ml_home=-130, ml_away=110):
+    """Minimal ESPN scoreboard event shaped like the real payload."""
+    return {
+        'date': commence_dt.isoformat().replace('+00:00', 'Z'),
+        'competitions': [{
+            'date': commence_dt.isoformat().replace('+00:00', 'Z'),
+            'competitors': [
+                {'homeAway': 'home', 'team': {'displayName': home}},
+                {'homeAway': 'away', 'team': {'displayName': away}},
+            ],
+            'odds': [{
+                'provider': {'name': 'DraftKings'},
+                'spread': -1.5,
+                'overUnder': 8.5,
+                'homeTeamOdds': {'moneyLine': ml_home},
+                'awayTeamOdds': {'moneyLine': ml_away},
+            }],
+        }],
+    }
+
+
+class MlbGapDetectionTests(TestCase):
+    """The gap detector underlies the whole feature: it must correctly
+    distinguish 'has fresh primary odds' from 'needs fallback'."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def test_no_snapshots_means_all_games_are_gaps(self):
+        from apps.datahub.management.commands.ingest_odds import (
+            _find_mlb_games_without_fresh_odds,
+        )
+        upcoming, gaps = _find_mlb_games_without_fresh_odds(180)
+        self.assertEqual(len(upcoming), 3)
+        self.assertEqual(set(gaps), {self.fx.game_a.pk, self.fx.game_b.pk, self.fx.game_c.pk})
+
+    def test_fresh_snapshot_removes_game_from_gaps(self):
+        from apps.datahub.management.commands.ingest_odds import (
+            _find_mlb_games_without_fresh_odds,
+        )
+        _seed_primary_snapshot(self.fx.game_a)  # 5 minutes ago — fresh
+        upcoming, gaps = _find_mlb_games_without_fresh_odds(180)
+        self.assertEqual(len(upcoming), 3)
+        self.assertEqual(set(gaps), {self.fx.game_b.pk, self.fx.game_c.pk})
+
+    def test_stale_snapshot_does_not_count(self):
+        from apps.datahub.management.commands.ingest_odds import (
+            _find_mlb_games_without_fresh_odds,
+        )
+        # Snapshot from 4 hours ago — older than the 180-min freshness
+        # window. Game must still appear in the gap list.
+        _seed_primary_snapshot(self.fx.game_a, minutes_ago=240)
+        _, gaps = _find_mlb_games_without_fresh_odds(180)
+        self.assertIn(self.fx.game_a.pk, gaps)
+
+    def test_far_future_games_excluded_from_window(self):
+        # A game starting in 5 days is NOT in the upcoming window even
+        # though it has no odds — gap-fill should ignore it (we don't
+        # waste an ESPN call on games not playing soon).
+        from apps.mlb.models import Game
+        far_game = Game.objects.create(
+            home_team=self.fx.teams['New York Yankees'],
+            away_team=self.fx.teams['Los Angeles Dodgers'],
+            first_pitch=timezone.now() + timedelta(days=5),
+        )
+        from apps.datahub.management.commands.ingest_odds import (
+            _find_mlb_games_without_fresh_odds,
+        )
+        upcoming, gaps = _find_mlb_games_without_fresh_odds(180)
+        self.assertNotIn(far_game.pk, upcoming)
+        self.assertNotIn(far_game.pk, gaps)
+
+
+class MlbEspnTargetFilterTests(TestCase):
+    """When persist is given target_game_ids, it must skip games NOT in
+    the set (so we don't double-write for games primary already covered)."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def test_filter_skips_non_target_games(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        commence = self.fx.game_a.first_pitch
+        normalized = [
+            {
+                'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+                'commence_time': commence.isoformat().replace('+00:00', 'Z'),
+                'sportsbook': 'DraftKings',
+                'moneyline_home': -130, 'moneyline_away': 110,
+                'spread': -1.5, 'total': 8.5,
+            },
+            {
+                'home_team': 'Los Angeles Dodgers', 'away_team': 'San Francisco Giants',
+                'commence_time': self.fx.game_b.first_pitch.isoformat().replace('+00:00', 'Z'),
+                'sportsbook': 'DraftKings',
+                'moneyline_home': -150, 'moneyline_away': 130,
+                'spread': -1.5, 'total': 8.5,
+            },
+        ]
+        # Only game_b is in the target set.
+        result = provider.persist(normalized, target_game_ids={self.fx.game_b.pk})
+        self.assertEqual(result['created'], 1)
+        # game_a's row was skipped because it's not in target_game_ids.
+        self.assertEqual(result['skip_reasons'].get('not_in_target_set'), 1)
+        # The DB confirms — only game_b has a fresh ESPN row.
+        from apps.mlb.models import OddsSnapshot
+        self.assertEqual(
+            OddsSnapshot.objects.filter(game=self.fx.game_a).count(), 0,
+        )
+        self.assertEqual(
+            OddsSnapshot.objects.filter(game=self.fx.game_b).count(), 1,
+        )
+
+    def test_filter_none_preserves_original_whole_slate_behavior(self):
+        # No filter → ESPN persists for every matched game (the original
+        # whole-slate fallback contract).
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -130, 'moneyline_away': 110,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        result = provider.persist(normalized)  # no filter
+        self.assertEqual(result['created'], 1)
+
+
+class MlbSourceMetadataTests(TestCase):
+    """Snapshots must carry odds_source + source_quality so the UI and
+    recommendation engine can tell primary apart from fallback."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def test_espn_snapshot_tagged_fallback(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -130, 'moneyline_away': 110,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        provider.persist(normalized)
+        snap = self.fx.OddsSnapshot.objects.get(game=self.fx.game_a)
+        self.assertEqual(snap.odds_source, 'espn')
+        self.assertEqual(snap.source_quality, 'fallback')
+
+    def test_primary_snapshot_tagged_primary(self):
+        from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
+        provider = MLBOddsProvider.__new__(MLBOddsProvider)
+        normalized = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -150, 'moneyline_away': 130,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        provider.persist(normalized)
+        snap = self.fx.OddsSnapshot.objects.get(game=self.fx.game_a)
+        self.assertEqual(snap.odds_source, 'odds_api')
+        self.assertEqual(snap.source_quality, 'primary')
+
+
+class MlbIngestOddsCommandGapFillTests(TestCase):
+    """End-to-end: the management command runs primary, identifies gaps,
+    runs ESPN with the gap filter, and emits the summary log."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def _run_command_with_mocks(self, primary_normalized, espn_events):
+        """Run ingest_odds with both providers patched.
+
+        primary_normalized: list of dicts the primary normalize() returns.
+        espn_events: list of ESPN event dicts the espn fetch() returns.
+        """
+        from io import StringIO
+        from django.core.management import call_command
+
+        with patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.fetch',
+            return_value=primary_normalized,  # raw == normalized in stub
+        ), patch(
+            'apps.datahub.providers.mlb.odds_provider.MLBOddsProvider.normalize',
+            side_effect=lambda raw: list(raw),
+        ), patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch',
+            return_value=espn_events,
+        ), self.settings(
+            LIVE_DATA_ENABLED=True,
+            LIVE_MLB_ENABLED=True,
+            ODDS_API_KEY='dummy-key-for-test',
+        ):
+            out = StringIO()
+            call_command('ingest_odds', sport='mlb', stdout=out)
+            return out.getvalue()
+
+    def test_mixed_slate_espn_fills_only_gaps(self):
+        # Primary returns odds for game_a only.
+        primary = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -150, 'moneyline_away': 130,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        # ESPN scoreboard returns ALL three games; gap-fill must restrict
+        # the persist to b and c (a is not a gap because primary covered).
+        espn_events = [
+            _espn_payload('New York Yankees', 'Boston Red Sox', self.fx.game_a.first_pitch),
+            _espn_payload('Los Angeles Dodgers', 'San Francisco Giants', self.fx.game_b.first_pitch),
+            _espn_payload('Chicago Cubs', 'St. Louis Cardinals', self.fx.game_c.first_pitch),
+        ]
+        self._run_command_with_mocks(primary, espn_events)
+
+        # game_a → 1 row, source=odds_api
+        a_snaps = self.fx.OddsSnapshot.objects.filter(game=self.fx.game_a)
+        self.assertEqual(a_snaps.count(), 1)
+        self.assertEqual(a_snaps.first().odds_source, 'odds_api')
+        self.assertEqual(a_snaps.first().source_quality, 'primary')
+
+        # games b, c → 1 row each, source=espn
+        for g in (self.fx.game_b, self.fx.game_c):
+            snaps = self.fx.OddsSnapshot.objects.filter(game=g)
+            self.assertEqual(snaps.count(), 1, msg=f'expected 1 row for {g}')
+            self.assertEqual(snaps.first().odds_source, 'espn')
+            self.assertEqual(snaps.first().source_quality, 'fallback')
+
+    def test_all_primary_skips_espn_call(self):
+        # Primary covers all 3 games; ESPN should NOT be called at all.
+        primary = []
+        for g in (self.fx.game_a, self.fx.game_b, self.fx.game_c):
+            primary.append({
+                'home_team': g.home_team.name, 'away_team': g.away_team.name,
+                'commence_time': g.first_pitch.isoformat().replace('+00:00', 'Z'),
+                'sportsbook': 'DraftKings',
+                'moneyline_home': -150, 'moneyline_away': 130,
+                'spread': -1.5, 'total': 8.5,
+            })
+        with patch(
+            'apps.datahub.providers.mlb.odds_espn_provider.MLBEspnOddsProvider.fetch'
+        ) as mock_espn_fetch:
+            self._run_command_with_mocks(primary, [])
+            mock_espn_fetch.assert_not_called()
+        # Each game has exactly 1 primary snapshot.
+        for g in (self.fx.game_a, self.fx.game_b, self.fx.game_c):
+            snaps = self.fx.OddsSnapshot.objects.filter(game=g)
+            self.assertEqual(snaps.count(), 1)
+            self.assertEqual(snaps.first().odds_source, 'odds_api')
+
+    def test_primary_zero_espn_fills_all(self):
+        # Primary returns nothing — ALL games are gaps — ESPN fills all.
+        # This is the "old whole-slate fallback" scenario; the new
+        # per-game logic must preserve it.
+        espn_events = [
+            _espn_payload('New York Yankees', 'Boston Red Sox', self.fx.game_a.first_pitch),
+            _espn_payload('Los Angeles Dodgers', 'San Francisco Giants', self.fx.game_b.first_pitch),
+            _espn_payload('Chicago Cubs', 'St. Louis Cardinals', self.fx.game_c.first_pitch),
+        ]
+        self._run_command_with_mocks([], espn_events)
+        for g in (self.fx.game_a, self.fx.game_b, self.fx.game_c):
+            snaps = self.fx.OddsSnapshot.objects.filter(game=g)
+            self.assertEqual(snaps.count(), 1, msg=f'expected ESPN fill for {g}')
+            self.assertEqual(snaps.first().odds_source, 'espn')
+            self.assertEqual(snaps.first().source_quality, 'fallback')
+
+    def test_summary_log_emitted(self):
+        # The required debug summary line: total / api / espn / missing.
+        primary = [{
+            'home_team': 'New York Yankees', 'away_team': 'Boston Red Sox',
+            'commence_time': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -150, 'moneyline_away': 130,
+            'spread': -1.5, 'total': 8.5,
+        }]
+        espn_events = [
+            _espn_payload('Los Angeles Dodgers', 'San Francisco Giants', self.fx.game_b.first_pitch),
+            _espn_payload('Chicago Cubs', 'St. Louis Cardinals', self.fx.game_c.first_pitch),
+        ]
+        with self.assertLogs('apps.datahub.management.commands.ingest_odds', level='INFO') as cm:
+            self._run_command_with_mocks(primary, espn_events)
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_ingest_summary', joined)
+        self.assertIn('upcoming_games=3', joined)
+        self.assertIn('api_filled=1', joined)
+        self.assertIn('espn_filled=2', joined)
+        self.assertIn('still_missing=0', joined)
+
+    def test_summary_logs_error_when_missing(self):
+        # A game that ESPN can't fill (mismatched team names) must end up
+        # in still_missing — and the summary line must be at ERROR level
+        # so it surfaces in the Ops dashboard.
+        primary = []
+        espn_events = [
+            _espn_payload('New York Yankees', 'Boston Red Sox', self.fx.game_a.first_pitch),
+            # game_b and game_c have no ESPN entry → still_missing = 2
+        ]
+        with self.assertLogs('apps.datahub.management.commands.ingest_odds', level='ERROR') as cm:
+            self._run_command_with_mocks(primary, espn_events)
+        # Reaching here proves an ERROR record was emitted.
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_ingest_summary', joined)
+        self.assertIn('still_missing=', joined)

@@ -246,7 +246,18 @@ class MLBEspnOddsProvider(AbstractProvider):
         logger.info(f"mlb_odds_espn_normalize events={len(raw) if raw else 0} out={len(normalized)}")
         return normalized
 
-    def persist(self, normalized):
+    def persist(self, normalized, target_game_ids=None):
+        """Persist normalized ESPN odds rows.
+
+        target_game_ids: when provided (a set or list of Game PKs), ONLY
+        persist for games whose PK is in the set. Used by the per-game
+        gap-fill flow in ingest_odds — we run ESPN to top up games the
+        primary provider didn't cover, and we explicitly do NOT want to
+        write a second ESPN snapshot for games that already have a fresh
+        primary one. Default None preserves the original whole-slate
+        behavior so existing call sites still work.
+        """
+        target_game_ids = set(target_game_ids) if target_game_ids is not None else None
         created = skipped = 0
         skip_reasons: dict[str, int] = {}
         now = timezone.now()
@@ -301,6 +312,20 @@ class MLBEspnOddsProvider(AbstractProvider):
                 )
                 continue
 
+            # Per-game gap-fill filter: when caller provided target_game_ids,
+            # silently skip games already covered by primary. This prevents
+            # duplicate snapshots — primary already wrote one for these games
+            # and we only want ESPN rows for the actual gaps. Logged at INFO
+            # so the deploy log proves the filter is doing its job.
+            if target_game_ids is not None and game.pk not in target_game_ids:
+                skipped += 1
+                skip_reasons['not_in_target_set'] = skip_reasons.get('not_in_target_set', 0) + 1
+                logger.info(
+                    f"mlb_odds_espn_persist_skip reason=not_in_target_set "
+                    f"game={game.id} home={home.name} away={away.name}"
+                )
+                continue
+
             home_prob = american_to_prob(item.get('moneyline_home'))
             if home_prob is None:
                 skipped += 1
@@ -319,6 +344,13 @@ class MLBEspnOddsProvider(AbstractProvider):
                 total=item.get('total'),
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
+                # Tag the source so the UI and recommendation engine can
+                # tell ESPN-fallback rows apart from primary ones. Without
+                # this, fallback snapshots silently inherit the model's
+                # default 'odds_api'/'primary' which would mislead the
+                # whole downstream pipeline.
+                odds_source='espn',
+                source_quality='fallback',
             )
             created += 1
 

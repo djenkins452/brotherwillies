@@ -456,6 +456,13 @@ class MLBOddsProvider(AbstractProvider):
                 total=item.get('total'),
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
+                # Explicit even though these match the model defaults — keeps
+                # the contract obvious: this row came from The Odds API and
+                # is primary-quality. The ESPN persist path tags rows
+                # 'espn'/'fallback' so the UI and recommendation engine
+                # can distinguish source without joining tables.
+                odds_source='odds_api',
+                source_quality='primary',
             )
             matched_matchups.add((api_home, api_away))
             # Movement intelligence — silently no-ops on the first snapshot

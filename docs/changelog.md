@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-04-26 - Per-game ESPN gap-fill (every MLB game gets odds)
+
+**Summary:** Replaced the all-or-nothing whole-slate ESPN trigger with a per-game gap-fill: after the primary Odds API runs, identify upcoming MLB games that still have no fresh snapshot, and fall back to ESPN to fill exactly those games (no double-writes for games primary already covered).
+
+### Behavior
+- After primary persist, query upcoming MLB games (next 36h, starting up to 2h ago) that have no `OddsSnapshot` captured within `FRESH_ODDS_MAX_AGE_MINUTES` (180min default).
+- If gaps exist, run ESPN scoreboard ingest with a `target_game_ids` filter — only persists for the gap games.
+- If no gaps, ESPN call is skipped entirely (saves the wasted scoreboard fetch on healthy days).
+- Old whole-slate trigger (`primary_created == 0` OR `today_count == 0`) is subsumed by the new logic — when primary returns 0, ALL upcoming games are gaps, ESPN fills them all. Same end state, zero regression.
+
+### Source metadata is now tagged on write
+- Primary path: `odds_source='odds_api'`, `source_quality='primary'`
+- ESPN path: `odds_source='espn'`, `source_quality='fallback'`
+- Both were silently defaulting to the model defaults before — ESPN snapshots were misclassified as "primary." This is now fixed at write time so the UI and recommendation engine can read source metadata directly off the row.
+
+### Required debug summary (the "no more silent fails" line)
+On every MLB ingest run, one log line answers the spec's contract:
+```
+mlb_odds_ingest_summary upcoming_games=N api_filled=X espn_filled=Y still_missing=Z
+```
+- `still_missing > 0` → logged at **ERROR** level (surfaces in the Ops Command Center recent-failures panel automatically).
+- `still_missing == 0` → logged at INFO. Healthy day, healthy log.
+
+### Tests (13 new in `apps.datahub.tests`)
+- `MlbGapDetectionTests` (4) — empty DB, fresh snapshot removes from gaps, stale doesn't count, far-future games excluded from upcoming window.
+- `MlbEspnTargetFilterTests` (2) — filter skips non-target games (no double-writes), `None` filter preserves whole-slate behavior.
+- `MlbSourceMetadataTests` (2) — ESPN tagged `espn`/`fallback`, primary tagged `odds_api`/`primary`.
+- `MlbIngestOddsCommandGapFillTests` (5) — mixed slate fills only gaps; all-primary skips ESPN call entirely (mock asserts `fetch` not called); primary returns 0 → ESPN fills all (whole-slate behavior preserved); summary log emitted with correct counts; missing games trigger ERROR-level summary.
+
+512 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- Edited: `apps/datahub/management/commands/ingest_odds.py`, `apps/datahub/providers/mlb/odds_provider.py`, `apps/datahub/providers/mlb/odds_espn_provider.py`, `apps/datahub/tests.py`.
+- No model changes. No UI changes. No scheduling changes.
+
+---
+
 ## 2026-04-26 - MLB odds: silent-data-loss fix + comprehensive alias coverage
 
 **Summary:** A prod incident showed only 1 of 16 MLB games getting odds. The cause was almost certainly team-name variants the alias dict didn't recognize, and the silence was because skipped rows were logged at INFO with API-only names — easy to miss in deploy logs. This commit makes that class of failure visible AND much harder to trigger.
