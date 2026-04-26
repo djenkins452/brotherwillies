@@ -49,6 +49,20 @@ class Game(models.Model):
         return f"{self.away_team} @ {self.home_team}"
 
 
+SNAPSHOT_TYPE_CHOICES = [
+    ('raw', 'Raw Pull'),
+    ('significant', 'Significant Move'),
+    ('closing', 'Closing Line'),
+    ('bet_context', 'Bet Context'),
+]
+MOVEMENT_CLASS_CHOICES = [
+    ('noise', 'Noise'),
+    ('moderate', 'Moderate'),
+    ('strong', 'Strong'),
+    ('sharp', 'Sharp Action'),
+]
+
+
 class OddsSnapshot(models.Model):
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name='odds_snapshots')
     captured_at = models.DateTimeField()
@@ -59,9 +73,21 @@ class OddsSnapshot(models.Model):
     total = models.FloatField(null=True, blank=True)
     moneyline_home = models.IntegerField(null=True, blank=True)
     moneyline_away = models.IntegerField(null=True, blank=True)
+    # See apps.mlb.models.OddsSnapshot for the full doc on these three fields.
+    snapshot_type = models.CharField(
+        max_length=20, choices=SNAPSHOT_TYPE_CHOICES, default='raw', db_index=True,
+    )
+    movement_score = models.FloatField(null=True, blank=True)
+    movement_class = models.CharField(
+        max_length=10, choices=MOVEMENT_CLASS_CHOICES, null=True, blank=True,
+    )
 
     class Meta:
         ordering = ['-captured_at']
+        indexes = [
+            models.Index(fields=['game', '-captured_at']),
+            models.Index(fields=['snapshot_type', '-captured_at']),
+        ]
 
     def __str__(self):
         return f"Odds for {self.game}"

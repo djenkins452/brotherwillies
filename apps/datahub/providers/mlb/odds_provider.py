@@ -235,7 +235,7 @@ class MLBOddsProvider(AbstractProvider):
                 )
                 continue
 
-            OddsSnapshot.objects.create(
+            snapshot = OddsSnapshot.objects.create(
                 game=game,
                 captured_at=now,
                 sportsbook=item['sportsbook'],
@@ -245,6 +245,13 @@ class MLBOddsProvider(AbstractProvider):
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
             )
+            # Movement intelligence — silently no-ops on the first snapshot
+            # for a (game, sportsbook). When a follow-up pull crosses the
+            # significance threshold, this upgrades snapshot_type to
+            # "significant" and persists movement_score + movement_class.
+            # Exception-safe: telemetry can't break ingestion.
+            from apps.core.services.odds_movement import apply_movement_intelligence
+            apply_movement_intelligence(OddsSnapshot, snapshot)
             created += 1
 
         status = 'ok' if created > 0 else 'empty'

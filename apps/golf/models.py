@@ -39,6 +39,20 @@ class Golfer(models.Model):
         super().save(*args, **kwargs)
 
 
+SNAPSHOT_TYPE_CHOICES = [
+    ('raw', 'Raw Pull'),
+    ('significant', 'Significant Move'),
+    ('closing', 'Closing Line'),
+    ('bet_context', 'Bet Context'),
+]
+MOVEMENT_CLASS_CHOICES = [
+    ('noise', 'Noise'),
+    ('moderate', 'Moderate'),
+    ('strong', 'Strong'),
+    ('sharp', 'Sharp Action'),
+]
+
+
 class GolfOddsSnapshot(models.Model):
     event = models.ForeignKey(GolfEvent, on_delete=models.CASCADE, related_name='odds_snapshots')
     golfer = models.ForeignKey(Golfer, on_delete=models.CASCADE, related_name='odds_snapshots')
@@ -46,9 +60,21 @@ class GolfOddsSnapshot(models.Model):
     sportsbook = models.CharField(max_length=50, default='consensus')
     outright_odds = models.IntegerField(help_text='American format odds')
     implied_prob = models.FloatField()
+    # See apps.mlb.models.OddsSnapshot for the full doc on these three fields.
+    snapshot_type = models.CharField(
+        max_length=20, choices=SNAPSHOT_TYPE_CHOICES, default='raw', db_index=True,
+    )
+    movement_score = models.FloatField(null=True, blank=True)
+    movement_class = models.CharField(
+        max_length=10, choices=MOVEMENT_CLASS_CHOICES, null=True, blank=True,
+    )
 
     class Meta:
         ordering = ['-captured_at']
+        indexes = [
+            models.Index(fields=['event', 'golfer', '-captured_at']),
+            models.Index(fields=['snapshot_type', '-captured_at']),
+        ]
 
     def __str__(self):
         return f"{self.golfer} @ {self.event} ({self.outright_odds})"

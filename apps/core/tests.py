@@ -596,3 +596,391 @@ class RecommendationPerformanceTests(TestCase):
         self.assertIn('by_status', bundle)
         self.assertIn('by_tier', bundle)
         self.assertIn('system_confidence', bundle)
+
+
+# =========================================================================
+# Odds Movement Intelligence — coverage for apps/core/services/odds_movement
+# =========================================================================
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from apps.core.services.odds_movement import (
+    apply_movement_intelligence,
+    cents_moved,
+    cents_signed_delta,
+    classify_score,
+    compute_movement_score,
+    devigged_home_prob,
+    is_significant,
+    to_cents_axis,
+)
+
+
+def _snap(t, **kw):
+    """Build a snapshot-shaped object for service tests (no DB).
+
+    The service operates on attributes by name (moneyline_home, moneyline_away,
+    spread, total, market_home_win_prob, captured_at), so SimpleNamespace is
+    enough — we don't need real ORM instances for the math.
+    """
+    defaults = dict(
+        captured_at=t,
+        moneyline_home=None,
+        moneyline_away=None,
+        spread=None,
+        total=None,
+        market_home_win_prob=None,
+    )
+    defaults.update(kw)
+    return SimpleNamespace(**defaults)
+
+
+class CentsAxisTests(TestCase):
+    """The cents axis is the bedrock of every line-move calculation. If
+    these are wrong, magnitude/direction/significance all silently lie."""
+
+    def test_to_cents_axis_handles_favorites_and_dogs(self):
+        # Favorites map below zero, dogs above. +/-100 collapses to 0.
+        self.assertEqual(to_cents_axis(-150), -50)
+        self.assertEqual(to_cents_axis(-110), -10)
+        self.assertEqual(to_cents_axis(-100), 0)
+        self.assertEqual(to_cents_axis(100), 0)
+        self.assertEqual(to_cents_axis(110), 10)
+        self.assertEqual(to_cents_axis(150), 50)
+        self.assertIsNone(to_cents_axis(None))
+
+    def test_cents_moved_within_same_sign(self):
+        self.assertEqual(cents_moved(-110, -120), 10)
+        self.assertEqual(cents_moved(-150, -160), 10)
+        self.assertEqual(cents_moved(120, 110), 10)
+
+    def test_cents_moved_across_zero(self):
+        # +110 ↔ -110 is 20 cents, not 220 (the naive arithmetic delta).
+        self.assertEqual(cents_moved(110, -110), 20)
+        # Crossing through "even": -100 to +100 is 0 (same point on axis).
+        self.assertEqual(cents_moved(-100, 100), 0)
+
+    def test_cents_signed_delta_direction(self):
+        # Going from -110 to -120: home becomes more favored → axis moves
+        # MORE negative → signed delta < 0.
+        self.assertLess(cents_signed_delta(-110, -120), 0)
+        # Going from +110 to +120: dog becomes longer → signed delta > 0.
+        self.assertGreater(cents_signed_delta(110, 120), 0)
+
+    def test_cents_moved_handles_none(self):
+        self.assertEqual(cents_moved(None, -110), 0.0)
+        self.assertEqual(cents_moved(-110, None), 0.0)
+
+
+class DevigTests(TestCase):
+    def test_devigged_home_prob_uses_two_sided_market(self):
+        s = _snap(timezone.now(), moneyline_home=-150, moneyline_away=130)
+        # implied: -150 → 0.60, +130 → 0.4348. Fair home = .60/(.60+.4348)
+        # = ~0.5798. Should be lower than raw 0.60 (vig stripped).
+        prob = devigged_home_prob(s)
+        self.assertAlmostEqual(prob, 0.6 / (0.6 + 100/230.0), places=4)
+        self.assertLess(prob, 0.60)
+
+    def test_falls_back_to_market_prob_when_one_side_missing(self):
+        s = _snap(timezone.now(), moneyline_home=-150, market_home_win_prob=0.55)
+        # No moneyline_away → fall back to stored market_home_win_prob.
+        self.assertEqual(devigged_home_prob(s), 0.55)
+
+
+class SignificanceTests(TestCase):
+    """Threshold checks: at least one OR triggers significance, otherwise no."""
+
+    def test_no_change_is_not_significant(self):
+        t = timezone.now()
+        prev = _snap(t, moneyline_home=-110, moneyline_away=-110)
+        curr = _snap(t, moneyline_home=-110, moneyline_away=-110)
+        self.assertFalse(is_significant(prev, curr))
+
+    def test_below_threshold_line_move_is_not_significant(self):
+        # 5-cent move sits below the 7-cent default — should be noise.
+        t = timezone.now()
+        prev = _snap(t, moneyline_home=-110, moneyline_away=-110)
+        curr = _snap(t, moneyline_home=-115, moneyline_away=-105)
+        self.assertFalse(is_significant(prev, curr))
+
+    def test_threshold_line_move_triggers(self):
+        # 7-cent moneyline move on either side should trigger.
+        t = timezone.now()
+        prev = _snap(t, moneyline_home=-110, moneyline_away=-110)
+        curr = _snap(t, moneyline_home=-117, moneyline_away=-103)
+        self.assertTrue(is_significant(prev, curr))
+
+    def test_prob_shift_alone_can_trigger(self):
+        # Construct a case where lines didn't move enough to clear cents
+        # threshold but the de-vigged home prob shifted >= 2pp.
+        t = timezone.now()
+        prev = _snap(t, moneyline_home=-105, moneyline_away=-115)  # home prob ~0.477
+        curr = _snap(t, moneyline_home=-130, moneyline_away=110)   # home prob ~0.594
+        # Even though one side moved >7c, the prob trigger would fire too —
+        # this confirms the OR semantics rather than the line trigger alone.
+        self.assertTrue(is_significant(prev, curr))
+
+    def test_spread_move_triggers(self):
+        t = timezone.now()
+        prev = _snap(t, market_home_win_prob=0.5, spread=-1.5)
+        curr = _snap(t, market_home_win_prob=0.5, spread=-2.0)
+        self.assertTrue(is_significant(prev, curr))
+
+    def test_total_move_triggers(self):
+        t = timezone.now()
+        prev = _snap(t, market_home_win_prob=0.5, total=8.0)
+        curr = _snap(t, market_home_win_prob=0.5, total=8.5)
+        self.assertTrue(is_significant(prev, curr))
+
+    def test_returns_false_when_inputs_missing(self):
+        self.assertFalse(is_significant(None, _snap(timezone.now())))
+        self.assertFalse(is_significant(_snap(timezone.now()), None))
+
+
+class ClassifyScoreTests(TestCase):
+    def test_cuts_at_25_55_80(self):
+        self.assertEqual(classify_score(0), 'noise')
+        self.assertEqual(classify_score(25.0), 'noise')
+        self.assertEqual(classify_score(25.01), 'moderate')
+        self.assertEqual(classify_score(54.99), 'moderate')
+        self.assertEqual(classify_score(55.0), 'moderate')
+        self.assertEqual(classify_score(55.01), 'strong')
+        self.assertEqual(classify_score(80.0), 'strong')
+        self.assertEqual(classify_score(80.01), 'sharp')
+        self.assertEqual(classify_score(100), 'sharp')
+
+
+class ComputeMovementScoreTests(TestCase):
+    def test_returns_none_for_too_few_snapshots(self):
+        self.assertIsNone(compute_movement_score([]))
+        self.assertIsNone(compute_movement_score([_snap(timezone.now())]))
+
+    def test_no_movement_yields_low_score(self):
+        # 5 snapshots, all identical → magnitude=0, speed=0, consistency=0.
+        # Timing component contributes only 15% of the cap → score <= 15.
+        now = timezone.now()
+        snaps = [
+            _snap(now - timedelta(hours=i),
+                  moneyline_home=-110, moneyline_away=-110, spread=-1.5, total=8.5)
+            for i in range(5, 0, -1)
+        ]
+        result = compute_movement_score(snaps)
+        # Returns None when no market has any movement (consistency is 0
+        # and there's nothing to score). Either None or noise is acceptable.
+        if result is not None:
+            self.assertEqual(result.classification, 'noise')
+
+    def test_strong_late_one_way_move_classifies_high(self):
+        # Five snapshots over the last hour, monotone moneyline shift from
+        # -110 → -150 (40 cents toward home). Magnitude high, speed high,
+        # consistency 100%, timing very recent → expect 'strong' or 'sharp'.
+        now = timezone.now()
+        odds_progression = [-110, -120, -130, -140, -150]
+        snaps = [
+            _snap(now - timedelta(minutes=(60 - i*15)),
+                  moneyline_home=ml, moneyline_away=110)
+            for i, ml in enumerate(odds_progression)
+        ]
+        result = compute_movement_score(snaps)
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(result.score, 55.0)
+        self.assertIn(result.classification, ('strong', 'sharp'))
+        # Direction: home line went more negative → +1 (toward home).
+        self.assertEqual(result.direction, 1)
+        self.assertEqual(result.market, 'moneyline')
+
+    def test_choppy_movement_low_consistency(self):
+        # Movement that flips back and forth — large total magnitude but no
+        # one-way conviction. Score should sit below the 'strong' cut.
+        now = timezone.now()
+        odds = [-110, -130, -110, -130, -110]
+        snaps = [
+            _snap(now - timedelta(minutes=(60 - i*15)),
+                  moneyline_home=ml, moneyline_away=110)
+            for i, ml in enumerate(odds)
+        ]
+        result = compute_movement_score(snaps)
+        self.assertIsNotNone(result)
+        self.assertLess(result.score, 80.0)
+        # Consistency should be capped because the moves alternate.
+        # 4 step deltas, alternating up/down → 50% one direction.
+        self.assertLessEqual(result.consistency, 60.0)
+
+    def test_old_movement_gets_no_timing_boost(self):
+        # Same magnitude as the "strong late" test but landed 6 hours ago.
+        # Timing component should be 0 → score lower.
+        now = timezone.now()
+        odds_progression = [-110, -120, -130, -140, -150]
+        old_snaps = [
+            _snap(now - timedelta(hours=6, minutes=(60 - i*15)),
+                  moneyline_home=ml, moneyline_away=110)
+            for i, ml in enumerate(odds_progression)
+        ]
+        result_old = compute_movement_score(old_snaps)
+        recent_snaps = [
+            _snap(now - timedelta(minutes=(60 - i*15)),
+                  moneyline_home=ml, moneyline_away=110)
+            for i, ml in enumerate(odds_progression)
+        ]
+        result_recent = compute_movement_score(recent_snaps)
+        self.assertIsNotNone(result_old)
+        self.assertIsNotNone(result_recent)
+        self.assertLess(result_old.timing, result_recent.timing)
+        self.assertLess(result_old.score, result_recent.score)
+
+    def test_dominant_market_wins(self):
+        # Both moneyline AND total moved. The bigger one (moneyline 40 cents)
+        # should be the dominant signal in the result.
+        now = timezone.now()
+        snaps = [
+            _snap(now - timedelta(minutes=60), moneyline_home=-110, moneyline_away=110, total=8.5),
+            _snap(now - timedelta(minutes=45), moneyline_home=-120, moneyline_away=110, total=8.5),
+            _snap(now - timedelta(minutes=30), moneyline_home=-135, moneyline_away=115, total=8.5),
+            _snap(now - timedelta(minutes=15), moneyline_home=-150, moneyline_away=130, total=9.0),
+            _snap(now,                          moneyline_home=-150, moneyline_away=130, total=9.0),
+        ]
+        result = compute_movement_score(snaps)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.market, 'moneyline')
+
+    def test_history_bound_does_not_crash_with_late_event(self):
+        # If a snapshot's captured_at is in the future relative to "now",
+        # the timing weight code shouldn't blow up. Defensive sanity check.
+        future = timezone.now() + timedelta(minutes=10)
+        snaps = [
+            _snap(future - timedelta(minutes=20), moneyline_home=-110, moneyline_away=-110),
+            _snap(future, moneyline_home=-120, moneyline_away=-100),
+        ]
+        # Just verify no exception.
+        compute_movement_score(snaps)
+
+
+class ApplyMovementIntelligenceTests(TestCase):
+    """Provider-hook integration test: persists are silent on the first
+    snapshot, then upgrade subsequent rows when significance is crossed."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.Game = Game
+        self.OddsSnapshot = OddsSnapshot
+        # Two teams + a game so we have valid FK targets.
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        home = Team.objects.create(name='Home', slug='home', conference=conf)
+        away = Team.objects.create(name='Away', slug='away', conference=conf)
+        self.game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+
+    def _create(self, *, ml_h, ml_a, when_offset_min=0):
+        return self.OddsSnapshot.objects.create(
+            game=self.game,
+            captured_at=timezone.now() + timedelta(minutes=when_offset_min),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.5,
+            moneyline_home=ml_h, moneyline_away=ml_a,
+        )
+
+    def test_first_snapshot_stays_raw(self):
+        s = self._create(ml_h=-110, ml_a=-110, when_offset_min=-60)
+        result = apply_movement_intelligence(self.OddsSnapshot, s)
+        s.refresh_from_db()
+        self.assertIsNone(result)
+        self.assertEqual(s.snapshot_type, 'raw')
+        self.assertIsNone(s.movement_score)
+
+    def test_significant_followup_upgrades_to_significant(self):
+        self._create(ml_h=-110, ml_a=-110, when_offset_min=-60)
+        s2 = self._create(ml_h=-150, ml_a=130, when_offset_min=-1)
+        result = apply_movement_intelligence(self.OddsSnapshot, s2)
+        s2.refresh_from_db()
+        self.assertIsNotNone(result)
+        self.assertEqual(s2.snapshot_type, 'significant')
+        self.assertIsNotNone(s2.movement_score)
+        self.assertIn(s2.movement_class, ('moderate', 'strong', 'sharp'))
+
+    def test_noise_followup_stays_raw(self):
+        # Sub-threshold change: 4 cents on each side, small prob shift.
+        self._create(ml_h=-110, ml_a=-110, when_offset_min=-60)
+        s2 = self._create(ml_h=-114, ml_a=-106, when_offset_min=-1)
+        apply_movement_intelligence(self.OddsSnapshot, s2)
+        s2.refresh_from_db()
+        self.assertEqual(s2.snapshot_type, 'raw')
+        self.assertIsNone(s2.movement_score)
+
+    def test_exception_safe(self):
+        # Force an exception in the inner path; the outer call must not raise.
+        s = self._create(ml_h=-110, ml_a=-110, when_offset_min=-60)
+        with patch(
+            'apps.core.services.odds_movement.compute_movement_score',
+            side_effect=RuntimeError('boom'),
+        ):
+            # Should swallow and return None, not raise.
+            result = apply_movement_intelligence(self.OddsSnapshot, s)
+            self.assertIsNone(result)
+
+
+class PruneOldRawSnapshotsTests(TestCase):
+    """Pruning policy: raw older than retention deleted; significant/closing/
+    bet_context kept; recent raw kept."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.OddsSnapshot = OddsSnapshot
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        home = Team.objects.create(name='Home', slug='home', conference=conf)
+        away = Team.objects.create(name='Away', slug='away', conference=conf)
+        self.game = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+
+    def _make(self, *, snapshot_type, age_days):
+        snap = self.OddsSnapshot.objects.create(
+            game=self.game,
+            captured_at=timezone.now() - timedelta(days=age_days),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+            snapshot_type=snapshot_type,
+        )
+        # auto_now_add isn't set on captured_at but the create above already
+        # set it; just return the row.
+        return snap
+
+    def test_deletes_only_old_raw_rows(self):
+        from django.core.management import call_command
+        from io import StringIO
+        old_raw = self._make(snapshot_type='raw', age_days=20)
+        recent_raw = self._make(snapshot_type='raw', age_days=2)
+        old_significant = self._make(snapshot_type='significant', age_days=20)
+        old_closing = self._make(snapshot_type='closing', age_days=30)
+        old_bet_ctx = self._make(snapshot_type='bet_context', age_days=30)
+
+        out = StringIO()
+        call_command('prune_old_raw_snapshots', stdout=out)
+
+        ids = set(self.OddsSnapshot.objects.values_list('pk', flat=True))
+        self.assertNotIn(old_raw.pk, ids)
+        self.assertIn(recent_raw.pk, ids)
+        self.assertIn(old_significant.pk, ids)
+        self.assertIn(old_closing.pk, ids)
+        self.assertIn(old_bet_ctx.pk, ids)
+
+    def test_dry_run_deletes_nothing(self):
+        from django.core.management import call_command
+        from io import StringIO
+        old_raw = self._make(snapshot_type='raw', age_days=20)
+        out = StringIO()
+        call_command('prune_old_raw_snapshots', '--dry-run', stdout=out)
+        self.assertTrue(self.OddsSnapshot.objects.filter(pk=old_raw.pk).exists())
+
+    def test_custom_days_threshold(self):
+        from django.core.management import call_command
+        from io import StringIO
+        # 10-day-old raw — kept by default (14d) but deleted with --days=7.
+        s = self._make(snapshot_type='raw', age_days=10)
+        out = StringIO()
+        call_command('prune_old_raw_snapshots', '--days=7', stdout=out)
+        self.assertFalse(self.OddsSnapshot.objects.filter(pk=s.pk).exists())

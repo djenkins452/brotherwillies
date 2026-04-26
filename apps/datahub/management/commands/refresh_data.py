@@ -104,6 +104,15 @@ class Command(BaseCommand):
                 _emit(f'settle_mockbets failed: {e}')
                 sport_failures.append(('settle_mockbets', str(e)))
 
+            # Prune old raw OddsSnapshot rows. Cheap when there's nothing to
+            # delete; protects the DB from runaway growth as we now keep
+            # every API pull (not just one per day per game).
+            try:
+                call_command('prune_old_raw_snapshots')
+            except Exception as e:
+                _emit(f'prune_old_raw_snapshots failed: {e}')
+                sport_failures.append(('prune_old_raw_snapshots', str(e)))
+
             _emit('Refresh complete')
 
             log.summary = (
