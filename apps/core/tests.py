@@ -1684,3 +1684,48 @@ class EspnProviderIsDerivedTaggingTests(TestCase):
         self.assertEqual(rec.status, STATUS_NOT_RECOMMENDED)
         self.assertEqual(rec.status_reason, 'derived_odds')
         self.assertEqual(rec.tier, 'blocked')
+
+
+class NoMultiLineDjangoCommentsTests(TestCase):
+    """Permanent guard: scans every .html file under templates/ and fails
+    if it finds a multi-line {# … #} comment.
+
+    Background: Django's {# #} comment syntax only accepts a SINGLE
+    physical line. As soon as you add a newline inside it, the engine
+    no longer recognises it as a comment and renders the literal text
+    on the page. We've shipped this bug 4 times across separate
+    surfaces (MLB hub, focus banner, base.html status dot, and the
+    Source-Aware tile/section blocks). This test fires on every test
+    run so a 5th time can't reach prod.
+
+    Multi-line comments must use {% comment %}…{% endcomment %} (which
+    DOES support newlines).
+    """
+
+    def test_no_multi_line_django_comments_in_templates(self):
+        import re
+        import pathlib
+        from django.conf import settings
+
+        templates_root = pathlib.Path(settings.BASE_DIR) / 'templates'
+        offenders = []
+        for path in templates_root.rglob('*.html'):
+            text = path.read_text()
+            for m in re.finditer(r'\{#', text):
+                end = text.find('#}', m.start())
+                if end == -1:
+                    continue
+                chunk = text[m.start():end + 2]
+                if '\n' in chunk:
+                    line_no = text[:m.start()].count('\n') + 1
+                    rel = path.relative_to(settings.BASE_DIR)
+                    offenders.append(f'{rel}:{line_no}')
+
+        if offenders:
+            msg = (
+                'Multi-line Django {# #} comments found — these render as '
+                "literal text on the page because Django's {# #} syntax is "
+                'single-line only. Switch to {% comment %}…{% endcomment %}.\n'
+                'Offenders:\n  ' + '\n  '.join(offenders)
+            )
+            self.fail(msg)

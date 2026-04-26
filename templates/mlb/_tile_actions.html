@@ -2,9 +2,11 @@
 {% load mlb_reasons %}
 {% if s.actions or user.is_authenticated %}
 <div class="mlb-tile__actions">
-  {# Source-Aware Betting badge. Verified or ESPN — never derived
-     (those are filtered out of every primary surface upstream). The
-     badge anchors the user's trust in the line they're seeing. #}
+  {% comment %}
+    Source-Aware Betting badge. Verified or ESPN — never derived
+    (those are filtered out of every primary surface upstream). The
+    badge anchors the user's trust in the line they're seeing.
+  {% endcomment %}
   {% if s.recommendation %}
     {% if s.recommendation.is_secondary %}
       <span class="mlb-source-badge mlb-source-badge--espn"

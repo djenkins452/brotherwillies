@@ -214,10 +214,12 @@
       </section>
     {% endif %}
 
-    {# Section 2b — 🟡 Recommended Bets (ESPN Fallback) — Source-Aware Betting.
-       Only renders when there are secondary recommendations. The header
-       note tells users explicitly that this set uses lower-trust data so
-       they don't conflate these picks with the verified set above. #}
+    {% comment %}
+      Section 2b — 🟡 Recommended Bets (ESPN Fallback) — Source-Aware Betting.
+      Only renders when there are secondary recommendations. The header
+      note tells users explicitly that this set uses lower-trust data so
+      they don't conflate these picks with the verified set above.
+    {% endcomment %}
     {% if recommended_espn_games %}
       <section class="mlb-section mlb-section--espn">
         <div class="mlb-section__head">
