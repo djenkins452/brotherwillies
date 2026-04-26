@@ -166,6 +166,26 @@ MOVEMENT_CLASS_CHOICES = [
     ('sharp', 'Sharp Action'),
 ]
 
+# Auto-failover layer (Commit 1 of Provider Health Reliability):
+# Snapshots tag which provider supplied the data and at what quality.
+# odds_source is the literal source (which API answered).
+# source_quality is the *interpretation* — primary means "the preferred
+# provider answered fresh", fallback means "secondary provider answered",
+# stale means "we didn't get fresh data, this is from cache/older snap",
+# unavailable means "no data — recommendation surfaces should treat as missing."
+SNAPSHOT_SOURCE_CHOICES = [
+    ('odds_api', 'The Odds API'),
+    ('espn', 'ESPN Fallback'),
+    ('manual', 'Manual Entry'),
+    ('cached', 'Cached'),
+]
+SNAPSHOT_SOURCE_QUALITY_CHOICES = [
+    ('primary', 'Primary'),
+    ('fallback', 'Fallback'),
+    ('stale', 'Stale'),
+    ('unavailable', 'Unavailable'),
+]
+
 
 class OddsSnapshot(models.Model):
     """Mirror of CBB/CFB OddsSnapshot. `spread` stores the run line.
@@ -192,6 +212,13 @@ class OddsSnapshot(models.Model):
     movement_score = models.FloatField(null=True, blank=True)
     movement_class = models.CharField(
         max_length=10, choices=MOVEMENT_CLASS_CHOICES, null=True, blank=True,
+    )
+    # Provider Health Reliability layer — see SNAPSHOT_SOURCE_CHOICES above.
+    odds_source = models.CharField(
+        max_length=20, choices=SNAPSHOT_SOURCE_CHOICES, default='odds_api', db_index=True,
+    )
+    source_quality = models.CharField(
+        max_length=15, choices=SNAPSHOT_SOURCE_QUALITY_CHOICES, default='primary',
     )
 
     class Meta:

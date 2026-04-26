@@ -112,3 +112,79 @@ class CronRunLog(models.Model):
     @property
     def is_success(self) -> bool:
         return self.status == 'success'
+
+
+class ProviderHealth(models.Model):
+    """Per-provider rolling health state — one row per provider, mutated in
+    place. Used by the circuit breaker, the odds router, and the Ops
+    dashboard.
+
+    Why mutable rather than append-only: the durable EVENT log is already
+    OddsApiUsage (every Odds API call is recorded there). This row is the
+    AGGREGATED state derived from those events. Storing it lets the router
+    cheaply ask "is the circuit open?" without rerunning a query against
+    OddsApiUsage every time.
+
+    State machine:
+        healthy      → no recent failures
+        degraded     → 1 or 2 consecutive failures, circuit not yet open
+        failed       → 3+ consecutive failures recorded; if cooldown has
+                       lapsed, the next call will probe and either flip
+                       us back to healthy (success) or re-open the circuit (failure)
+        circuit_open → circuit_open_until > now; calls are skipped entirely
+
+    Auto-open triggers (handled in the service, not the model):
+        - HTTP 401 (key invalid / expired)
+        - HTTP 429 (quota exhausted)
+        - 3 consecutive failures
+    """
+    PROVIDER_CHOICES = [
+        ('odds_api', 'The Odds API'),
+        ('espn', 'ESPN Fallback'),
+    ]
+
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES, unique=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.IntegerField(default=0)
+    last_status_code = models.IntegerField(null=True, blank=True)
+    last_error_message = models.TextField(blank=True, default='')
+    # When set in the future, calls are SKIPPED. Once now() passes this
+    # timestamp the circuit is "half-open" — the next call probes the
+    # provider, and a success closes it (clears the field), a failure
+    # re-opens it for another cooldown.
+    circuit_open_until = models.DateTimeField(null=True, blank=True)
+    # The reason the circuit was last opened — surfaced in the dashboard
+    # and the timeline panel so we can answer "what tripped this?" without
+    # cross-joining OddsApiUsage.
+    last_open_reason = models.CharField(max_length=200, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['provider']
+        verbose_name = 'Provider Health'
+        verbose_name_plural = 'Provider Health'
+
+    def __str__(self):
+        return f'{self.provider}: {self.state}'
+
+    @property
+    def state(self) -> str:
+        """Compute the current state from the underlying fields. The four
+        return values are stable strings that the UI / templates key off."""
+        from django.utils import timezone
+        now = timezone.now()
+        if self.circuit_open_until and self.circuit_open_until > now:
+            return 'circuit_open'
+        # 3+ failures and we haven't yet successfully recovered → 'failed'.
+        # The circuit may have closed via cooldown but we haven't re-validated.
+        if self.consecutive_failures >= 3:
+            return 'failed'
+        if self.consecutive_failures > 0:
+            return 'degraded'
+        return 'healthy'
+
+    @property
+    def is_circuit_open(self) -> bool:
+        from django.utils import timezone
+        return bool(self.circuit_open_until and self.circuit_open_until > timezone.now())

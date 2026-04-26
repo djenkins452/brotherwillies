@@ -156,6 +156,19 @@ MOVEMENT_CLASS_CHOICES = [
     ('strong', 'Strong'),
     ('sharp', 'Sharp Action'),
 ]
+# See apps.mlb.models for the doc on these choices.
+SNAPSHOT_SOURCE_CHOICES = [
+    ('odds_api', 'The Odds API'),
+    ('espn', 'ESPN Fallback'),
+    ('manual', 'Manual Entry'),
+    ('cached', 'Cached'),
+]
+SNAPSHOT_SOURCE_QUALITY_CHOICES = [
+    ('primary', 'Primary'),
+    ('fallback', 'Fallback'),
+    ('stale', 'Stale'),
+    ('unavailable', 'Unavailable'),
+]
 
 
 class OddsSnapshot(models.Model):
@@ -175,6 +188,12 @@ class OddsSnapshot(models.Model):
     movement_score = models.FloatField(null=True, blank=True)
     movement_class = models.CharField(
         max_length=10, choices=MOVEMENT_CLASS_CHOICES, null=True, blank=True,
+    )
+    odds_source = models.CharField(
+        max_length=20, choices=SNAPSHOT_SOURCE_CHOICES, default='odds_api', db_index=True,
+    )
+    source_quality = models.CharField(
+        max_length=15, choices=SNAPSHOT_SOURCE_QUALITY_CHOICES, default='primary',
     )
 
     class Meta:

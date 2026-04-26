@@ -153,6 +153,17 @@ ODDS_API_KEY = os.environ.get('ODDS_API_KEY', '')
 CFBD_API_KEY = os.environ.get('CFBD_API_KEY', '')
 CBBD_API_KEY = os.environ.get('CBBD_API_KEY', '')
 
+# --- Provider Health / Circuit Breaker (Auto-failover layer) ----------------
+# How long the breaker stays open after a 401, 429, or 3 consecutive failures.
+# After the cooldown the next call probes; success closes the breaker, another
+# failure re-opens it for the same window.
+ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES = int(
+    os.environ.get('ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES', '60')
+)
+# Freshness windows for odds-driven UI gating (Commit 2 will start using these).
+FRESH_ODDS_MAX_AGE_MINUTES = int(os.environ.get('FRESH_ODDS_MAX_AGE_MINUTES', '180'))
+STALE_ODDS_MAX_AGE_MINUTES = int(os.environ.get('STALE_ODDS_MAX_AGE_MINUTES', '720'))
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

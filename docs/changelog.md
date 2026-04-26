@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-26 - Auto-failover Foundation: ProviderHealth + Circuit Breaker (Commit 1)
+
+**Summary:** First of three commits building an auto-failover + degraded-mode reliability layer. This one is the foundation — durable provider state, circuit-breaker logic, and snapshot source-tagging schema. No user-visible behavior change yet (no router, no UI gating); that lands in Commits 2 and 3.
+
+### New `ProviderHealth` model
+One row per provider (`odds_api`, `espn`), mutated in place:
+- `last_success_at`, `last_failure_at`, `consecutive_failures`
+- `last_status_code`, `last_error_message`
+- `circuit_open_until` (when set in the future, calls are skipped)
+- `last_open_reason` (surfaced on the Ops dashboard in Commit 3)
+- Computed `state` property: `healthy` / `degraded` / `failed` / `circuit_open`
+
+### `apps/ops/services/provider_health.py`
+- `record_success(provider)` — clears failures and any open circuit (a single success closes the breaker).
+- `record_failure(provider, status_code, error_message)` — increments consecutive_failures; auto-opens the circuit on:
+  - HTTP 401 (key invalid / expired) — first occurrence
+  - HTTP 429 (quota exhausted) — first occurrence
+  - 3+ consecutive failures
+- `is_circuit_open(provider)` — read-only, cheap, used by the upcoming router.
+- `open_circuit(provider, reason)` and `reset_circuit(provider)` — manual controls (Commit 3 wires the dashboard buttons).
+- All mutating calls swallow exceptions and log warnings — telemetry can never take down the upstream provider.
+
+### Snapshot source-tagging schema (all 5 sports)
+Additive, default-safe migrations on `mlb`/`cfb`/`cbb`/`college_baseball`/`golf` snapshot models:
+- `odds_source` — `odds_api` / `espn` / `manual` / `cached` (default `odds_api`)
+- `source_quality` — `primary` / `fallback` / `stale` / `unavailable` (default `primary`)
+
+The fields are inert this commit (every new row defaults to `odds_api`/`primary`, matching today's behavior). Commit 2 starts using them when the router lands.
+
+### Settings
+- `ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES` (default 60) — read on every breaker-open so test overrides take effect immediately.
+- `FRESH_ODDS_MAX_AGE_MINUTES` (default 180) — for Commit 2's freshness gating.
+- `STALE_ODDS_MAX_AGE_MINUTES` (default 720).
+
+### Tests (21 new in `apps.ops.tests`)
+- State transitions: get_or_create idempotent, default healthy, success resets failures, failure increments.
+- Circuit triggers: 401 opens immediately, 429 opens immediately, 3 consecutive failures opens, 1–2 failures don't open, success resets the counter.
+- Cooldown: stays open during, auto-closes after, success after cooldown returns to healthy.
+- Manual controls: reset clears state, force-open works, state_summary returns dict shape.
+- Exception safety: record_success / record_failure / is_circuit_open all swallow DB errors without raising.
+- Settings override: cooldown is read dynamically so override_settings works in tests.
+- Schema: snapshot defaults to `odds_api`/`primary`, can explicitly set `espn`/`fallback`.
+
+477 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- New: `apps/ops/services/provider_health.py`, `apps/ops/migrations/0002_providerhealth.py`, plus 5 sport-snapshot migrations.
+- Edited: `apps/ops/models.py`, `apps/ops/tests.py`, `brotherwillies/settings.py`, all 5 sport `models.py`.
+
+**Out of scope (Commits 2 + 3):** the explicit router, freshness gating, recommendation safety (Elite/Top Play suppression), MLB hub degraded banner, Ops dashboard provider cards, header dot integration with provider state.
+
+---
+
 ## 2026-04-26 - System status indicator in the header (superuser-only)
 
 **Summary:** A small colored dot in the top-right of the header (next to the help/profile icons) gives superusers a constant at-a-glance read on system health. Click navigates to the Ops Command Center; hover shows a 3-line summary tooltip (overall status, last Odds API status, last cron status).

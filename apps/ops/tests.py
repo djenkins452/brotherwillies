@@ -559,3 +559,277 @@ class HeaderStatusIndicatorTests(TestCase):
             resp = self.client.get(self.AUTHED_PAGE)
             self.assertEqual(resp.status_code, 200)
             self.assertContains(resp, 'status-dot--unknown')
+
+
+# =========================================================================
+# Provider Health / Circuit Breaker — Auto-failover Commit 1
+# =========================================================================
+
+from apps.ops.models import ProviderHealth
+from apps.ops.services import provider_health
+
+
+class ProviderHealthStateTests(TestCase):
+    """Pure state-machine coverage. The service is the single source of
+    truth for "should I call this provider?" and "should I open the
+    breaker?" — every transition must be explicit and reversible."""
+
+    def test_get_creates_row_on_first_use(self):
+        self.assertEqual(ProviderHealth.objects.count(), 0)
+        provider_health.get('odds_api')
+        self.assertEqual(ProviderHealth.objects.count(), 1)
+        # Idempotent — second call doesn't create a duplicate.
+        provider_health.get('odds_api')
+        self.assertEqual(ProviderHealth.objects.count(), 1)
+
+    def test_default_state_is_healthy(self):
+        row = provider_health.get('odds_api')
+        self.assertEqual(row.state, 'healthy')
+        self.assertFalse(row.is_circuit_open)
+        self.assertEqual(row.consecutive_failures, 0)
+
+    def test_record_success_sets_last_success_and_clears_failures(self):
+        # Pre-seed with some failures + an open circuit.
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        row = provider_health.get('odds_api')
+        self.assertEqual(row.consecutive_failures, 2)
+
+        # Success should reset everything.
+        provider_health.record_success('odds_api', status_code=200)
+        row.refresh_from_db()
+        self.assertEqual(row.consecutive_failures, 0)
+        self.assertIsNone(row.circuit_open_until)
+        self.assertEqual(row.last_status_code, 200)
+        self.assertIsNotNone(row.last_success_at)
+        self.assertEqual(row.state, 'healthy')
+
+    def test_record_failure_increments_counter(self):
+        for n in (1, 2):
+            provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+            row = provider_health.get('odds_api')
+            self.assertEqual(row.consecutive_failures, n)
+        # 2 failures → 'degraded' but circuit not yet open.
+        self.assertEqual(row.state, 'degraded')
+        self.assertFalse(row.is_circuit_open)
+
+
+class CircuitBreakerTriggerTests(TestCase):
+    """The three auto-open paths must each fire the breaker on the
+    correct event."""
+
+    def test_401_opens_circuit_immediately(self):
+        # First and only failure; status_code=401 → open without waiting
+        # for the 3-failure threshold.
+        provider_health.record_failure(
+            'odds_api', status_code=401, error_message='Unauthorized',
+        )
+        row = provider_health.get('odds_api')
+        self.assertTrue(row.is_circuit_open)
+        self.assertEqual(row.state, 'circuit_open')
+        self.assertIn('401', row.last_open_reason)
+        self.assertIn('key', row.last_open_reason.lower())
+
+    def test_429_opens_circuit_immediately(self):
+        provider_health.record_failure(
+            'odds_api', status_code=429, error_message='quota exceeded',
+        )
+        row = provider_health.get('odds_api')
+        self.assertTrue(row.is_circuit_open)
+        self.assertIn('429', row.last_open_reason)
+        self.assertIn('quota', row.last_open_reason.lower())
+
+    def test_three_consecutive_failures_opens_circuit(self):
+        # Two failures: degraded but not open.
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=503, error_message='boom')
+        row = provider_health.get('odds_api')
+        self.assertFalse(row.is_circuit_open)
+
+        # Third failure crosses the threshold.
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        row.refresh_from_db()
+        self.assertTrue(row.is_circuit_open)
+        self.assertIn('3 consecutive', row.last_open_reason)
+
+    def test_500_alone_does_not_open_circuit(self):
+        # 1-2 server errors are exactly what the retry layer is for —
+        # don't open the breaker on a transient blip.
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        row = provider_health.get('odds_api')
+        self.assertFalse(row.is_circuit_open)
+        self.assertEqual(row.state, 'degraded')
+
+    def test_consecutive_counter_resets_on_success(self):
+        # 2 failures, then a success, then 2 more failures: should be
+        # at 2/3, NOT 4/3 (no breaker).
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_success('odds_api', status_code=200)
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        row = provider_health.get('odds_api')
+        self.assertEqual(row.consecutive_failures, 2)
+        self.assertFalse(row.is_circuit_open)
+
+
+class CircuitBreakerCooldownTests(TestCase):
+    """The circuit's time-based reset is the recovery path. Verify both
+    sides: still open before cooldown, automatically closed after."""
+
+    def test_circuit_remains_open_during_cooldown(self):
+        provider_health.record_failure('odds_api', status_code=401, error_message='bad key')
+        self.assertTrue(provider_health.is_circuit_open('odds_api'))
+
+    def test_circuit_auto_closes_after_cooldown(self):
+        # 3 failures (the consecutive-failure path) so post-cooldown state
+        # reflects 'failed', not just 'degraded'. The 401 path opens the
+        # breaker on a SINGLE failure, which would leave us at
+        # consecutive_failures=1 and state='degraded' after cooldown —
+        # also correct, just a different scenario.
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        provider_health.record_failure('odds_api', status_code=500, error_message='boom')
+        self.assertTrue(provider_health.is_circuit_open('odds_api'))
+        # Backdate the open-until so we're past the cooldown.
+        row = provider_health.get('odds_api')
+        row.circuit_open_until = timezone.now() - timedelta(minutes=1)
+        row.save()
+        self.assertFalse(provider_health.is_circuit_open('odds_api'))
+        # 3 failures still on the books → 'failed' (timer expired so not
+        # 'circuit_open' anymore, but consecutive_failures >= threshold).
+        row.refresh_from_db()
+        self.assertEqual(row.state, 'failed')
+
+    def test_success_after_cooldown_returns_to_healthy(self):
+        # Simulate the half-open → closed transition: breaker opens, time
+        # passes, a probe succeeds, we're healthy again.
+        provider_health.record_failure('odds_api', status_code=401, error_message='bad key')
+        row = provider_health.get('odds_api')
+        row.circuit_open_until = timezone.now() - timedelta(minutes=1)
+        row.save()
+
+        provider_health.record_success('odds_api', status_code=200)
+        row.refresh_from_db()
+        self.assertEqual(row.state, 'healthy')
+        self.assertEqual(row.consecutive_failures, 0)
+        self.assertIsNone(row.circuit_open_until)
+
+
+class CircuitBreakerManualControlsTests(TestCase):
+    """Manual reset is the operator's escape hatch — clears state without
+    waiting for cooldown or successful probe."""
+
+    def test_reset_circuit_clears_open_and_failures(self):
+        provider_health.record_failure('odds_api', status_code=401, error_message='bad key')
+        self.assertTrue(provider_health.is_circuit_open('odds_api'))
+
+        provider_health.reset_circuit('odds_api')
+        row = provider_health.get('odds_api')
+        self.assertFalse(row.is_circuit_open)
+        self.assertEqual(row.consecutive_failures, 0)
+        self.assertEqual(row.last_open_reason, '')
+
+    def test_open_circuit_force_opens(self):
+        provider_health.open_circuit('odds_api', reason='manual smoke test')
+        row = provider_health.get('odds_api')
+        self.assertTrue(row.is_circuit_open)
+        self.assertEqual(row.state, 'circuit_open')
+        self.assertIn('manual', row.last_open_reason)
+
+    def test_state_summary_returns_dict(self):
+        provider_health.record_failure('odds_api', status_code=401, error_message='bad key')
+        summary = provider_health.state_summary('odds_api')
+        self.assertEqual(summary['provider'], 'odds_api')
+        self.assertEqual(summary['state'], 'circuit_open')
+        self.assertTrue(summary['is_circuit_open'])
+        self.assertEqual(summary['last_status_code'], 401)
+
+
+class CircuitBreakerExceptionSafetyTests(TestCase):
+    """The service must never raise — a DB hiccup writing health state can
+    NOT take down the upstream provider call."""
+
+    def test_record_success_swallows_exceptions(self):
+        with patch('apps.ops.models.ProviderHealth.objects.get_or_create',
+                   side_effect=RuntimeError('db_down')):
+            result = provider_health.record_success('odds_api')
+            self.assertIsNone(result)  # Returns None, doesn't raise.
+
+    def test_record_failure_swallows_exceptions(self):
+        with patch('apps.ops.models.ProviderHealth.objects.get_or_create',
+                   side_effect=RuntimeError('db_down')):
+            result = provider_health.record_failure('odds_api', status_code=500)
+            self.assertIsNone(result)
+
+    def test_is_circuit_open_swallows_exceptions(self):
+        with patch('apps.ops.models.ProviderHealth.objects.get_or_create',
+                   side_effect=RuntimeError('db_down')):
+            # Conservative: when we can't read state, return False (allow
+            # the call) rather than blocking the user. Better to make a
+            # call than fail closed on a transient DB issue.
+            self.assertFalse(provider_health.is_circuit_open('odds_api'))
+
+
+class CooldownSettingOverrideTests(TestCase):
+    """The cooldown is configurable via settings — verify the service
+    reads it dynamically (so override_settings works in tests)."""
+
+    def test_cooldown_setting_is_respected(self):
+        with self.settings(ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES=5):
+            provider_health.record_failure(
+                'odds_api', status_code=401, error_message='bad key',
+            )
+            row = provider_health.get('odds_api')
+            self.assertIsNotNone(row.circuit_open_until)
+            # Should be ~5 min in the future, not 60.
+            delta_min = (row.circuit_open_until - timezone.now()).total_seconds() / 60
+            self.assertGreater(delta_min, 4.5)
+            self.assertLess(delta_min, 5.5)
+
+
+class SnapshotSourceFieldDefaultsTests(TestCase):
+    """The new odds_source / source_quality fields must default to the
+    primary path so existing rows + new rows that don't explicitly set
+    them are sane (not orphaned in a 'unavailable' state by accident)."""
+
+    def test_mlb_snapshot_defaults(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        h = Team.objects.create(name='Home', slug='home', conference=conf)
+        a = Team.objects.create(name='Away', slug='away', conference=conf)
+        g = Game.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+        snap = OddsSnapshot.objects.create(
+            game=g,
+            captured_at=timezone.now(),
+            sportsbook='DraftKings',
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+        )
+        self.assertEqual(snap.odds_source, 'odds_api')
+        self.assertEqual(snap.source_quality, 'primary')
+
+    def test_mlb_snapshot_can_set_fallback(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        h = Team.objects.create(name='Home', slug='home', conference=conf)
+        a = Team.objects.create(name='Away', slug='away', conference=conf)
+        g = Game.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=2),
+        )
+        snap = OddsSnapshot.objects.create(
+            game=g,
+            captured_at=timezone.now(),
+            sportsbook='ESPN BET',
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+            odds_source='espn',
+            source_quality='fallback',
+        )
+        self.assertEqual(snap.odds_source, 'espn')
+        self.assertEqual(snap.source_quality, 'fallback')
