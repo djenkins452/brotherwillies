@@ -227,6 +227,12 @@ class Command(BaseCommand):
         # "the events are there but we're failing to parse them."
         self._print_odds_api_preflight()
 
+        # ---- Stage 0b: per-gap-game search across filtered vs unfiltered.
+        # The smoking-gun test: if a gap game appears in the UNFILTERED
+        # API response but not the production-filtered one, the bug is
+        # our time-window / markets filter. Definitive answer per game.
+        self._print_per_game_api_search(diags)
+
         # ---- Stage 1: probe the Odds API -----------------------------------
         api_events = self._fetch_odds_api()
         if api_events is None:
@@ -353,54 +359,82 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f'  /v4/sports request errored: {exc}'))
             return
 
-        # 2. Region comparison: us vs us,us2 — sometimes the new plan only
-        # ships us2 books which we currently aren't requesting.
+        # 2. THREE-way comparison to isolate filter behavior:
+        #    a. Filtered as production calls it (regions=us, commenceTimeFrom/To)
+        #    b. Same filter, regions=us,us2 (region scope check)
+        #    c. UNFILTERED — no time window, no markets list — the maximal
+        #       view of what the API has for this sport. If a game appears
+        #       here but not in (a)/(b), the bug is on OUR side (filter).
         from datetime import timedelta as _td
+        from collections import Counter
         now = timezone.now()
         commence_from = (now - _td(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
         commence_to = (now + _td(hours=72)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        for regions in ('us', 'us,us2'):
+
+        # Stash the responses so we can do per-gap-game searches later.
+        self._preflight_filtered_events = []
+        self._preflight_unfiltered_events = []
+
+        probes = [
+            ('regions=us, time-windowed (production-equivalent)',
+             {'apiKey': api_key, 'regions': 'us', 'markets': 'h2h',
+              'oddsFormat': 'american', 'commenceTimeFrom': commence_from,
+              'commenceTimeTo': commence_to}, 'filtered'),
+            ('regions=us,us2, time-windowed',
+             {'apiKey': api_key, 'regions': 'us,us2', 'markets': 'h2h',
+              'oddsFormat': 'american', 'commenceTimeFrom': commence_from,
+              'commenceTimeTo': commence_to}, 'us2'),
+            ('regions=us,us2, NO time window (unfiltered)',
+             {'apiKey': api_key, 'regions': 'us,us2', 'markets': 'h2h',
+              'oddsFormat': 'american'}, 'unfiltered'),
+        ]
+        for label, params, slot in probes:
             try:
                 r = requests.get(
                     'https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/',
-                    params={
-                        'apiKey': api_key,
-                        'regions': regions,
-                        'markets': 'h2h',
-                        'oddsFormat': 'american',
-                        'commenceTimeFrom': commence_from,
-                        'commenceTimeTo': commence_to,
-                    },
-                    timeout=15,
+                    params=params, timeout=15,
                 )
                 if r.status_code != 200:
                     self.stdout.write(self.style.WARNING(
-                        f'  /v4/baseball_mlb/odds (regions={regions}) → HTTP {r.status_code} '
+                        f'  {label} → HTTP {r.status_code} '
                         f'body={(r.text or "")[:200]!r}'
                     ))
                     self._report_quota_headers(r.headers)
                     continue
                 events = r.json() or []
+                if slot == 'filtered':
+                    self._preflight_filtered_events = events
+                elif slot == 'unfiltered':
+                    self._preflight_unfiltered_events = events
+
                 bookmakers = set()
                 events_with_books = 0
+                date_buckets = Counter()
                 for e in events:
                     books = e.get('bookmakers') or []
                     if books:
                         events_with_books += 1
                     for b in books:
                         bookmakers.add(b.get('title', '?'))
+                    ct = (e.get('commence_time') or '')[:10]
+                    if ct:
+                        date_buckets[ct] += 1
                 self.stdout.write(
-                    f'  /v4/baseball_mlb/odds (regions={regions}) → {len(events)} events '
+                    f'  {label} → {len(events)} events '
                     f'({events_with_books} with books, {len(bookmakers)} unique books seen)'
                 )
-                if bookmakers:
+                if date_buckets:
+                    self.stdout.write(
+                        f'    date_distribution={dict(date_buckets)}'
+                    )
+                if bookmakers and slot != 'unfiltered':
                     self.stdout.write(
                         f'    bookmakers={sorted(bookmakers)}'
                     )
                 self._report_quota_headers(r.headers)
             except Exception as exc:
                 self.stdout.write(self.style.WARNING(
-                    f'  regions={regions} request errored: {exc}'
+                    f'  {label} errored: {exc}'
                 ))
 
         self.stdout.write('---------------------------------------------------------------')
@@ -432,6 +466,81 @@ class Command(BaseCommand):
         except Exception as exc:
             logger.error('diagnose_mlb_odds_gaps_api_fetch_failed err=%s', exc)
             return None
+
+    def _print_per_game_api_search(self, diags):
+        """For each gap game, search BOTH the filtered and unfiltered Odds
+        API responses. If a game appears in unfiltered but not filtered,
+        the bug is our time-window. If it appears in neither, the API
+        genuinely doesn't have it."""
+        filtered = getattr(self, '_preflight_filtered_events', None) or []
+        unfiltered = getattr(self, '_preflight_unfiltered_events', None) or []
+        if not filtered and not unfiltered:
+            return
+
+        self.stdout.write('')
+        self.stdout.write('--- Per-game search across API responses ----------------------')
+        self.stdout.write('  For each gap game, find ANY event mentioning either team')
+        self.stdout.write('  in the filtered (production) and unfiltered API responses.')
+        self.stdout.write('')
+
+        def _search(events, home_name, away_name):
+            """Return list of (commence_time, home, away) for events whose
+            home OR away contains either team's last word (nickname).
+            Lenient — we want to know if the API has the game AT ALL,
+            not whether our matching logic accepts it."""
+            home_nick = home_name.split()[-1].lower() if home_name else ''
+            away_nick = away_name.split()[-1].lower() if away_name else ''
+            # Two-word nicknames: Red Sox / White Sox / Blue Jays
+            two_word_nicks = {'sox', 'jays'}
+            if home_nick in two_word_nicks and len(home_name.split()) >= 2:
+                home_nick = ' '.join(home_name.split()[-2:]).lower()
+            if away_nick in two_word_nicks and len(away_name.split()) >= 2:
+                away_nick = ' '.join(away_name.split()[-2:]).lower()
+            hits = []
+            for e in events:
+                eh = (e.get('home_team') or '').lower()
+                ea = (e.get('away_team') or '').lower()
+                if home_nick and (home_nick in eh or home_nick in ea):
+                    hits.append(e)
+                elif away_nick and (away_nick in eh or away_nick in ea):
+                    hits.append(e)
+            return hits
+
+        for d in diags:
+            home = d.game.home_team.name
+            away = d.game.away_team.name
+            f_hits = _search(filtered, home, away)
+            u_hits = _search(unfiltered, home, away)
+            self.stdout.write(f'  • {d.matchup}')
+            self.stdout.write(
+                f'      filtered_response={len(f_hits)} hit(s)'
+                + (f' [first: {f_hits[0].get("home_team")} vs {f_hits[0].get("away_team")} @ {f_hits[0].get("commence_time")}]' if f_hits else '')
+            )
+            self.stdout.write(
+                f'      unfiltered_response={len(u_hits)} hit(s)'
+                + (f' [first: {u_hits[0].get("home_team")} vs {u_hits[0].get("away_team")} @ {u_hits[0].get("commence_time")}]' if u_hits else '')
+            )
+            # Verdict per game
+            if u_hits and not f_hits:
+                self.stdout.write(self.style.ERROR(
+                    f'      ↳ ⚠  Game IS in API (unfiltered) but NOT in our '
+                    f'production-style filtered call. Our time-window or '
+                    f'markets filter is excluding it.'
+                ))
+            elif u_hits and f_hits:
+                # Game appears in both — but we said it wasn't matching.
+                # Likely cause: team name mismatch between API and our DB.
+                self.stdout.write(self.style.WARNING(
+                    f'      ↳ Game IS in API filtered response. Why isn\'t '
+                    f'our matcher finding it? Probable team-name mismatch — '
+                    f'see API names above vs DB names {home!r} / {away!r}.'
+                ))
+            elif not u_hits and not f_hits:
+                self.stdout.write(
+                    f'      ↳ Game absent from EVERY Odds API response. '
+                    f'Bookmakers genuinely have no posted line for this event.'
+                )
+        self.stdout.write('---------------------------------------------------------------')
 
     def _classify_api_for_game(self, d: _GameDiag, api_events: list):
         """Find the API event matching this game and fill its row in."""
