@@ -202,7 +202,8 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
             return o, h, a
     # Pass 3 — combined details-string parsing. Each entry's details
     # might carry one side's moneyline (e.g. "BAL -143" for home,
-    # "BOS +130" for away in a separate entry). Accumulate.
+    # "BOS +130" for away in a separate entry, OR just one side as
+    # "NYY -136" with the opposite side never explicitly published).
     if odds_list and (home_abbr or away_abbr):
         details_home = details_away = None
         for o in odds_list:
@@ -214,6 +215,32 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
                 details_home = value
             elif side == 'away' and details_away is None:
                 details_away = value
+            elif side is None and value is not None:
+                # The string parsed as a moneyline (|v| >= 100, integer)
+                # but the abbreviation matched neither home nor away —
+                # most often a third-team abbreviation we don't know.
+                # Surface so we can extend the alias map if needed.
+                logger.warning(
+                    'mlb_odds_espn_no_match_for_details '
+                    'details=%r home_abbr=%r away_abbr=%r value=%s',
+                    details, home_abbr, away_abbr, value,
+                )
+
+        # v1 derivation — when ESPN gives only one side's moneyline
+        # ("NYY -136" but no entry for the opponent), fill the missing
+        # side via symmetric inversion. Real markets carry vig (the true
+        # opposite of -136 is roughly +120, not +136), so this is
+        # acknowledged as approximate. Acceptable in v1 because:
+        #   - The model still owns the true probability; ESPN's number
+        #     only feeds into market_home_win_prob downstream.
+        #   - "Approximate moneyline" is strictly better than "no
+        #     moneyline" — the alternative was skipping the game entirely
+        #     and showing the user no odds.
+        if details_home is not None and details_away is None:
+            details_away = -details_home
+        elif details_away is not None and details_home is None:
+            details_home = -details_away
+
         if details_home is not None or details_away is not None:
             # Prefer the preferred-provider entry as the carrier so
             # downstream spread/total still come from that source.
@@ -222,10 +249,16 @@ def _pick_best_odds_entry(odds_list, home_abbr=None, away_abbr=None):
                  if (o.get('provider') or {}).get('name') == PREFERRED_PROVIDER),
                 odds_list[0],
             )
+            # Emit the per-spec log line so deploy logs show exactly
+            # what details-derivation produced for each event.
+            details_seen = next(
+                (o.get('details') for o in odds_list if o.get('details')),
+                '',
+            )
             logger.info(
-                'mlb_odds_espn_parsed source=details home=%r away=%r '
-                'ml_home=%s ml_away=%s',
-                home_abbr, away_abbr, details_home, details_away,
+                'mlb_odds_espn_parsed_details details=%r '
+                'home_ml=%s away_ml=%s',
+                details_seen, details_home, details_away,
             )
             return carrier, details_home, details_away
     # Pass 4 — fall back to the first entry so we still emit spread/total.

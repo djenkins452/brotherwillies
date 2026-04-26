@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-04-26 - ESPN single-side moneyline: derive opposite via symmetric inversion (v1)
+
+**Summary:** Earlier today's fix made the ESPN provider parse the moneyline out of `details` strings like `"NYY -136"`. But ESPN often emits only ONE side's moneyline — never publishing the opponent's number — so the parser still returned `away_ml=None` and downstream skipped the row. This fix fills the missing side by symmetric inversion (`-136 → +136`).
+
+### What changed
+In `_pick_best_odds_entry`, after Pass 3 accumulates whatever sides the `details` strings supplied, an additional v1 step runs:
+- `details_home != None and details_away == None` → `details_away = -details_home`
+- `details_away != None and details_home == None` → `details_home = -details_away`
+
+The provider docstring acknowledges the imperfection up front: real markets carry vig, so the true opposite of -136 is closer to +120, not +136. This is acceptable in v1 because:
+- The model still owns the true win probability — ESPN's number only feeds `market_home_win_prob` for display.
+- "Approximate moneyline" is strictly better than "no moneyline" — the alternative was skipping the game entirely and showing the user no odds at all.
+
+A follow-up can swap inversion for a vig-aware estimate using the spread or a default vig assumption; the schema and rest of the pipeline don't change.
+
+### New / updated logs (per spec)
+- `mlb_odds_espn_parsed_details details=… home_ml=… away_ml=…` — fires when details parsing produces moneylines (with or without inversion).
+- `mlb_odds_espn_no_match_for_details details=… home_abbr=… away_abbr=… value=…` — fires when a parseable details string carries an abbreviation matching neither home nor away. Lets us extend the alias map from real production data.
+
+The earlier `mlb_odds_espn_parsed source=details …` log line was replaced by `mlb_odds_espn_parsed_details` to match the spec exactly.
+
+### Tests (7 new, 1 updated in `apps.datahub.tests`)
+- `MlbEspnSingleSideDerivationTests`:
+  - Home team in details → away derived (`NYY -136` with NYY=home → home=-136, away=+136).
+  - Away team in details → home derived (NYY=away → away=-136, home=+136).
+  - Underdog in details derived correctly (`TOR +120` with TOR=home → home=+120, away=-120).
+  - `mlb_odds_espn_parsed_details` log fires with full numbers and the original details string.
+  - `mlb_odds_espn_no_match_for_details` log fires when abbreviation matches neither side.
+  - Two-sided details still uses reported values, NOT inversion (regression guard for the case where ESPN actually does publish both sides).
+- `MlbEspnSingleSideEndToEndTests` — full normalize→persist run on a single-side ESPN payload produces a complete `OddsSnapshot` instead of being skipped, with `odds_source='espn'` / `source_quality='fallback'`.
+- Updated `test_falls_back_when_only_home_details_present` → renamed to `test_single_side_details_derives_opposite_via_inversion` (now asserts the away side is filled at +143 instead of None).
+
+535 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- Edited: `apps/datahub/providers/mlb/odds_espn_provider.py`, `apps/datahub/tests.py`. No schema, no Odds API path, no recommendation engine, no UI, no ingest flow changes.
+
+---
+
 ## 2026-04-26 - ESPN fallback fixes: details parsing + per-row freshness
 
 **Summary:** Two production bugs in the ESPN fallback that, together, made the fallback fill 0 of 23 gap games. Both fixed with narrow changes — no schema, no recommendation engine, no UI.

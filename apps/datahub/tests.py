@@ -1407,10 +1407,11 @@ class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
         # come from that one.
         self.assertEqual(entry['details'], 'BAL -143')
 
-    def test_falls_back_when_only_home_details_present(self):
-        # ESPN sometimes only has one side's moneyline. We still emit
-        # what we have; downstream persist will skip on no_moneyline_home
-        # if it's the home side that's missing.
+    def test_single_side_details_derives_opposite_via_inversion(self):
+        # ESPN often emits only one side's moneyline ("NYY -136" with no
+        # separate entry for the opponent). v1 fills the missing side
+        # via symmetric inversion — acknowledged as approximate (real
+        # markets carry vig) but strictly better than skipping the game.
         from apps.datahub.providers.mlb.odds_espn_provider import (
             _pick_best_odds_entry,
         )
@@ -1419,7 +1420,7 @@ class MlbEspnPickBestEntryDetailsFallbackTests(TestCase):
             odds_list, home_abbr='BAL', away_abbr='BOS',
         )
         self.assertEqual(home_ml, -143)
-        self.assertIsNone(away_ml)
+        self.assertEqual(away_ml, 143)  # symmetric inversion of -143
 
     def test_pass_1_still_wins_over_details(self):
         # Standard shape is preferred over details parsing — guards
@@ -1543,3 +1544,152 @@ class MlbEspnPersistMatchSuccessLogTests(TestCase):
         joined = '\n'.join(cm.output)
         self.assertIn('mlb_odds_espn_no_match', joined)
         self.assertIn('stage=team', joined)
+
+
+class MlbEspnSingleSideDerivationTests(TestCase):
+    """v1 symmetric-inversion: when ESPN's details give only one side
+    of the moneyline, the missing side is filled via -value rather than
+    leaving the game with no odds. The known imperfection (real lines
+    carry vig) is documented in the provider; tests verify the math
+    and the spec's required log lines."""
+
+    def test_home_team_in_details_derives_away(self):
+        # NYY is HOME, ESPN says "NYY -136" → home=-136, away=+136.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'NYY -136', 'spread': -1.5}]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='NYY', away_abbr='BOS',
+        )
+        self.assertEqual(home_ml, -136)
+        self.assertEqual(away_ml, 136)
+
+    def test_away_team_in_details_derives_home(self):
+        # NYY is AWAY, ESPN says "NYY -136" → away=-136, home=+136.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'NYY -136', 'spread': 1.5}]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='BOS', away_abbr='NYY',
+        )
+        self.assertEqual(away_ml, -136)
+        self.assertEqual(home_ml, 136)
+
+    def test_underdog_team_in_details_derives_correctly(self):
+        # "TOR +120" — Blue Jays are the dog. If TOR is home, home=+120
+        # and the favorite (away) is -120.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'TOR +120', 'spread': 1.5}]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='TOR', away_abbr='NYY',
+        )
+        self.assertEqual(home_ml, 120)
+        self.assertEqual(away_ml, -120)
+
+    def test_parsed_details_log_emitted(self):
+        # The spec requires an explicit log line so deploy logs show
+        # what details-derivation produced.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'NYY -136', 'spread': -1.5}]
+        with self.assertLogs(
+            'apps.datahub.providers.mlb.odds_espn_provider', level='INFO',
+        ) as cm:
+            _pick_best_odds_entry(
+                odds_list, home_abbr='NYY', away_abbr='BOS',
+            )
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_parsed_details', joined)
+        self.assertIn('home_ml=-136', joined)
+        self.assertIn('away_ml=136', joined)
+        self.assertIn("details='NYY -136'", joined)
+
+    def test_unknown_abbreviation_logs_no_match_for_details(self):
+        # A details string that parses as a moneyline value but whose
+        # abbreviation matches NEITHER home nor away — ESPN occasionally
+        # emits a third-team abbreviation we haven't mapped. The
+        # warning log lets us extend the alias map from real data.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [{'details': 'XXX -150', 'spread': -1.5}]
+        with self.assertLogs(
+            'apps.datahub.providers.mlb.odds_espn_provider', level='WARNING',
+        ) as cm:
+            _pick_best_odds_entry(
+                odds_list, home_abbr='NYY', away_abbr='BOS',
+            )
+        joined = '\n'.join(cm.output)
+        self.assertIn('mlb_odds_espn_no_match_for_details', joined)
+        self.assertIn("details='XXX -150'", joined)
+        self.assertIn('value=-150', joined)
+
+    def test_two_sided_details_does_not_derive_inversion(self):
+        # When BOTH sides come from explicit details (not derivation),
+        # the inversion path must not run — we use the actual reported
+        # values, not the v1 approximation. Reported: NYY -136, BOS +120.
+        from apps.datahub.providers.mlb.odds_espn_provider import (
+            _pick_best_odds_entry,
+        )
+        odds_list = [
+            {'details': 'NYY -136', 'spread': -1.5},
+            {'details': 'BOS +120'},
+        ]
+        _, home_ml, away_ml = _pick_best_odds_entry(
+            odds_list, home_abbr='NYY', away_abbr='BOS',
+        )
+        # Both sides match what ESPN reported, NOT the inversion
+        # (which would have produced +136 for BOS).
+        self.assertEqual(home_ml, -136)
+        self.assertEqual(away_ml, 120)
+
+
+class MlbEspnSingleSideEndToEndTests(TestCase):
+    """End-to-end through normalize + persist: a single-sided ESPN event
+    must now produce a complete OddsSnapshot rather than being skipped."""
+
+    def setUp(self):
+        self.fx = _MlbGapFillFixture().make()
+
+    def test_persist_creates_snapshot_with_derived_opposite(self):
+        from apps.datahub.providers.mlb.odds_espn_provider import MLBEspnOddsProvider
+        provider = MLBEspnOddsProvider.__new__(MLBEspnOddsProvider)
+        # ESPN payload: one entry, single-side details only.
+        events = [{
+            'date': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+            'competitions': [{
+                'date': self.fx.game_a.first_pitch.isoformat().replace('+00:00', 'Z'),
+                'competitors': [
+                    {'homeAway': 'home', 'team': {
+                        'displayName': 'New York Yankees', 'abbreviation': 'NYY',
+                    }},
+                    {'homeAway': 'away', 'team': {
+                        'displayName': 'Boston Red Sox', 'abbreviation': 'BOS',
+                    }},
+                ],
+                'odds': [{
+                    'provider': {'name': 'DraftKings'},
+                    'details': 'NYY -136',
+                    'spread': -1.5,
+                    'overUnder': 8.5,
+                }],
+            }],
+        }]
+        normalized = provider.normalize(events)
+        self.assertEqual(len(normalized), 1)
+        # Both sides are filled via inversion; persist should NOT skip.
+        self.assertEqual(normalized[0]['moneyline_home'], -136)
+        self.assertEqual(normalized[0]['moneyline_away'], 136)
+
+        result = provider.persist(normalized)
+        self.assertEqual(result['created'], 1)
+        snap = self.fx.OddsSnapshot.objects.get(game=self.fx.game_a)
+        self.assertEqual(snap.moneyline_home, -136)
+        self.assertEqual(snap.moneyline_away, 136)
+        self.assertEqual(snap.odds_source, 'espn')
+        self.assertEqual(snap.source_quality, 'fallback')
