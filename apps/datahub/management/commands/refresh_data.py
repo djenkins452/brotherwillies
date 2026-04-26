@@ -12,6 +12,13 @@ manager. If LIVE_DATA_ENABLED is false we still record the run (with a
 'success' status and "skipped" summary) so the dashboard reflects reality.
 Per-sport failures fall through to mark_partial(), which paints the run
 yellow on the dashboard rather than green.
+
+stdout capture: we monkey-patch self.stdout.write so EVERY write
+(including subcommand output via call_command(stdout=self.stdout)) gets
+captured into the CronRunLog row's stdout_tail. That way the Recent
+Runs panel shows lines like ingest_odds's persist summary
+("Done: {created=N, skipped=M, skip_reasons={...}}") inline without the
+operator needing to dig through Railway logs.
 """
 
 from django.conf import settings
@@ -56,70 +63,108 @@ class Command(BaseCommand):
             trigger=options.get('trigger', 'cron'),
             triggered_by_user=triggered_by,
         ) as log:
-            stdout_lines = []
+            stdout_lines: list[str] = []
+            original_write = self.stdout.write
 
-            def _emit(line):
-                stdout_lines.append(line)
-                self.stdout.write(line)
-
-            if not settings.LIVE_DATA_ENABLED:
-                _emit('LIVE_DATA_ENABLED is false — nothing to do')
-                log.summary = 'skipped: LIVE_DATA_ENABLED=false'
-                log.stdout_tail = '\n'.join(stdout_lines)
-                return
-
-            sport_failures = []
-            sport_successes = []
-
-            for sport, toggle, has_injuries, has_pitcher_stats, has_team_records in SPORTS_CONFIG:
-                if not getattr(settings, toggle, False):
-                    _emit(f'  {sport}: skipped ({toggle}=false)')
-                    continue
-
-                _emit(f'Refreshing {sport}...')
+            def _capturing_write(msg='', *args, **kwargs):
                 try:
-                    call_command('ingest_schedule', sport=sport, force=True)
-                    call_command('ingest_odds', sport=sport, force=True)
-                    if has_injuries:
-                        call_command('ingest_injuries', sport=sport, force=True)
-                    if has_pitcher_stats:
-                        call_command('ingest_pitcher_stats', sport=sport, force=True)
-                    if has_team_records:
-                        call_command('ingest_team_records', sport=sport, force=True)
-                    if sport in SNAPSHOT_ELIGIBLE_SPORTS:
-                        call_command('capture_snapshots', sport=sport)
-                        call_command('resolve_outcomes', sport=sport)
-                    _emit(f'{sport} done')
-                    sport_successes.append(sport)
-                except Exception as e:
-                    # Visible, not silent — the UI "Data temporarily unavailable"
-                    # state downstream reflects what happened here.
-                    _emit(f'{sport} failed: {e}')
-                    sport_failures.append((sport, str(e)))
+                    text = str(msg)
+                except Exception:
+                    text = repr(msg)
+                stdout_lines.append(text)
+                return original_write(msg, *args, **kwargs)
+            self.stdout.write = _capturing_write  # type: ignore[assignment]
 
-            # Settle pending mock bets for any games that finalized this cycle.
             try:
-                call_command('settle_mockbets')
-            except Exception as e:
-                _emit(f'settle_mockbets failed: {e}')
-                sport_failures.append(('settle_mockbets', str(e)))
+                self._run_refresh(log, stdout_lines)
+            finally:
+                # Always restore — even if the body raised. The
+                # cron_run_log context manager re-raises after recording
+                # the failure, so without this finally the patch leaks
+                # and bleeds into subsequent commands sharing the same
+                # interpreter (notably during tests).
+                self.stdout.write = original_write  # type: ignore[assignment]
+                # Make sure the latest captured lines are saved on the
+                # row even if the inner method didn't reach its own
+                # log.stdout_tail assignment.
+                if not log.stdout_tail:
+                    log.stdout_tail = '\n'.join(stdout_lines)
 
-            # Prune old raw OddsSnapshot rows. Cheap when there's nothing to
-            # delete; protects the DB from runaway growth as we now keep
-            # every API pull (not just one per day per game).
-            try:
-                call_command('prune_old_raw_snapshots')
-            except Exception as e:
-                _emit(f'prune_old_raw_snapshots failed: {e}')
-                sport_failures.append(('prune_old_raw_snapshots', str(e)))
+    def _run_refresh(self, log, stdout_lines):
+        """Inner body — runs with self.stdout.write monkey-patched so
+        every write is captured into stdout_lines (including subcommand
+        output via call_command(stdout=self.stdout))."""
 
-            _emit('Refresh complete')
+        def _emit(line):
+            # Convenience — explicit writes from this method. Same
+            # behavior as any other self.stdout.write in this scope:
+            # captured in stdout_lines via the patched write.
+            self.stdout.write(line)
 
-            log.summary = (
-                f'success={len(sport_successes)} fail={len(sport_failures)}'
-                f' [{",".join(sport_successes) or "none"}]'
-            )
+        if not settings.LIVE_DATA_ENABLED:
+            _emit('LIVE_DATA_ENABLED is false — nothing to do')
+            log.summary = 'skipped: LIVE_DATA_ENABLED=false'
             log.stdout_tail = '\n'.join(stdout_lines)
-            if sport_failures:
-                detail = '; '.join(f'{name}: {err[:200]}' for name, err in sport_failures)
-                log.mark_partial(detail)
+            return
+
+        sport_failures = []
+        sport_successes = []
+
+        for sport, toggle, has_injuries, has_pitcher_stats, has_team_records in SPORTS_CONFIG:
+            if not getattr(settings, toggle, False):
+                _emit(f'  {sport}: skipped ({toggle}=false)')
+                continue
+
+            _emit(f'Refreshing {sport}...')
+            try:
+                # stdout=self.stdout forwards subcommand output through
+                # this command's monkey-patched write, capturing into
+                # stdout_lines. Without this, ingest_odds's "Done:
+                # {created=…, skip_reasons=…}" line would be lost to
+                # Railway's process stdout instead of the CronRunLog
+                # row's expandable summary.
+                call_command('ingest_schedule', sport=sport, force=True, stdout=self.stdout)
+                call_command('ingest_odds', sport=sport, force=True, stdout=self.stdout)
+                if has_injuries:
+                    call_command('ingest_injuries', sport=sport, force=True, stdout=self.stdout)
+                if has_pitcher_stats:
+                    call_command('ingest_pitcher_stats', sport=sport, force=True, stdout=self.stdout)
+                if has_team_records:
+                    call_command('ingest_team_records', sport=sport, force=True, stdout=self.stdout)
+                if sport in SNAPSHOT_ELIGIBLE_SPORTS:
+                    call_command('capture_snapshots', sport=sport, stdout=self.stdout)
+                    call_command('resolve_outcomes', sport=sport, stdout=self.stdout)
+                _emit(f'{sport} done')
+                sport_successes.append(sport)
+            except Exception as e:
+                # Visible, not silent — the UI "Data temporarily unavailable"
+                # state downstream reflects what happened here.
+                _emit(f'{sport} failed: {e}')
+                sport_failures.append((sport, str(e)))
+
+        # Settle pending mock bets for any games that finalized this cycle.
+        try:
+            call_command('settle_mockbets', stdout=self.stdout)
+        except Exception as e:
+            _emit(f'settle_mockbets failed: {e}')
+            sport_failures.append(('settle_mockbets', str(e)))
+
+        # Prune old raw OddsSnapshot rows. Cheap when there's nothing to
+        # delete; protects the DB from runaway growth as we now keep
+        # every API pull (not just one per day per game).
+        try:
+            call_command('prune_old_raw_snapshots', stdout=self.stdout)
+        except Exception as e:
+            _emit(f'prune_old_raw_snapshots failed: {e}')
+            sport_failures.append(('prune_old_raw_snapshots', str(e)))
+
+        _emit('Refresh complete')
+
+        log.summary = (
+            f'success={len(sport_successes)} fail={len(sport_failures)}'
+            f' [{",".join(sport_successes) or "none"}]'
+        )
+        log.stdout_tail = '\n'.join(stdout_lines)
+        if sport_failures:
+            detail = '; '.join(f'{name}: {err[:200]}' for name, err in sport_failures)
+            log.mark_partial(detail)

@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-04-26 - refresh_data: capture subcommand stdout into Recent Runs
+
+**Summary:** The Ops Command Center's Recent Runs panel now shows the full output of every subcommand `refresh_data` calls — including `ingest_odds`'s "Done: {created=N, skipped=M, skip_reasons={...}}" persist summary. Previously the expandable summary cell only showed the per-sport "Refreshing mlb… mlb done" lines, hiding the data point we need most when diagnosing why primary persist isn't writing snapshots.
+
+### What changed
+- `refresh_data` monkey-patches `self.stdout.write` for the duration of a run so every write — its own and any subcommand invoked via `call_command(stdout=self.stdout)` — gets captured into a `stdout_lines` list.
+- All `call_command` sites in `refresh_data` now pass `stdout=self.stdout`, forwarding subcommand output through the same captured channel.
+- The captured tail is written to `CronRunLog.stdout_tail` on every exit path (success, partial, exception).
+- `try/finally` guarantees the original write is restored — even if the body raises — so the patch can't leak into other commands sharing the same interpreter (notably during tests).
+
+### Why it matters
+Without subcommand stdout in `stdout_tail`, every "why didn't this game get odds?" investigation required SSH into Railway logs (which Railway doesn't allow). Now the full per-sport pipeline output — schedule ingest, odds ingest with skip-reason breakdown, injuries, snapshot capture, outcome resolution — is one click away in the Recent Runs row.
+
+---
+
 ## 2026-04-26 - Source-Aware Betting (Commit B): UI partitions + bulk split
 
 **Summary:** The MLB hub now visibly separates verified primary bets from ESPN fallback bets at every layer — sections, per-tile badges, bulk-bet buttons, and the focus banner. Derived (synthesized) odds are removed from every public surface, surfacing only in the staff diagnostic panel. The data layer was already in place (Commit A); this commit makes it visible and actionable.
