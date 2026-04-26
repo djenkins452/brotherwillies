@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-26 - Ops Recent Runs: bigger transcripts + copy button
+
+**Summary:** Two improvements to make the Ops Command Center's Recent Runs panel actually usable for diagnosis.
+
+### Bigger captured transcripts
+`cron_logging.py` previously truncated each row's `stdout_tail` to the **last 50 lines** (and 8000 chars). That was fine when each cron run was a single ingest, but `refresh_data` now fans out to ~5 sports × ~6 subcommands and produces 60–80 lines per run — enough that the persist `Done:` summary at the **start** of each sport got dropped, leaving operators staring at the prune-snapshots tail.
+- Cap raised to **500 lines / 80 KB** per row. Still bounded — a runaway log can't blow out the row — but big enough to comfortably cover a full multi-sport refresh transcript.
+
+### Copy button
+Each Recent Runs `<pre>` now has a small **Copy** button in the top-right that copies the full transcript to the clipboard with one click. No more drag-selecting inside a scrollable code block and accidentally truncating the top.
+- Single delegated click listener at the bottom of the page so we don't bind one per row.
+- Falls back to `textarea + execCommand('copy')` on browsers without the Clipboard API.
+- Visual feedback: button flashes "Copied!" (green) or "Failed" (red) for 1.2s.
+
+---
+
 ## 2026-04-26 - refresh_data: capture subcommand stdout into Recent Runs
 
 **Summary:** The Ops Command Center's Recent Runs panel now shows the full output of every subcommand `refresh_data` calls — including `ingest_odds`'s "Done: {created=N, skipped=M, skip_reasons={...}}" persist summary. Previously the expandable summary cell only showed the per-sport "Refreshing mlb… mlb done" lines, hiding the data point we need most when diagnosing why primary persist isn't writing snapshots.

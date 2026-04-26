@@ -224,7 +224,22 @@
                 {% if r.stdout_tail %}
                   <details>
                     <summary style="cursor:pointer;">{{ r.summary|default:"—"|truncatechars:60 }}</summary>
-                    <pre style="margin:8px 0 0 0;padding:8px;background:#1a1d2e;border-radius:6px;font-size:0.78rem;line-height:1.4;overflow-x:auto;max-height:400px;white-space:pre;color:#cfd2e8;">{{ r.stdout_tail }}</pre>
+                    {# Copy button gives one-click clipboard of the full stdout_tail. #}
+                    {# Without it, operators have to drag-select inside a scrollable <pre>, #}
+                    {# which is fiddly and easy to truncate by accident — especially the #}
+                    {# top of long refresh_data transcripts where the persist summary lives. #}
+                    <div style="position:relative;margin-top:8px;">
+                      <button type="button"
+                              class="ops-copy-btn"
+                              data-copy-target="stdout-{{ r.id }}"
+                              style="position:absolute;top:6px;right:6px;z-index:1;
+                                     padding:4px 10px;font-size:0.72rem;
+                                     background:#2a2e44;color:#cfd2e8;
+                                     border:1px solid #3a3f5a;border-radius:4px;
+                                     cursor:pointer;">Copy</button>
+                      <pre id="stdout-{{ r.id }}"
+                           style="margin:0;padding:8px 64px 8px 8px;background:#1a1d2e;border-radius:6px;font-size:0.78rem;line-height:1.4;overflow-x:auto;max-height:400px;white-space:pre;color:#cfd2e8;">{{ r.stdout_tail }}</pre>
+                    </div>
                   </details>
                 {% else %}
                   {{ r.summary|default:"—"|truncatechars:60 }}
@@ -240,4 +255,41 @@
   </div>
 
 </div>
+
+{# Copy-to-clipboard for Recent Runs stdout_tail blocks. Single delegated #}
+{# listener so we don't bind one per row — Recent Runs can grow long and  #}
+{# per-button listeners would add up. Falls back to a textarea+execCommand #}
+{# pattern if Clipboard API isn't available (older Safari, file:// pages). #}
+<script>
+  document.addEventListener('click', function (ev) {
+    const btn = ev.target.closest('.ops-copy-btn');
+    if (!btn) return;
+    const targetId = btn.getAttribute('data-copy-target');
+    const pre = document.getElementById(targetId);
+    if (!pre) return;
+    const text = pre.textContent || '';
+    const flash = (ok) => {
+      const original = btn.textContent;
+      btn.textContent = ok ? 'Copied!' : 'Failed';
+      btn.style.background = ok ? '#1f4d2a' : '#5a1f1f';
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.style.background = '#2a2e44';
+      }, 1200);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => flash(true)).catch(() => flash(false));
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { flash(document.execCommand('copy')); }
+      catch (e) { flash(false); }
+      document.body.removeChild(ta);
+    }
+  });
+</script>
 {% endblock %}

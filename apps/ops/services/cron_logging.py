@@ -26,7 +26,15 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-STDOUT_TAIL_LINES = 50  # last N lines of captured stdout to persist
+STDOUT_TAIL_LINES = 500  # last N lines of captured stdout to persist
+STDOUT_TAIL_CHAR_CAP = 80000  # hard char cap so a runaway log can't blow out the row
+
+# Why these are big: refresh_data fans out into ~5 sports × ~6 subcommands
+# (ingest_schedule / ingest_odds / ingest_injuries / ingest_pitcher_stats /
+# ingest_team_records / capture_snapshots / resolve_outcomes), each emitting
+# 5–20 lines including persist `Done: {created=…, skipped=…, skip_reasons={…}}`
+# summaries we need for diagnosing why a given game didn't get odds. 50 lines
+# was enough for the per-sport refresh era; the cron-everything era needs more.
 
 
 class _CronLogHandle:
@@ -112,13 +120,18 @@ def cron_run_log(command, trigger='cron', triggered_by_user=None):
 
 
 def _tail(text):
-    """Keep only the last STDOUT_TAIL_LINES lines so the row stays bounded."""
+    """Keep only the last STDOUT_TAIL_LINES lines so the row stays bounded.
+
+    Char cap is the secondary guard — if some subcommand prints
+    pathologically long single lines (e.g., a stack-trace one-liner with
+    10K of context), we still don't blow out the row.
+    """
     if not text:
         return ''
     lines = text.splitlines()
-    if len(lines) <= STDOUT_TAIL_LINES:
-        return text[:8000]
-    return '\n'.join(lines[-STDOUT_TAIL_LINES:])[:8000]
+    if len(lines) > STDOUT_TAIL_LINES:
+        text = '\n'.join(lines[-STDOUT_TAIL_LINES:])
+    return text[:STDOUT_TAIL_CHAR_CAP]
 
 
 def is_command_running(command, max_age_seconds=600):
