@@ -101,7 +101,14 @@ def trigger_refresh_data(request):
 def trigger_diagnose_mlb_odds_gaps(request):
     """Spawn the per-game gap diagnostic. The output table is captured
     in the resulting CronRunLog row's stdout_tail and visible in the
-    Recent Runs panel — click the row to expand and read the table."""
+    Recent Runs panel — click the row to expand and read the table.
+
+    Two modes via ?all=1 query param:
+      - default: gap mode — only games with no fresh primary snapshot
+      - all=1:   slate mode — every upcoming game in the next 36h, so
+                 you can see coverage state across the full slate, not
+                 just the missing few.
+    """
     if is_command_running('diagnose_mlb_odds_gaps'):
         messages.warning(
             request,
@@ -109,11 +116,16 @@ def trigger_diagnose_mlb_odds_gaps(request):
             'and check Recent Runs for the table.',
         )
         return redirect(reverse('ops:command_center'))
-    _spawn_management_command('diagnose_mlb_odds_gaps', request.user.id)
+    extra: list = []
+    label = 'MLB Odds Gap Diagnostic'
+    if request.GET.get('all') == '1':
+        extra.append('--all-upcoming')
+        label = 'MLB Odds Slate Diagnostic (ALL upcoming games)'
+    _spawn_management_command('diagnose_mlb_odds_gaps', request.user.id, *extra)
     messages.success(
         request,
-        'Triggered: MLB Odds Gap Diagnostic. The per-game table will appear '
-        "in Recent Runs in ~30 seconds — click the row's summary to expand.",
+        f'Triggered: {label}. The per-game table will appear in Recent Runs '
+        "in ~30 seconds — click the row's summary to expand.",
     )
     return redirect(reverse('ops:command_center'))
 

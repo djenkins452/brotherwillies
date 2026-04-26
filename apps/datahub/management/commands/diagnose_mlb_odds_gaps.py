@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class _GameDiag:
-    """Mutable state container per gap game. The command fills the fields
+    """Mutable state container per game. The command fills the fields
     in pipeline order, then prints them as one row of the output table."""
 
     def __init__(self, game):
@@ -54,17 +54,43 @@ class _GameDiag:
         from django.utils import timezone as _tz
         delta = (game.first_pitch - _tz.now()).total_seconds() / 60.0
         self.minutes_to_pitch = int(delta)
-        # Stage 1 — Odds API
+        # DB coverage — what's actually persisted right now for this game.
+        self.db_books_count = 0       # distinct sportsbooks with any snapshot in last 180m
+        self.snap_age_min = None      # minutes since latest snapshot, or None
+        self.snap_source = '-'        # 'odds_api' / 'espn' / '-' if no snapshot
+        self._populate_db_coverage()
+        # Stage 1 — Odds API (filled later)
         self.api_present = '?'
         self.api_bookmakers = '-'
         self.api_parsed = '-'
         self.api_matched = '-'
         self.api_skip_reason = ''
-        # Stage 2 — ESPN
+        # Stage 2 — ESPN (filled later)
         self.espn_attempt = '-'
         self.espn_skip_reason = ''
         # Stage 3 — final
         self.final_reason = ''
+
+    def _populate_db_coverage(self):
+        """Read current DB state for this game so the table shows our
+        coverage alongside the API's. The discrepancy is the actionable
+        signal: 'API has 12 books, DB has 3 fresh' = under-covering."""
+        from datetime import timedelta
+        from django.utils import timezone as _tz
+        from apps.mlb.models import OddsSnapshot
+        cutoff = _tz.now() - timedelta(minutes=180)
+        recent = OddsSnapshot.objects.filter(
+            game=self.game, captured_at__gte=cutoff,
+        )
+        self.db_books_count = recent.values('sportsbook').distinct().count()
+        latest = (
+            OddsSnapshot.objects.filter(game=self.game)
+            .order_by('-captured_at').first()
+        )
+        if latest:
+            age_seconds = (_tz.now() - latest.captured_at).total_seconds()
+            self.snap_age_min = int(age_seconds / 60)
+            self.snap_source = (latest.odds_source or '?')[:8]
 
     def as_row(self):
         # Format Δ first_pitch for human reading: "+125m" / "-30m" / "live".
@@ -74,12 +100,15 @@ class _GameDiag:
             delta_str = f'+{self.minutes_to_pitch}m'
         else:
             delta_str = f'{self.minutes_to_pitch}m'
+        snap_age = f'{self.snap_age_min}m' if self.snap_age_min is not None else '-'
         return [
             self.matchup[:36],
             self.status,
             delta_str,
+            f'{self.db_books_count}/{self.api_bookmakers}',  # DB books / API books
+            snap_age,
+            self.snap_source,
             self.api_present,
-            str(self.api_bookmakers),
             self.api_parsed,
             self.api_matched,
             self.espn_attempt,
@@ -468,10 +497,27 @@ class Command(BaseCommand):
             return None
 
     def _print_per_game_api_search(self, diags):
-        """For each gap game, search BOTH the filtered and unfiltered Odds
-        API responses. If a game appears in unfiltered but not filtered,
-        the bug is our time-window. If it appears in neither, the API
-        genuinely doesn't have it."""
+        """For each game, search the filtered + unfiltered Odds API responses.
+
+        Two-tier match:
+          - STRICT  → BOTH our home AND our away teams appear in the same
+                      event (in either home/away orientation). This is a
+                      true match — same matchup as our DB.
+          - LENIENT → at least one team matches. Useful for spotting
+                      potential schedule mismatches (the case where our
+                      DB has Cardinals@Pirates but the API only has
+                      Brewers@Pirates).
+
+        Verdicts in priority order:
+          1. STRICT match in filtered response  → API has it; matcher bug.
+          2. STRICT match in unfiltered only    → time/markets filter bug.
+          3. LENIENT hits but no STRICT match   → schedule mismatch
+                                                  (probable wrong matchup
+                                                  in our DB or API really
+                                                  has a different opponent
+                                                  for this date).
+          4. No hits at all                     → API genuinely missing.
+        """
         filtered = getattr(self, '_preflight_filtered_events', None) or []
         unfiltered = getattr(self, '_preflight_unfiltered_events', None) or []
         if not filtered and not unfiltered:
@@ -479,66 +525,91 @@ class Command(BaseCommand):
 
         self.stdout.write('')
         self.stdout.write('--- Per-game search across API responses ----------------------')
-        self.stdout.write('  For each gap game, find ANY event mentioning either team')
-        self.stdout.write('  in the filtered (production) and unfiltered API responses.')
-        self.stdout.write('')
 
-        def _search(events, home_name, away_name):
-            """Return list of (commence_time, home, away) for events whose
-            home OR away contains either team's last word (nickname).
-            Lenient — we want to know if the API has the game AT ALL,
-            not whether our matching logic accepts it."""
-            home_nick = home_name.split()[-1].lower() if home_name else ''
-            away_nick = away_name.split()[-1].lower() if away_name else ''
-            # Two-word nicknames: Red Sox / White Sox / Blue Jays
-            two_word_nicks = {'sox', 'jays'}
-            if home_nick in two_word_nicks and len(home_name.split()) >= 2:
-                home_nick = ' '.join(home_name.split()[-2:]).lower()
-            if away_nick in two_word_nicks and len(away_name.split()) >= 2:
-                away_nick = ' '.join(away_name.split()[-2:]).lower()
+        def _team_words(name):
+            """Return the team's nickname (last token, two-token for Red Sox /
+            White Sox / Blue Jays). Lowercase for case-insensitive contains."""
+            if not name:
+                return ''
+            parts = name.split()
+            two_word = {'sox', 'jays'}
+            if parts and parts[-1].lower() in two_word and len(parts) >= 2:
+                return ' '.join(parts[-2:]).lower()
+            return parts[-1].lower() if parts else ''
+
+        def _matches_team(event_team_str, target_nick):
+            return bool(target_nick) and target_nick in (event_team_str or '').lower()
+
+        def _strict_hits(events, home_name, away_name):
+            """Events where BOTH our teams appear, in either orientation."""
+            h_nick = _team_words(home_name)
+            a_nick = _team_words(away_name)
             hits = []
             for e in events:
-                eh = (e.get('home_team') or '').lower()
-                ea = (e.get('away_team') or '').lower()
-                if home_nick and (home_nick in eh or home_nick in ea):
+                eh = e.get('home_team') or ''
+                ea = e.get('away_team') or ''
+                # Either orientation: (our_home,our_away) == (e_home,e_away)
+                # OR (our_home,our_away) == (e_away,e_home).
+                same = _matches_team(eh, h_nick) and _matches_team(ea, a_nick)
+                swapped = _matches_team(eh, a_nick) and _matches_team(ea, h_nick)
+                if same or swapped:
                     hits.append(e)
-                elif away_nick and (away_nick in eh or away_nick in ea):
+            return hits
+
+        def _lenient_hits(events, home_name, away_name):
+            """Events where at least ONE of our teams appears (anywhere)."""
+            h_nick = _team_words(home_name)
+            a_nick = _team_words(away_name)
+            hits = []
+            for e in events:
+                eh = e.get('home_team') or ''
+                ea = e.get('away_team') or ''
+                if (_matches_team(eh, h_nick) or _matches_team(ea, h_nick)
+                        or _matches_team(eh, a_nick) or _matches_team(ea, a_nick)):
                     hits.append(e)
             return hits
 
         for d in diags:
             home = d.game.home_team.name
             away = d.game.away_team.name
-            f_hits = _search(filtered, home, away)
-            u_hits = _search(unfiltered, home, away)
-            self.stdout.write(f'  • {d.matchup}')
+            f_strict = _strict_hits(filtered, home, away)
+            u_strict = _strict_hits(unfiltered, home, away)
+            f_lenient = _lenient_hits(filtered, home, away)
+            u_lenient = _lenient_hits(unfiltered, home, away)
+
+            self.stdout.write(f'  • {d.matchup}  (DB first_pitch UTC: {d.game.first_pitch.isoformat()})')
+            # Show STRICT first — that's the true-match line.
             self.stdout.write(
-                f'      filtered_response={len(f_hits)} hit(s)'
-                + (f' [first: {f_hits[0].get("home_team")} vs {f_hits[0].get("away_team")} @ {f_hits[0].get("commence_time")}]' if f_hits else '')
+                f'      strict_filtered={len(f_strict)} strict_unfiltered={len(u_strict)} '
+                f'lenient_filtered={len(f_lenient)} lenient_unfiltered={len(u_lenient)}'
             )
-            self.stdout.write(
-                f'      unfiltered_response={len(u_hits)} hit(s)'
-                + (f' [first: {u_hits[0].get("home_team")} vs {u_hits[0].get("away_team")} @ {u_hits[0].get("commence_time")}]' if u_hits else '')
-            )
-            # Verdict per game
-            if u_hits and not f_hits:
-                self.stdout.write(self.style.ERROR(
-                    f'      ↳ ⚠  Game IS in API (unfiltered) but NOT in our '
-                    f'production-style filtered call. Our time-window or '
-                    f'markets filter is excluding it.'
-                ))
-            elif u_hits and f_hits:
-                # Game appears in both — but we said it wasn't matching.
-                # Likely cause: team name mismatch between API and our DB.
+            # Print up to 3 lenient hits with details so the user can see
+            # what API events actually exist for these team names.
+            if u_lenient:
+                self.stdout.write('      API events involving either team:')
+                for ev in u_lenient[:3]:
+                    self.stdout.write(
+                        f'        - {ev.get("home_team")} vs {ev.get("away_team")} @ {ev.get("commence_time")}'
+                    )
+
+            # Verdict
+            if f_strict:
                 self.stdout.write(self.style.WARNING(
-                    f'      ↳ Game IS in API filtered response. Why isn\'t '
-                    f'our matcher finding it? Probable team-name mismatch — '
-                    f'see API names above vs DB names {home!r} / {away!r}.'
+                    f'      ↳ ⚠  STRICT match exists in filtered API response — our matcher is rejecting it. Bug in our matching code.'
                 ))
-            elif not u_hits and not f_hits:
+            elif u_strict:
+                self.stdout.write(self.style.ERROR(
+                    f'      ↳ ⚠  STRICT match exists ONLY in unfiltered API response. Our time/markets filter is dropping it.'
+                ))
+            elif u_lenient:
+                self.stdout.write(self.style.ERROR(
+                    f'      ↳ ⚠  Schedule/data mismatch: API has games involving these teams but NOT this matchup. Either:\n'
+                    f'         (a) our DB scheduled the wrong opponent for this date (schedule provider bug), or\n'
+                    f'         (b) the API hasn\'t added this matchup yet (e.g. tomorrow\'s game not listed).'
+                ))
+            else:
                 self.stdout.write(
-                    f'      ↳ Game absent from EVERY Odds API response. '
-                    f'Bookmakers genuinely have no posted line for this event.'
+                    f'      ↳ Game absent from API responses entirely. Neither team appears.'
                 )
         self.stdout.write('---------------------------------------------------------------')
 
@@ -809,7 +880,12 @@ class Command(BaseCommand):
     # -----------------------------------------------------------------------
 
     def _print_table(self, diags):
-        headers = ['Game', 'Status', 'ΔFP', 'API', 'Books', 'Parsed', 'Matched', 'ESPN', 'Final Reason']
+        # Header order matches _GameDiag.as_row().
+        # DB/API column shows: distinct-books-in-DB / books-in-API for this matchup.
+        headers = [
+            'Game', 'Status', 'ΔFP', 'DB/API', 'Snap', 'Source',
+            'API', 'Parsed', 'Matched', 'ESPN', 'Final Reason',
+        ]
         rows = [d.as_row() for d in diags]
         widths = [max(len(str(c)) for c in [h] + [r[i] for r in rows])
                   for i, h in enumerate(headers)]
@@ -833,6 +909,10 @@ class Command(BaseCommand):
         self.stdout.write('Legend:')
         self.stdout.write('  Status    SCHEDULED / LIVE / FINAL — game state')
         self.stdout.write('  ΔFP       Minutes from now to first_pitch (negative = past)')
+        self.stdout.write('  DB/API    distinct books in DB (last 180min) / books in API for this matchup')
+        self.stdout.write('            ↳ if DB much less than API, we are under-covering this game')
+        self.stdout.write('  Snap      Age of most recent snapshot (minutes); "-" = no snapshot')
+        self.stdout.write('  Source    Source of most recent snapshot: odds_api / espn / -')
         self.stdout.write('  ↳ if Status=LIVE or ΔFP is negative, the Odds API has likely')
         self.stdout.write('    moved this event to its live-odds endpoint and our pre-game')
         self.stdout.write('    fetch will not return it. Same applies to ESPN scoreboard.')

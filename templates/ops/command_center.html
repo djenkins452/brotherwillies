@@ -167,6 +167,12 @@
         {% csrf_token %}
         <button type="submit" class="btn btn-secondary">Diagnose MLB Odds Gaps</button>
       </form>
+      {# Slate mode — same diagnostic but covers every upcoming MLB game, not just gaps. Use this when something looks wrong across the whole slate, not just one or two games. #}
+      <form method="post" action="{% url 'ops:trigger_diagnose_mlb_odds_gaps' %}?all=1"
+            onsubmit="return confirm('Run the SLATE diagnostic (every upcoming MLB game)? This shows coverage state for ALL games — DB book count vs API book count, snapshot age, source. Same single API + ESPN fetch; no extra quota cost beyond per-game lookups.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Diagnose ALL Upcoming MLB</button>
+      </form>
     </div>
   </div>
 
