@@ -58,6 +58,12 @@ class _GameDiag:
         self.db_books_count = 0       # distinct sportsbooks with any snapshot in last 180m
         self.snap_age_min = None      # minutes since latest snapshot, or None
         self.snap_source = '-'        # 'odds_api' / 'espn' / '-' if no snapshot
+        self.total_books_all_time = 0
+        self.total_snapshots = 0
+        self.primary_books_all_time = 0
+        self.espn_books_all_time = 0
+        self.last_primary_age_min = None
+        self.last_espn_age_min = None
         self._populate_db_coverage()
         # Stage 1 — Odds API (filled later)
         self.api_present = '?'
@@ -74,23 +80,59 @@ class _GameDiag:
     def _populate_db_coverage(self):
         """Read current DB state for this game so the table shows our
         coverage alongside the API's. The discrepancy is the actionable
-        signal: 'API has 12 books, DB has 3 fresh' = under-covering."""
+        signal: 'API has 12 books, DB has 3 fresh' = under-covering.
+
+        Also surfaces ALL-TIME stats per source so we can distinguish:
+          - "primary worked earlier today, then game went live" (total
+            books from odds_api > 1, latest_primary_age large) — normal
+            live-game drop, not a bug.
+          - "primary NEVER persisted for this game" (total books from
+            odds_api = 0 or 1) — the actual bug we'd be hunting.
+        """
         from datetime import timedelta
         from django.utils import timezone as _tz
         from apps.mlb.models import OddsSnapshot
-        cutoff = _tz.now() - timedelta(minutes=180)
-        recent = OddsSnapshot.objects.filter(
-            game=self.game, captured_at__gte=cutoff,
-        )
+        now = _tz.now()
+        cutoff = now - timedelta(minutes=180)
+        all_for_game = OddsSnapshot.objects.filter(game=self.game)
+        recent = all_for_game.filter(captured_at__gte=cutoff)
         self.db_books_count = recent.values('sportsbook').distinct().count()
-        latest = (
-            OddsSnapshot.objects.filter(game=self.game)
+
+        # All-time totals.
+        self.total_books_all_time = all_for_game.values('sportsbook').distinct().count()
+        self.total_snapshots = all_for_game.count()
+        self.primary_books_all_time = (
+            all_for_game.filter(odds_source='odds_api')
+            .values('sportsbook').distinct().count()
+        )
+        self.espn_books_all_time = (
+            all_for_game.filter(odds_source='espn')
+            .values('sportsbook').distinct().count()
+        )
+
+        # Latest snapshot overall.
+        latest = all_for_game.order_by('-captured_at').first()
+        if latest:
+            self.snap_age_min = int((now - latest.captured_at).total_seconds() / 60)
+            self.snap_source = (latest.odds_source or '?')[:8]
+
+        # Latest primary + latest ESPN ages, so we can see the lag pattern.
+        latest_primary = (
+            all_for_game.filter(odds_source='odds_api')
             .order_by('-captured_at').first()
         )
-        if latest:
-            age_seconds = (_tz.now() - latest.captured_at).total_seconds()
-            self.snap_age_min = int(age_seconds / 60)
-            self.snap_source = (latest.odds_source or '?')[:8]
+        self.last_primary_age_min = (
+            int((now - latest_primary.captured_at).total_seconds() / 60)
+            if latest_primary else None
+        )
+        latest_espn = (
+            all_for_game.filter(odds_source='espn')
+            .order_by('-captured_at').first()
+        )
+        self.last_espn_age_min = (
+            int((now - latest_espn.captured_at).total_seconds() / 60)
+            if latest_espn else None
+        )
 
     def as_row(self):
         # Format Δ first_pitch for human reading: "+125m" / "-30m" / "live".
@@ -295,6 +337,7 @@ class Command(BaseCommand):
 
         # ---- Output --------------------------------------------------------
         self._print_table(diags)
+        self._print_all_time_coverage(diags)
         self._print_legend()
 
         # Also emit each row at INFO so the deploy log captures the table.
@@ -903,6 +946,44 @@ class Command(BaseCommand):
             self.stdout.write(_fmt(r))
         self.stdout.write(sep)
         self.stdout.write(f'Total: {len(rows)} games examined.')
+
+    def _print_all_time_coverage(self, diags):
+        """All-time DB coverage per game so we can distinguish 'primary
+        worked earlier and we lost it as the game went live' from
+        'primary NEVER persisted for this game.'
+
+        The main table only shows snapshots in the last 180 minutes.
+        These all-time stats reveal whether the under-coverage signal
+        is a refresh cadence issue (rows exist but stale) vs a primary-
+        path bug (rows never existed at all).
+        """
+        self.stdout.write('')
+        self.stdout.write('--- All-time per-game DB coverage ----------------------------')
+        self.stdout.write(
+            '  Format: PRIMARY books (latest age) | ESPN books (latest age) | total snapshots'
+        )
+        self.stdout.write(
+            '  ↳ if PRIMARY books = 0, primary has NEVER persisted for this game today'
+        )
+        self.stdout.write('')
+        for d in diags:
+            primary_age = (
+                f'{d.last_primary_age_min}m'
+                if d.last_primary_age_min is not None else 'NEVER'
+            )
+            espn_age = (
+                f'{d.last_espn_age_min}m'
+                if d.last_espn_age_min is not None else 'NEVER'
+            )
+            primary_marker = ' ⚠ PRIMARY-NEVER-RAN' if d.primary_books_all_time == 0 else ''
+            self.stdout.write(
+                f'  • {d.matchup[:40]:<40}  '
+                f'PRIMARY {d.primary_books_all_time:>2} books (latest {primary_age:>6}) | '
+                f'ESPN {d.espn_books_all_time:>2} books (latest {espn_age:>6}) | '
+                f'total {d.total_snapshots:>3} snaps'
+                f'{primary_marker}'
+            )
+        self.stdout.write('--------------------------------------------------------------')
 
     def _print_legend(self):
         self.stdout.write('')
