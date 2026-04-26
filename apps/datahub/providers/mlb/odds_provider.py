@@ -386,13 +386,29 @@ class MLBOddsProvider(AbstractProvider):
             if commence:
                 window_start = commence - timedelta(hours=36)
                 window_end = commence + timedelta(hours=36)
-                game = (
+                # Pick the candidate whose first_pitch is CLOSEST to the
+                # API event's commence_time. Previous code used
+                # .order_by('first_pitch').first() which always returned
+                # the EARLIEST candidate — wrong for doubleheaders or any
+                # case with multiple Game rows for the same matchup
+                # within the ±36h window. With the old logic, both
+                # API events for a doubleheader would route to game 1,
+                # leaving game 2 with zero primary snaps.
+                #
+                # Closest-by-delta is what fallback 2 already does for
+                # the wider ±4-day query; making the primary path
+                # consistent eliminates the surprise.
+                candidates = list(
                     Game.objects
                     .filter(home_team=home, away_team=away,
                             first_pitch__gte=window_start,
                             first_pitch__lte=window_end)
-                    .order_by('first_pitch').first()
                 )
+                if candidates:
+                    candidates.sort(
+                        key=lambda g: abs((g.first_pitch - commence).total_seconds()),
+                    )
+                    game = candidates[0]
 
             # Fallback 1: no commence time in the feed → take the nearest
             # upcoming game within 7 days for this matchup.

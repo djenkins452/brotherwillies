@@ -1827,3 +1827,100 @@ class DiagnoseMlbOddsGapsCommandTests(TestCase):
         ):
             call_command('diagnose_mlb_odds_gaps', stdout=StringIO())
         self.assertEqual(OddsSnapshot.objects.count(), baseline)
+
+
+class MlbOddsPrimaryDoubleheaderMatchTests(TestCase):
+    """When two Game rows share the same matchup within the ±36h window,
+    primary persist must pick the game whose first_pitch is CLOSEST to
+    the API event's commence_time — NOT the earliest by first_pitch.
+
+    Regression: with the old .order_by('first_pitch').first() logic,
+    a tomorrow-night API event would route its snapshots to a today's
+    Game with the same teams (because today's first_pitch is earlier),
+    leaving tomorrow's Game with zero primary snaps. The user's prod
+    data showed this exact pattern."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Game, OddsSnapshot, Team
+        self.OddsSnapshot = OddsSnapshot
+        conf = Conference.objects.create(name='AL East', slug='al-east')
+        self.home = Team.objects.create(
+            name='New York Yankees', slug='new-york-yankees', conference=conf,
+        )
+        self.away = Team.objects.create(
+            name='Texas Rangers', slug='texas-rangers', conference=conf,
+        )
+
+    def _api_event(self, commence_dt):
+        return {
+            'home_team': 'New York Yankees',
+            'away_team': 'Texas Rangers',
+            'commence_time': commence_dt.isoformat().replace('+00:00', 'Z'),
+            'sportsbook': 'DraftKings',
+            'moneyline_home': -150, 'moneyline_away': 130,
+            'spread': -1.5, 'total': 8.5,
+        }
+
+    def test_doubleheader_picks_closest_game(self):
+        from apps.mlb.models import Game
+        from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
+        # Two games tomorrow with the SAME teams: earlier and later.
+        early = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=24),
+        )
+        late = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=30),
+        )
+        # API event matches the LATE game's time. Closest-by-delta should
+        # pick the late game; the old order_by('first_pitch') would have
+        # picked the early game.
+        provider = MLBOddsProvider.__new__(MLBOddsProvider)
+        provider.persist([self._api_event(late.first_pitch)])
+
+        late_snaps = self.OddsSnapshot.objects.filter(game=late).count()
+        early_snaps = self.OddsSnapshot.objects.filter(game=early).count()
+        self.assertEqual(
+            late_snaps, 1,
+            'Late game (closest to commence) should receive the snapshot',
+        )
+        self.assertEqual(
+            early_snaps, 0,
+            'Early game should NOT receive the snapshot when API event '
+            'targets the late game',
+        )
+
+    def test_two_api_events_split_correctly_to_their_doubleheader_games(self):
+        from apps.mlb.models import Game
+        from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
+        # Two games (doubleheader). API has both as separate events.
+        # Each event's snapshot should route to ITS matching Game,
+        # not both pile onto the earliest.
+        game_1 = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=24),
+        )
+        game_2 = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=30),
+        )
+        provider = MLBOddsProvider.__new__(MLBOddsProvider)
+        provider.persist([
+            self._api_event(game_1.first_pitch),
+            self._api_event(game_2.first_pitch),
+        ])
+        self.assertEqual(self.OddsSnapshot.objects.filter(game=game_1).count(), 1)
+        self.assertEqual(self.OddsSnapshot.objects.filter(game=game_2).count(), 1)
+
+    def test_single_game_in_window_still_works(self):
+        # Sanity check: when there's only one candidate, it gets the snapshot.
+        from apps.mlb.models import Game
+        from apps.datahub.providers.mlb.odds_provider import MLBOddsProvider
+        only = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=24),
+        )
+        provider = MLBOddsProvider.__new__(MLBOddsProvider)
+        provider.persist([self._api_event(only.first_pitch)])
+        self.assertEqual(self.OddsSnapshot.objects.filter(game=only).count(), 1)
