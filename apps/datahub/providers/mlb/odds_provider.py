@@ -33,13 +33,41 @@ def american_to_prob(ml):
 
 
 def _find_team(name):
+    """Three-stage match: alias lookup → DB iexact + slug → fuzzy fallback.
+
+    Returns the matched Team or None. The fuzzy stage runs only when the
+    earlier ones miss, and emits a structured log line on a successful
+    fallback so we can mine the deploy logs to keep the alias dict
+    growing toward zero fuzzy hits.
+    """
     if not name:
         return None
+    # Stage 1: alias dictionary
     canonical = normalize_mlb_team_name(name)
-    return (
+    team = (
         Team.objects.filter(name__iexact=canonical).first()
         or Team.objects.filter(slug=slugify(canonical)).first()
     )
+    if team:
+        return team
+
+    # Stage 2: fuzzy fallback against the canonical list
+    from apps.datahub.providers.mlb.name_aliases import fuzzy_match_to_canonical
+    fuzzy_canonical = fuzzy_match_to_canonical(name)
+    if fuzzy_canonical and fuzzy_canonical != canonical:
+        team = (
+            Team.objects.filter(name__iexact=fuzzy_canonical).first()
+            or Team.objects.filter(slug=slugify(fuzzy_canonical)).first()
+        )
+        if team:
+            logger.info(
+                'mlb_team_match_fuzzy_recovered api_name=%r canonical_attempt=%r '
+                'fuzzy_canonical=%r matched_team=%r',
+                name, canonical, fuzzy_canonical, team.name,
+            )
+            return team
+
+    return None
 
 
 class MLBOddsProvider(AbstractProvider):
@@ -145,20 +173,66 @@ class MLBOddsProvider(AbstractProvider):
         `status='empty'` when nothing was created — upstream fail-fast
         code relies on this to distinguish "ran but got nothing" from "ran
         successfully".
+
+        Logging strategy (designed so the deploy log answers "why did N
+        games not get odds?" without needing to attach a debugger):
+
+          - Per-skip: structured log line including the API names AND the
+            normalized canonical names we attempted to match against.
+            Identifies whether the failure was alias-table coverage or
+            something downstream.
+          - Summary: one log line at end with created / skipped /
+            skip_reasons dict.
+          - Coverage ERROR: if created rows are < 50% of distinct (home,away)
+            matchups in the input, the summary is logged at ERROR level so
+            it surfaces in the Ops Command Center recent-failures panel
+            without us having to dig through INFO traffic.
+          - Debug mode: when settings.DEBUG_ODDS_MATCHING is True, every
+            API team name we see is echoed at INFO. Designed to be flipped
+            on briefly, harvest the names, then flipped off.
         """
+        from django.conf import settings as django_settings
+        debug_matching = getattr(django_settings, 'DEBUG_ODDS_MATCHING', False)
+
         created = skipped = 0
         skip_reasons: dict[str, int] = {}
+        # Track distinct matchups seen so we can compute coverage at the end.
+        # An "expected matchup" is each unique (home_team, away_team) pair
+        # the API gave us. Multiple bookmakers per game count once.
+        seen_matchups: set = set()
+        matched_matchups: set = set()
         now = timezone.now()
         for item in normalized:
-            home = _find_team(item['home_team'])
-            away = _find_team(item['away_team'])
+            api_home = item.get('home_team', '')
+            api_away = item.get('away_team', '')
+            seen_matchups.add((api_home, api_away))
+
+            if debug_matching:
+                logger.info(
+                    'mlb_odds_persist_debug api_home=%r api_away=%r '
+                    'sportsbook=%r commence=%r',
+                    api_home, api_away, item.get('sportsbook'),
+                    item.get('commence_time'),
+                )
+
+            home = _find_team(api_home)
+            away = _find_team(api_away)
             if not home or not away:
                 skipped += 1
                 reason = 'no_team_match'
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                # Include the normalized canonical attempt so a log reader
+                # can see whether the alias table missed the variant or the
+                # DB simply doesn't have the team yet.
                 logger.info(
-                    f"mlb_odds_persist_skip reason={reason} "
-                    f"home={item['home_team']!r} away={item['away_team']!r}"
+                    'mlb_odds_persist_skip reason=%s '
+                    'api_home=%r api_away=%r '
+                    'normalized_home=%r normalized_away=%r '
+                    'home_matched=%s away_matched=%s',
+                    reason, api_home, api_away,
+                    normalize_mlb_team_name(api_home),
+                    normalize_mlb_team_name(api_away),
+                    bool(home), bool(away),
                 )
                 continue
 
@@ -245,6 +319,7 @@ class MLBOddsProvider(AbstractProvider):
                 moneyline_home=item.get('moneyline_home'),
                 moneyline_away=item.get('moneyline_away'),
             )
+            matched_matchups.add((api_home, api_away))
             # Movement intelligence — silently no-ops on the first snapshot
             # for a (game, sportsbook). When a follow-up pull crosses the
             # significance threshold, this upgrades snapshot_type to
@@ -255,13 +330,34 @@ class MLBOddsProvider(AbstractProvider):
             created += 1
 
         status = 'ok' if created > 0 else 'empty'
-        logger.info(
-            f"mlb_odds_persist_summary created={created} skipped={skipped} "
-            f"skip_reasons={skip_reasons} status={status}"
+
+        # Coverage check: how many distinct matchups did we successfully
+        # persist at least one bookmaker row for? Anything under 50% is
+        # almost certainly a regression — alias coverage dropped, schedule
+        # dates drifted, or persist logic regressed. Log ERROR so the row
+        # surfaces in the Ops Command Center recent-failures panel.
+        n_seen = len(seen_matchups)
+        n_matched = len(matched_matchups)
+        coverage_pct = (n_matched / n_seen * 100.0) if n_seen else 0.0
+        log_fn = logger.info
+        if n_seen >= 4 and coverage_pct < 50.0:
+            # 4-game minimum so a small slate (early season) doesn't
+            # spuriously trigger the alarm.
+            log_fn = logger.error
+        log_fn(
+            'mlb_odds_persist_summary created=%d skipped=%d '
+            'skip_reasons=%s status=%s '
+            'matchups_seen=%d matchups_matched=%d coverage_pct=%.1f',
+            created, skipped, skip_reasons, status,
+            n_seen, n_matched, coverage_pct,
         )
+
         return {
             'status': status,
             'created': created,
             'skipped': skipped,
             'skip_reasons': skip_reasons,
+            'matchups_seen': n_seen,
+            'matchups_matched': n_matched,
+            'coverage_pct': round(coverage_pct, 1),
         }

@@ -160,6 +160,11 @@ CBBD_API_KEY = os.environ.get('CBBD_API_KEY', '')
 ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES = int(
     os.environ.get('ODDS_PROVIDER_CIRCUIT_COOLDOWN_MINUTES', '60')
 )
+# Diagnostic flag. When True, the MLB odds provider emits an INFO log line
+# for every API team name it sees during a persist run. Designed to be
+# flipped on briefly via Railway env var to harvest unfamiliar API names,
+# then flipped back off — leaving it on is just log noise.
+DEBUG_ODDS_MATCHING = os.environ.get('DEBUG_ODDS_MATCHING', 'false').lower() == 'true'
 # Freshness windows for odds-driven UI gating (Commit 2 will start using these).
 FRESH_ODDS_MAX_AGE_MINUTES = int(os.environ.get('FRESH_ODDS_MAX_AGE_MINUTES', '180'))
 STALE_ODDS_MAX_AGE_MINUTES = int(os.environ.get('STALE_ODDS_MAX_AGE_MINUTES', '720'))

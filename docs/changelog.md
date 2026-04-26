@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-04-26 - MLB odds: silent-data-loss fix + comprehensive alias coverage
+
+**Summary:** A prod incident showed only 1 of 16 MLB games getting odds. The cause was almost certainly team-name variants the alias dict didn't recognize, and the silence was because skipped rows were logged at INFO with API-only names — easy to miss in deploy logs. This commit makes that class of failure visible AND much harder to trigger.
+
+### Alias coverage — all 30 MLB franchises
+`apps/datahub/providers/mlb/name_aliases.py` rebuilt with:
+- A `CANONICAL_MLB_TEAMS` list of 30 active franchises (single source of truth).
+- ~150 alias entries covering: full names, nickname-only, city-only, "NY/LA/SF/SD" short forms, three-letter abbreviations (NYY/LAD/STL/…), legacy variants (Cleveland Indians → Guardians), Athletics relocation (Oakland → Sacramento → Athletics-only).
+- Punctuation-tolerant key normalization (`St. Louis` ≡ `St Louis` ≡ `Saint Louis`).
+
+### Fuzzy fallback (`fuzzy_match_to_canonical`)
+Runs only when alias lookup AND DB lookup both miss:
+- Substring match: input contains a known nickname.
+- Reverse substring: input is a substring of a canonical (e.g. API trims to "Yankees" only).
+- Two-word nicknames handled correctly (Red Sox / White Sox / Blue Jays).
+- Pure string ops, no fuzzy-match library needed.
+- Logs every successful fuzzy recovery so we can mine the deploy log and grow the alias dict toward zero fuzzy hits.
+
+### Persist logging — no more silent fails
+`apps/datahub/providers/mlb/odds_provider.py::persist`:
+- Per-skip logs now include both the raw API names AND the normalized canonical attempt — so a log reader can immediately tell alias-miss from DB-miss.
+- Summary logs gained `matchups_seen` / `matchups_matched` / `coverage_pct`.
+- **Coverage alert**: when `matchups_matched < 50%` of `matchups_seen` AND we saw at least 4 matchups, the summary is logged at **ERROR** level. This surfaces in the Ops Command Center "Recent Failures" panel automatically — no extra wiring needed.
+- Result dict carries the same coverage figures so callers can act on them.
+
+### Debug mode (`DEBUG_ODDS_MATCHING`)
+New env-var-backed setting. When `true`, every API team name is echoed at INFO during persist — designed to be flipped on briefly via Railway, harvest the names, and flipped back off.
+
+### Tests (22 new in `apps.datahub.tests`)
+- `MlbAliasCoverageTests` — all 30 franchises present, every nickname resolves, common short forms (NY/LA/Chi), 3-letter abbreviations, Athletics relocation variants, defensive cases (empty/None/unknown).
+- `MlbFuzzyMatchTests` — substring match, reverse substring, two-word nicknames, garbage input returns None, short-input doesn't false-match.
+- `MlbOddsPersistLoggingTests` — skip log includes normalized names, summary log fields present, coverage <50% logs ERROR, normal coverage doesn't log ERROR, small-slate exemption (under 4 matchups), result dict carries coverage stats.
+- `MlbDebugMatchingFlagTests` — flag on emits per-item INFO, flag off emits nothing extra.
+- `MlbFuzzyRecoveryEndToEndTests` — _find_team recovers a Team via fuzzy fallback when alias dict misses.
+
+499 total tests pass (pre-existing `feedback.tests` ImportError unchanged).
+
+### Files
+- Rewritten: `apps/datahub/providers/mlb/name_aliases.py`.
+- Edited: `apps/datahub/providers/mlb/odds_provider.py`, `brotherwillies/settings.py`, `apps/datahub/tests.py`.
+
+---
+
 ## 2026-04-26 - Auto-failover Foundation: ProviderHealth + Circuit Breaker (Commit 1)
 
 **Summary:** First of three commits building an auto-failover + degraded-mode reliability layer. This one is the foundation — durable provider state, circuit-breaker logic, and snapshot source-tagging schema. No user-visible behavior change yet (no router, no UI gating); that lands in Commits 2 and 3.
