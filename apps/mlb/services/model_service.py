@@ -31,7 +31,46 @@ HOUSE_WEIGHTS = {
 
 
 def _get_latest_odds(game):
-    return game.odds_snapshots.order_by('-captured_at').first()
+    """Pick the most trustworthy fresh snapshot, with a graceful fall-through.
+
+    Trust ladder (highest priority first):
+        1. Primary (odds_api) within FRESH_ODDS_MAX_AGE_MINUTES.
+        2. Non-derived secondary (espn, is_derived=False) within the same window.
+        3. Most recent snapshot of any source (legacy fallback — used when the
+           game has nothing fresh and we'd rather show stale data with the
+           confidence indicator turned down than display "no odds").
+
+    Why this matters: the previous one-liner used `-captured_at` only, so a
+    30-second-old ESPN row would shadow a 10-minute-old paid Odds API row.
+    The paid feed is authoritative — we should prefer it whenever it's fresh,
+    not just when it happens to be the most recent insert.
+
+    Derived rows (synthetic moneylines from symmetric inversion) are still
+    reachable via the tier-3 fallback when nothing better exists, but the
+    recommendation engine and the trust-badge layer already know how to
+    flag/suppress them — we don't gate them out here so the UI can choose.
+    """
+    from datetime import timedelta
+    from django.conf import settings
+
+    fresh_window = getattr(settings, 'FRESH_ODDS_MAX_AGE_MINUTES', 180)
+    fresh_cutoff = timezone.now() - timedelta(minutes=fresh_window)
+
+    base = game.odds_snapshots.order_by('-captured_at')
+
+    primary = base.filter(odds_source='odds_api', captured_at__gte=fresh_cutoff).first()
+    if primary:
+        return primary
+
+    secondary = base.filter(
+        odds_source='espn',
+        is_derived=False,
+        captured_at__gte=fresh_cutoff,
+    ).first()
+    if secondary:
+        return secondary
+
+    return base.first()
 
 
 def _injuries(game):
@@ -138,6 +177,15 @@ def compute_game_data(game, user=None):
             if abs(diff) > 0.5:
                 line_movement = 'up' if diff > 0 else 'down'
 
+    # Source-Aware Betting trust tier — exposed to the template so the
+    # game-detail page can render the same Verified/ESPN/Derived badge
+    # the MLB hub already shows. Without this, the operator cannot see
+    # at a glance whether the displayed spread/total/ML came from the
+    # paid Odds API, ESPN's free fallback, or a synthesized row — and
+    # that visibility is the whole point of source-aware betting.
+    from apps.core.services.odds_trust import get_odds_trust_tier, trust_badge
+    trust_tier = get_odds_trust_tier(latest_odds)
+
     return {
         'game': game,
         'latest_odds': latest_odds,
@@ -153,4 +201,6 @@ def compute_game_data(game, user=None):
         'line_movement': line_movement,
         'injuries': injuries,
         'model_version': HOUSE_MODEL_VERSION,
+        'trust_tier': trust_tier,
+        'trust_badge': trust_badge(trust_tier),
     }

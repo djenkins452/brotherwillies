@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-04-26 - MLB game-detail: trust-aware odds + visible source badge
+
+**Summary:** Two related fixes to the MLB game-detail page (`/mlb/game/<id>/`) so operators can both *see* and *trust* which source the displayed spread / total / moneyline came from.
+
+### `_get_latest_odds` now prefers primary over secondary
+The previous one-liner picked whichever snapshot had the latest `captured_at` regardless of source. A 30-second-old ESPN row would shadow a 10-minute-old paid Odds API row — wrong precedence, since the paid feed is authoritative.
+
+The new trust ladder (highest first):
+1. **Primary** (`odds_source='odds_api'`) within `FRESH_ODDS_MAX_AGE_MINUTES`.
+2. **Non-derived secondary** (`odds_source='espn'`, `is_derived=False`) within the same window.
+3. Most recent of any source — last-resort fallback so games with only stale or derived data still display *something* with the confidence pill turned down, rather than rendering "no odds."
+
+This affects every consumer of `compute_game_data` — the displayed market probability, edge math, line-movement detection, and the recommendation engine's input.
+
+### Source badge on the game-detail page
+The MLB hub already shows a 🟢 Verified / 🟡 ESPN / 🔴 Derived badge per game. The game-detail page didn't — operators had no way to know whether the displayed odds came from the paid API or the free fallback. The same `get_odds_trust_tier` helper now drives a badge in the game-meta row, right next to the existing "Data: HIGH" pill:
+- 🟢 **Verified Odds** · sportsbook · age — paid Odds API
+- 🟡 **ESPN Odds** · sportsbook · age — secondary path
+- 🔴 **Derived Odds** · sportsbook · age — synthesized (never recommended)
+- ⚪ **Unknown Source** · sportsbook · age — defensive fallback
+
+Tooltip covers the legend so the page stays uncluttered.
+
+---
+
 ## 2026-04-26 - Ops Recent Runs: bigger transcripts + copy button
 
 **Summary:** Two improvements to make the Ops Command Center's Recent Runs panel actually usable for diagnosis.

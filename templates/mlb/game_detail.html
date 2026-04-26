@@ -23,6 +23,21 @@
         <span>{{ game.first_pitch|date:"D M d, g:i A" }} {% tz_abbr %}</span>
         {% if game.neutral_site %}<span class="badge">Neutral</span>{% endif %}
         <span class="badge badge-{{ data.confidence_class }}" title="Data-input quality: how fresh our odds are and whether both starting pitchers are known. This is NOT a measure of whether to bet — see the Model Pick card below for the decision-layer recommendation.">Data: {{ data.confidence|title }}</span>
+        {% comment %}
+        Source/trust badge — answers "where did the displayed spread/total/ML
+        actually come from?". Same helper that powers the MLB hub's badge,
+        now wired into the game-detail page so a stale or ESPN-fallback row
+        is never shown without an explicit visual cue. Colors mirror the
+        confidence pill (green=trustworthy, yellow=secondary, red=derived,
+        gray=unknown). Tooltip covers the legend so we don't need a key.
+        {% endcomment %}
+        {% if data.latest_odds %}
+        <span class="badge"
+              style="background:{% if data.trust_tier == 'primary' %}#1f4d2a{% elif data.trust_tier == 'secondary' %}#5a4d1f{% elif data.trust_tier == 'invalid' %}#5a1f1f{% else %}#2e3350{% endif %};color:#fff;border:1px solid {% if data.trust_tier == 'primary' %}#2c6c3c{% elif data.trust_tier == 'secondary' %}#7a6a2c{% elif data.trust_tier == 'invalid' %}#7a2c2c{% else %}#3a3f5a{% endif %};"
+              title="Source of the displayed spread/total/moneyline. Verified Odds = paid Odds API (authoritative). ESPN Odds = free fallback feed, used when primary is missing. Derived Odds = synthesized via symmetric inversion — never feeds a recommendation. Unknown = shape we cannot classify.">
+            {{ data.trust_badge.icon }} {{ data.trust_badge.label }}{% if data.latest_odds.sportsbook %} · {{ data.latest_odds.sportsbook }}{% endif %} · {{ data.latest_odds.captured_at|timesince }} ago
+        </span>
+        {% endif %}
     </div>
     {% if data.line_movement %}
     <div class="text-sm mt-1 {% if data.line_movement == 'up' %}line-up{% else %}line-down{% endif %}">Line moved</div>
