@@ -1366,17 +1366,19 @@ class MLBHubDecisionPartitionTests(TestCase):
         sections = partition_games_by_decision([s])
         self.assertEqual(sections['not_recommended'], [s])
 
-    def test_no_recommendation_lands_in_not_recommended(self):
-        """Games without odds (rec=None) still render — in the dimmed section."""
+    def test_no_recommendation_lands_in_unrated(self):
+        """Games without odds (rec=None) go to unrated, NOT not_recommended.
+        Two different states: 'we couldn't price it' vs 'we said skip'."""
         from apps.mlb.services.prioritization import partition_games_by_decision
         s = self._fake_signal(rec=None)
         sections = partition_games_by_decision([s])
-        self.assertEqual(sections['not_recommended'], [s])
+        self.assertEqual(sections['unrated'], [s])
+        self.assertEqual(sections['not_recommended'], [])
         self.assertEqual(sections['elite'], [])
         self.assertEqual(sections['recommended'], [])
 
     def test_every_game_appears_exactly_once(self):
-        """Full slate of 10 games covering all three tiers + a None-rec case.
+        """Full slate of 10 games covering all four buckets.
         Total across sections == total input, and no tile shows up twice."""
         from apps.mlb.services.prioritization import partition_games_by_decision
 
@@ -1404,14 +1406,16 @@ class MLBHubDecisionPartitionTests(TestCase):
         sections = partition_games_by_decision(signals)
 
         total = (len(sections['elite']) + len(sections['recommended'])
-                 + len(sections['not_recommended']))
+                 + len(sections['not_recommended']) + len(sections['unrated']))
         self.assertEqual(total, len(signals))
         all_ids = (
             [s.game.id for s in sections['elite']]
             + [s.game.id for s in sections['recommended']]
             + [s.game.id for s in sections['not_recommended']]
+            + [s.game.id for s in sections['unrated']]
         )
         self.assertEqual(len(all_ids), len(set(all_ids)), 'duplicate id across sections')
+        self.assertEqual(sections['unrated'][0].game.id, 'unknown')
 
     def test_sort_order_within_section_is_edge_desc(self):
         from apps.mlb.services.prioritization import partition_games_by_decision
@@ -1427,8 +1431,10 @@ class MLBHubDecisionPartitionTests(TestCase):
             ['b', 'c', 'a'],
         )
 
-    def test_games_without_rec_sort_last_in_not_recommended(self):
-        """Real not-recommended games sort above null-rec games."""
+    def test_unrated_section_isolated_from_not_recommended(self):
+        """Real not-recommended games and null-rec games go to DIFFERENT
+        sections — the new unrated bucket distinguishes 'no signal' from
+        'negative signal'."""
         from apps.mlb.services.prioritization import partition_games_by_decision
         real = self._fake_signal(game_id='real',
                                  rec=self._fake_rec(tier='standard',
@@ -1436,10 +1442,8 @@ class MLBHubDecisionPartitionTests(TestCase):
                                                     edge=2.0))
         null = self._fake_signal(game_id='null', rec=None)
         sections = partition_games_by_decision([null, real])
-        self.assertEqual(
-            [s.game.id for s in sections['not_recommended']],
-            ['real', 'null'],
-        )
+        self.assertEqual([s.game.id for s in sections['not_recommended']], ['real'])
+        self.assertEqual([s.game.id for s in sections['unrated']], ['null'])
 
     def test_elite_cap_from_assign_tiers_is_honored(self):
         """End-to-end with the slate-level cap: 4 recs all with elite-level

@@ -717,21 +717,28 @@ def _decision_sort_key(s: GameSignals):
 
 
 def partition_games_by_decision(signals: list[GameSignals]) -> dict:
-    """Split MLB signals into the three decision-driven sections.
+    """Split MLB signals into four decision-driven sections.
 
     Every input signal ends up in exactly one list — no games are dropped.
-    Games without a recommendation (no odds yet) land in `not_recommended`;
-    we can't actionably bet them yet, so they share the dimmed treatment.
+    Distinct buckets matter because they communicate different things:
+
+      elite           — the system's strongest picks (capped at 2)
+      recommended     — model says bet, edge cleared the rules
+      not_recommended — model says fade (we have odds; rules said skip)
+      unrated         — we can't evaluate (no odds, or game already live and
+                        odds providers dropped it). Visually demoted but
+                        labeled honestly so users don't conflate
+                        "no signal" with "negative signal."
 
     CALL ORDER: invoke AFTER `assign_tiers(list_of_recs)` so the slate-level
     elite cap (MAX_ELITE_PER_SLATE=2) has already been applied. Otherwise
     more than 2 games can show up in the Top Plays section.
     """
-    elite, recommended, not_recommended = [], [], []
+    elite, recommended, not_recommended, unrated = [], [], [], []
     for s in signals:
         rec = s.recommendation
         if rec is None:
-            not_recommended.append(s)
+            unrated.append(s)
             continue
         if rec.tier == 'elite':
             elite.append(s)
@@ -743,8 +750,10 @@ def partition_games_by_decision(signals: list[GameSignals]) -> dict:
     elite.sort(key=_decision_sort_key)
     recommended.sort(key=_decision_sort_key)
     not_recommended.sort(key=_decision_sort_key)
+    unrated.sort(key=_decision_sort_key)
     return {
         'elite': elite,
         'recommended': recommended,
         'not_recommended': not_recommended,
+        'unrated': unrated,
     }

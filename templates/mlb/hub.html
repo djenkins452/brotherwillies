@@ -136,7 +136,7 @@
   </details>
   {% endif %}
 
-  {% if not elite_games and not recommended_games and not not_recommended_games and not future_games %}
+  {% if not elite_games and not recommended_games and not not_recommended_games and not unrated_games and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
     </div>
@@ -196,8 +196,33 @@
           <h2 class="mlb-section__title">&#x26A0;&#xFE0F; Not Recommended</h2>
           <span class="mlb-section__count">{{ not_recommended_games|length }}</span>
         </div>
+        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">Model said fade — edge below threshold or heavy juice.</p>
         <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
           {% for s in not_recommended_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {# Section 4 — ❓ Unrated: live games without odds, or pre-game games we
+       couldn't price. Different from Not Recommended — there's no signal,
+       not a negative one. #}
+    {% if unrated_games %}
+      <section class="mlb-section mlb-section--unrated">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">&#x2754; Unrated <span class="text-sm text-muted" style="font-weight:normal;">— odds unavailable</span></h2>
+          <span class="mlb-section__count">{{ unrated_games|length }}</span>
+        </div>
+        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">Live games drop off odds feeds once they start, and pre-game odds may not have been captured yet. No signal &mdash; not a negative one.</p>
+        <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
+          {% for s in unrated_games %}
             <div role="listitem">
               {% if s.game.status == 'live' %}
                 {% include "mlb/_tile_live.html" with s=s %}

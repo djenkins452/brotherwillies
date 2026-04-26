@@ -80,6 +80,7 @@ def mlb_hub(request):
         'elite_games': decision_sections['elite'],
         'recommended_games': decision_sections['recommended'],
         'not_recommended_games': decision_sections['not_recommended'],
+        'unrated_games': decision_sections.get('unrated', []),
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,
