@@ -374,13 +374,45 @@
         with the recommendation's pick and odds.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Bulk: "Bet All Recommended" (MLB hub):</strong> Two buttons in the MLB hub header let you act on the entire
-        slate at once. The green <strong>Bet All Recommended</strong> button places a $100 mock bet on every game whose
-        recommendation status is "recommended" and you don't already have a pending bet on. Transactional and idempotent —
-        running it twice will not create duplicates. Started games and games without odds are skipped automatically.
+        <strong>Source-Aware Betting &mdash; what the colored badges mean:</strong> Every odd we display is tagged with
+        where it came from. The badge appears on every MLB tile and on the MLB game-detail page next to the existing
+        "Data: HIGH" pill:
+    </p>
+    <ul class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;padding-left:18px;">
+        <li><strong>🟢 Verified Odds</strong> &mdash; the line came from the paid Odds API (authoritative). Recommendations
+            behave normally; this is the trust tier we'd use for a real-money decision.</li>
+        <li><strong>🟡 ESPN Odds</strong> &mdash; the line came from ESPN's free fallback feed. Used when primary data
+            is missing or stale. Recommendations still issue, but the displayed confidence is reduced (&times;0.85) to
+            reflect lower trust in the source.</li>
+        <li><strong>🔴 Derived Odds</strong> &mdash; only one side of the line was published, and we synthesized the
+            other via symmetric inversion. <em>Never</em> feeds a recommendation; never appears in bulk-bet buttons.
+            Visible only in staff diagnostics.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>MLB hub decision groups:</strong> Today's games are organized into two clearly-bordered group boxes:
+        <strong>👍 Recommended Plays</strong> (green) wraps Top Plays + Recommended Bets (verified) + Recommended Bets
+        (ESPN); <strong>⚠️ Not Recommended</strong> (gray) wraps today's fades. The Not Recommended box always renders
+        &mdash; if there's nothing to fade today, you see a positive empty-state instead of silent absence.
     </p>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Bulk: "Cancel All Open":</strong> The grey-outlined button next to "Bet All Recommended" deletes every
+        <strong>Bulk bet buttons (MLB hub):</strong> The MLB hub header has split bulk-bet buttons that match what's
+        visible on screen. Each button shows its count in the label so you see how many bets you'll place before you click:
+    </p>
+    <ul class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;padding-left:18px;">
+        <li><strong>🟢 Bet All Verified Plays (N)</strong> &mdash; places a $100 mock bet on every game whose recommendation
+            uses paid Odds API data (the authoritative source). This is the &ldquo;Top Plays + Recommended Bets&rdquo; cohort
+            from the green Recommended Plays group box.</li>
+        <li><strong>🟡 Bet All ESPN Plays (N)</strong> &mdash; only appears when there are ESPN-fallback recommendations.
+            Places a $100 bet on each, with a stronger confirm modal that explicitly warns you about lower-trust source.</li>
+        <li>The confirm modal tells you exactly how many bets are about to land: <em>&ldquo;You are about to place a $100
+            mock bet on each of 8 recommended games &hellip;&rdquo;</em>. Games where you already have a pending bet are
+            skipped automatically and reported in the success toast.</li>
+        <li>Both buttons are scoped to <strong>today's local slate</strong> (matches the visible Top Plays + Recommended
+            sections). Tomorrow's games are listed under "Upcoming" with no bulk action attached.</li>
+        <li>Transactional and idempotent &mdash; running twice will not create duplicates.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Bulk: "Cancel All Open":</strong> The grey-outlined button next to the bet buttons deletes every
         pending mock bet whose game hasn't started yet, across all sports. Bets on games that are already live or final
         are kept (they're locked-in records by then).
     </p>

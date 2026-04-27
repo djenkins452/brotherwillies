@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-27-source-aware-and-mlb-ux">Apr 27, 2026 &mdash; Source-Aware Betting + MLB Hub UX</a> <span class="text-sm text-muted">&bull; Verified/ESPN/Derived odds badges, decision group boxes, counted bulk-bet confirms, MLB odds reliability</span></li>
         <li style="padding:4px 0;"><a href="#apr-26-odds-intel">Apr 26, 2026 &mdash; Odds Intelligence (UI + Analytics)</a> <span class="text-sm text-muted">&bull; Market movement chips on MLB tiles, game detail panel, agreement performance table</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-odds-intel-foundation">Apr 25, 2026 &mdash; Odds Intelligence (Foundation)</a> <span class="text-sm text-muted">&bull; Sharp-action detection, snapshot scoring, raw-snapshot pruning, MLB end-to-end</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-ops">Apr 25, 2026 &mdash; Ops Command Center</a> <span class="text-sm text-muted">&bull; Live API health, quota dial, cron history, manual triggers (superuser-only)</span></li>
@@ -31,6 +32,62 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 27 — Source-Aware Betting + MLB Hub UX                           #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-27-source-aware-and-mlb-ux">
+    <p class="card-title">Apr 27, 2026 &mdash; Source-Aware Betting + MLB Hub UX</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A wave of trust-and-clarity work. You can now see at a glance where every displayed odd came from, the MLB hub groups recommended vs not-recommended into clearly-bordered sections, bulk-bet buttons tell you exactly how many bets you&rsquo;re about to place, and a sweep of MLB odds-ingestion fixes restored 100% match rate against the paid Odds API.</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Source-Aware Betting &mdash; trust badges everywhere</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>🟢 Verified Odds</strong> &mdash; the line came from the paid Odds API. Authoritative; recommendations behave as before.</li>
+            <li><strong>🟡 ESPN Odds</strong> &mdash; the line came from ESPN&rsquo;s free fallback feed (used when primary is missing or stale). Recommendations still issue, but the displayed confidence is reduced (&times;0.85) to reflect lower trust in the source.</li>
+            <li><strong>🔴 Derived Odds</strong> &mdash; the moneyline was synthesized via symmetric inversion when only one side was published. <em>Never</em> feeds a recommendation, never appears in bulk-bet buttons, only visible in staff diagnostics.</li>
+            <li>Badges appear on every game tile on the MLB hub, on the MLB game-detail page (next to the existing Data: HIGH pill), and the recommendation engine respects them automatically.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">MLB hub &mdash; decision group boxes</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>👍 Recommended Plays</strong> (green-bordered box) wraps Top Plays Today, Recommended Bets (verified), and Recommended Bets (ESPN Fallback) under one heading: <em>&ldquo;Model says: BET &mdash; edge cleared the threshold.&rdquo;</em></li>
+            <li><strong>⚠️ Not Recommended</strong> (gray-bordered box) wraps today&rsquo;s fades. Always renders &mdash; if there&rsquo;s nothing to fade today you see a positive empty-state, never silent absence.</li>
+            <li>Inner section headers stay (elite vs standard, verified vs ESPN, today&rsquo;s fades) so you don&rsquo;t lose the existing breakdown &mdash; the outer group just frames the parent classification.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Bulk-bet buttons now show the count</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>Buttons read <code>🟢 Bet All Verified Plays (8)</code> and <code>🟡 Bet All ESPN Plays (3)</code> &mdash; you see the count before you click.</li>
+            <li>Confirm modal: <em>&ldquo;You are about to place a $100 mock bet on each of 8 recommended games (verified primary-source odds). Games where you already have a pending bet will be skipped automatically. Proceed?&rdquo;</em></li>
+            <li><strong>Today-slate scope fix:</strong> previously the button could place bets on tomorrow&rsquo;s games too (which carried their own recommendations under the &ldquo;Upcoming&rdquo; list). Now the count and the placement match exactly what&rsquo;s visible on screen.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">MLB game-detail &mdash; trust-aware odds picker</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>The game-detail page used to show whichever snapshot was most recent, regardless of source. Now it prefers fresh primary (paid API) over fresh secondary (ESPN), only falling back to the most recent of any source if nothing fresh exists.</li>
+            <li>A 30-second-old ESPN row will no longer shadow a 10-minute-old paid-API row. The displayed spread, total, moneyline, and edge math all flow from the most-trusted available snapshot.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">MLB odds reliability &mdash; the silent fixes</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Doubleheader matching</strong> &mdash; the persist used to match by &ldquo;earliest first pitch with these teams,&rdquo; which broke whenever a doubleheader was scheduled. It now matches by closest commence time, so each game in a doubleheader gets its own snapshots.</li>
+            <li><strong>ESPN persist freshness check</strong> &mdash; replaced a brittle target-game-IDs filter that was rejecting valid ESPN matches. ESPN persist now self-filters per row by checking whether the specific game already has a fresh primary snapshot.</li>
+            <li><strong>Comprehensive 30-team alias coverage + fuzzy match</strong> &mdash; closes a class of &ldquo;API gave us a name we couldn&rsquo;t map to a DB team&rdquo; bugs.</li>
+            <li>Confirmed via the new in-product persist summary: 100% of API events now match a DB game (10 of 10 on the latest run, 73 snapshots written).</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">There&rsquo;s also a wave of operations-side improvements (bigger Recent Runs transcripts, copy-to-clipboard, captured subcommand stdout, MLB gap diagnostic) that aren&rsquo;t user-facing but make every future investigation faster.</p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}
