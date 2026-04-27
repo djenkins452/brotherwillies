@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-04-26 - Bulk bet: scope to today's slate (match the visible Top Plays / Recommended sections)
+
+**Bug:** Clicking "Bet All Verified Plays" was placing bets on tomorrow's (and beyond) games too, not just the 2 Top Plays + 6 Recommended Bets visible on screen. Reported in production: 8 plays visible, 18 bets placed.
+
+**Cause:** `_eligible_games_for_user` in `apps/mockbets/services/bulk_actions.py` queried `Game.objects.filter(first_pitch__gt=now, status='scheduled')` — i.e., every future scheduled game, regardless of date. The MLB hub view, however, partitions only `today_tiles` into the visible Top Plays + Recommended sections; future games go into a separate "Upcoming" list that has no bulk action attached. So the bulk button was sweeping in games the user couldn't see.
+
+**Fix:** The eligibility iterator now post-filters to games whose first pitch falls on the viewer's local "today", using `timezone.localdate()` (which respects `UserTimezoneMiddleware`). Mirrors the hub's `today_tiles` derivation exactly.
+
+**Regression test added:** `test_bulk_place_only_includes_todays_slate` — sets up a today-game and a 48-hours-out game, both with strong rating gaps, and asserts the future game never receives a bet.
+
+---
+
 ## 2026-04-26 - MLB game-detail: trust-aware odds + visible source badge
 
 **Summary:** Two related fixes to the MLB game-detail page (`/mlb/game/<id>/`) so operators can both *see* and *trust* which source the displayed spread / total / moneyline came from.

@@ -1503,6 +1503,47 @@ class BulkActionsTests(TestCase):
         # Even if today_count includes other odds, this game must register
         self.assertGreaterEqual(summary['skipped_no_odds'], 1)
 
+    def test_bulk_place_only_includes_todays_slate(self):
+        """Regression: bulk-place must scope to today's local slate so it
+        matches the MLB hub's visible Top Plays + Recommended Bets sections.
+        A previous version walked all upcoming scheduled games — clicking
+        "Bet All Verified Plays" then placed bets on tomorrow's slate too,
+        producing more bets than the user could see on screen.
+        """
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+
+        # Today's game with rating gap → should be eligible.
+        today_game = self._game(hours_out=2)
+        self._add_odds(today_game)
+
+        # Tomorrow's game — different teams to avoid duplicate-matchup
+        # collisions, big rating gap so a recommendation would issue if
+        # it WERE in scope. Two days out so we stay clear of edge cases
+        # where local "today + 2h" still overlaps tomorrow's UTC date.
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        conf = MLBConf.objects.first()
+        t_future_a = MLBTeam.objects.create(
+            name='FutA', slug='bulk-fut-a', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='bulk-fut-a',
+        )
+        t_future_b = MLBTeam.objects.create(
+            name='FutB', slug='bulk-fut-b', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='bulk-fut-b',
+        )
+        future_game = self._game(hours_out=48, t1=t_future_a, t2=t_future_b)
+        self._add_odds(future_game)
+
+        summary = place_bulk_recommended_bets(self.user)
+
+        # Future-dated game must NOT receive a bet, even though it has
+        # odds and would otherwise be a strong recommendation.
+        self.assertFalse(
+            MockBet.objects.filter(user=self.user, mlb_game=future_game).exists(),
+            "bulk_place should not create bets on tomorrow's slate",
+        )
+        # Today's eligible game can still receive its bet.
+        self.assertGreaterEqual(summary['placed'], 0)
+
     def test_bulk_place_skips_when_recommendation_is_not_recommended(self):
         """If decision rules say not_recommended, bulk-place skips. Use a mock
         so the test doesn't depend on the model's exact prob calculation."""

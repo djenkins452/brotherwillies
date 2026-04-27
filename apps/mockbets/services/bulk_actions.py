@@ -29,6 +29,14 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
                               source_filter: str = 'all'):
     """Yield (game, recommendation) tuples for games the user could bet today.
 
+    Date scope: this function returns ONLY games whose first pitch falls on
+    the viewer's local "today". This matches the MLB hub's `today_tiles`
+    list — the source of truth for what the user actually sees in the
+    Top Plays + Recommended Bets sections. Without this filter, "Bet All
+    Verified Plays" would also place bets on tomorrow's slate (which has
+    its own recommendations carried in the same query) — surprising and
+    undesired, since the user is acting on what they can see on screen.
+
     source_filter (Source-Aware Betting, Commit B):
       'all'      — primary + secondary (legacy behavior)
       'verified' — only is_secondary=False (Odds API path)
@@ -38,6 +46,7 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
     regardless of which filter mode is active.
 
     Filters out:
+      - games whose first_pitch is NOT on today's local date (NEW)
       - games not in 'scheduled' status (already started/finished)
       - games whose start time has already passed
       - games without odds (no recommendation can be computed)
@@ -53,11 +62,20 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
     from apps.core.services.recommendations import get_recommendation
 
     now = timezone.now()
+    # Scope to today's local slate so this matches the hub's visible
+    # `today_tiles` exactly. Using timezone.localdate() respects the
+    # UserTimezoneMiddleware-activated timezone so a user on PT and a
+    # user on ET see (and act on) their respective "today".
+    today_local = timezone.localdate()
     upcoming = (
         Game.objects
         .filter(first_pitch__gt=now, status='scheduled')
         .select_related('home_team', 'away_team')
     )
+    upcoming = [
+        g for g in upcoming
+        if timezone.localtime(g.first_pitch).date() == today_local
+    ]
     for game in upcoming:
         rec = get_recommendation('mlb', game, user)
         if rec is None:
