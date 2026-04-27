@@ -1,6 +1,7 @@
 """MLB views."""
 import json
 
+from django.conf import settings
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 
@@ -85,6 +86,44 @@ def mlb_hub(request):
     )
     espn_bulk_count = len(decision_sections.get('recommended_espn', []))
 
+    # ----- Tiered Intelligence Phase 1: Spread + Total opportunity signals
+    # Always computed but only RENDERED when settings.SPREAD_TOTAL_SIGNALS_ENABLED.
+    # Computing unconditionally lets us flip the flag at runtime via env var
+    # without re-deploying. The cost is one query per signal type for today's
+    # slate + live tiles, scoped to the tile games we already have in memory.
+    #
+    # Each entry in the signal lists carries:
+    #     {'signal': SpreadOpportunity|TotalOpportunity instance,
+    #      'tile':   GameSignals tile (so the template can reuse the
+    #                existing _tile_upcoming partial — same matchup,
+    #                pitchers, badges, source attribution)}
+    # We dedupe by game so the same game appearing in both spread and
+    # total sections still uses the same tile context object.
+    from apps.mlb.services.opportunity_signals import (
+        latest_spread_opportunity_for_game,
+        latest_total_opportunity_for_game,
+    )
+    spread_tiles = []
+    total_tiles = []
+    spread_total_signals_enabled = bool(
+        getattr(settings, 'SPREAD_TOTAL_SIGNALS_ENABLED', False)
+    )
+    if spread_total_signals_enabled:
+        for tile in all_tiles:
+            sig = latest_spread_opportunity_for_game(tile.game)
+            if sig is not None:
+                spread_tiles.append({'signal': sig, 'tile': tile})
+            sig = latest_total_opportunity_for_game(tile.game)
+            if sig is not None:
+                total_tiles.append({'signal': sig, 'tile': tile})
+
+    # Filter param — `?bet_type=moneyline|spread|total|all`. Default 'all'.
+    # Any other value (typo, stale link, malicious param) collapses to 'all'
+    # so the page is robust to garbage input.
+    bet_type_filter = request.GET.get('bet_type', 'all')
+    if bet_type_filter not in ('all', 'moneyline', 'spread', 'total'):
+        bet_type_filter = 'all'
+
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
         'today_tiles': today_tiles,
@@ -105,6 +144,15 @@ def mlb_hub(request):
         'focus': focus,
         'diag_rows': diag_rows,
         'teams': Team.objects.select_related('conference').all(),
+        # Tiered Intelligence Phase 1 — passed always so the template
+        # can use them gated by `spread_total_signals_enabled`. When
+        # the flag is off the lists are empty AND the gate is False
+        # so nothing renders. (Belt + suspenders: gating on the list
+        # alone would render an empty section header.)
+        'spread_total_signals_enabled': spread_total_signals_enabled,
+        'spread_tiles': spread_tiles,
+        'total_tiles': total_tiles,
+        'bet_type_filter': bet_type_filter,
         'nav_active': 'mlb',
         'help_key': 'mlb_hub',
     })

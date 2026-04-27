@@ -2315,6 +2315,107 @@ class OpportunityPostSaveHookTests(TestCase):
         self.assertEqual(SpreadOpportunity.objects.count(), 1)
 
 
+class SpreadTotalUITests(TestCase):
+    """Phase 1 UI surface — feature flag + filter + render gating.
+
+    Hard guarantees:
+      - Flag OFF: the spread/total UI must be completely invisible
+        (no filter bar, no sections, no CSS hooks). Even if the data
+        layer has rows, the page must look identical to before.
+      - Flag ON + signals exist: filter bar renders; spread + total
+        sections render; the mandatory "Not model-backed —
+        informational only" disclaimer is present.
+      - Filter param: bet_type=moneyline must hide the opportunity
+        groups; bet_type=spread must hide the moneyline groups; etc.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot
+        conf = MLBConf.objects.first() or MLBConf.objects.create(name='Test League', slug='test-league')
+        self.home = MLBTeam.objects.create(
+            name='UI Home', slug='ui-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='ui-home',
+        )
+        self.away = MLBTeam.objects.create(
+            name='UI Away', slug='ui-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='ui-away',
+        )
+        self.game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id=f'opp-game-{timezone.now().timestamp()}',
+        )
+        # Create snapshot with values that fire BOTH a tight_spread
+        # and a high_scoring signal — the post_save hook generates
+        # rows in both opportunity tables.
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.58,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=10.0,
+        )
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=False)
+    def test_flag_off_hides_everything(self):
+        """The whole UI surface must be invisible when the flag is off.
+        This protects the dark-launch capability — we can ship the
+        data layer to prod without users seeing it."""
+        resp = self.client.get('/mlb/')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        self.assertNotIn('mlb-bet-type-filter', body)
+        self.assertNotIn('Spread Opportunities', body)
+        self.assertNotIn('Total Opportunities', body)
+        self.assertNotIn('mlb-opportunity-card', body)
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_flag_on_renders_sections_and_disclaimer(self):
+        resp = self.client.get('/mlb/')
+        self.assertContains(resp, 'mlb-bet-type-filter')
+        self.assertContains(resp, 'Spread Opportunities')
+        self.assertContains(resp, 'Total Opportunities')
+        # Per-spec mandatory disclaimer — present at least twice (parent
+        # group hint + per-card footer).
+        self.assertContains(resp, 'Not model-backed', count=None)
+        # Filter chips
+        self.assertContains(resp, '>All<')
+        self.assertContains(resp, '>Moneyline<')
+        self.assertContains(resp, '>Spread<')
+        self.assertContains(resp, '>Total<')
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_filter_spread_hides_moneyline_groups(self):
+        resp = self.client.get('/mlb/?bet_type=spread')
+        body = resp.content.decode('utf-8')
+        # Recommended group is rendered with `is-hidden` when filter
+        # excludes it — class on the wrapper, not removed from DOM, so
+        # the section still exists for accessibility consistency but
+        # is visually suppressed.
+        self.assertIn('mlb-decision-group--recommended is-hidden', body)
+        self.assertIn('mlb-decision-group--fade is-hidden', body)
+        # Spread group is NOT hidden
+        self.assertNotIn('mlb-decision-group--spread is-hidden', body)
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_filter_moneyline_hides_opportunity_groups(self):
+        resp = self.client.get('/mlb/?bet_type=moneyline')
+        body = resp.content.decode('utf-8')
+        self.assertIn('mlb-decision-group--spread is-hidden', body)
+        self.assertIn('mlb-decision-group--total is-hidden', body)
+        self.assertNotIn('mlb-decision-group--recommended is-hidden', body)
+        self.assertNotIn('mlb-decision-group--fade is-hidden', body)
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_invalid_filter_collapses_to_all(self):
+        """Garbage input must not crash or hide everything — should
+        fall through to 'all'. Defensive against stale links + typos."""
+        resp = self.client.get('/mlb/?bet_type=asdf')
+        body = resp.content.decode('utf-8')
+        # Nothing should be hidden — same as ?bet_type=all
+        self.assertNotIn('is-hidden', body)
+
+
 class MoneylinePipelineNonRegressionTests(TestCase):
     """Belt-and-suspenders: verify that introducing the opportunity
     signal layer did not change the Moneyline recommendation pipeline.

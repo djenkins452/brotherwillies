@@ -126,6 +126,32 @@
     {% include "mlb/_focus_banner.html" with focus=focus %}
   {% endif %}
 
+  {% comment %}
+    Tiered Intelligence Phase 1 — bet-type filter bar. Only renders when
+    the SPREAD_TOTAL_SIGNALS_ENABLED feature flag is on AND there is at
+    least one opportunity signal (otherwise the filter would just hide
+    a section that's already empty). Filter is plain query-param state
+    so it persists across reloads + can be linked. Default 'all' shows
+    everything; explicit 'moneyline' / 'spread' / 'total' isolate one
+    bet type. Active chip is rendered visually + via aria-pressed.
+  {% endcomment %}
+  {% if spread_total_signals_enabled %}{% if spread_tiles or total_tiles %}
+    <div class="mlb-bet-type-filter" role="group" aria-label="Filter by bet type">
+      <a href="?{% if request.GET.diag %}diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip {% if bet_type_filter == 'all' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'all' %}true{% else %}false{% endif %}">All</a>
+      <a href="?bet_type=moneyline{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip {% if bet_type_filter == 'moneyline' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'moneyline' %}true{% else %}false{% endif %}">Moneyline</a>
+      <a href="?bet_type=spread{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip {% if bet_type_filter == 'spread' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'spread' %}true{% else %}false{% endif %}">Spread</a>
+      <a href="?bet_type=total{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip {% if bet_type_filter == 'total' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'total' %}true{% else %}false{% endif %}">Total</a>
+    </div>
+  {% endif %}{% endif %}
+
   {% if diag_rows %}
   <details class="card mb-2" style="border-color:#facc15;" open>
     <summary style="cursor:pointer;font-weight:700;color:#facc15;">
@@ -189,7 +215,7 @@
       kept (they distinguish elite vs standard, verified vs ESPN), but the
       outer border + group label make the parent classification obvious.
     {% endcomment %}
-    <div class="mlb-decision-group mlb-decision-group--recommended">
+    <div class="mlb-decision-group mlb-decision-group--recommended {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
       <div class="mlb-decision-group__head">
         <span class="mlb-decision-group__icon">&#x1F44D;</span>
         <span class="mlb-decision-group__title">Recommended Plays</span>
@@ -284,7 +310,7 @@
       tiles render as before so the user has the full information set
       (matchup, pitchers, line, model edge) and can still click through.
     {% endcomment %}
-    <div class="mlb-decision-group mlb-decision-group--fade">
+    <div class="mlb-decision-group mlb-decision-group--fade {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
       <div class="mlb-decision-group__head">
         <span class="mlb-decision-group__icon">&#x26A0;&#xFE0F;</span>
         <span class="mlb-decision-group__title">Not Recommended</span>
@@ -317,6 +343,105 @@
     {% endif %}
 
     </div>{# /mlb-decision-group--fade #}
+
+    {% comment %}
+      Tiered Intelligence Phase 1 — Spread Opportunities.
+      RULE-BASED, NOT MODEL-BACKED. Render only when the feature flag is
+      ON and there is at least one spread signal. Hides when the user
+      filters to moneyline-only or total-only. The disclaimer line is
+      mandatory by spec — these signals must NEVER be confused with
+      Recommended Plays.
+    {% endcomment %}
+    {% if spread_total_signals_enabled and spread_tiles %}
+    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--spread {% if bet_type_filter != 'all' and bet_type_filter != 'spread' %}is-hidden{% endif %}">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F4CA;</span>
+        <span class="mlb-decision-group__title">Spread Opportunities</span>
+        <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">Not model-backed &mdash; informational only</span>
+      </div>
+      <section class="mlb-section mlb-section--spread">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Run-line signals</h2>
+          <span class="mlb-section__count">{{ spread_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for entry in spread_tiles %}
+            <div role="listitem" class="mlb-opportunity-card">
+              <div class="mlb-opportunity-card__signal">
+                <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
+                  {% if entry.signal.signal_type == 'tight_spread' %}Tight Spread
+                  {% else %}Large Favorite
+                  {% endif %}
+                </span>
+                <span class="mlb-opportunity-card__value">
+                  {% if entry.signal.spread > 0 %}+{{ entry.signal.spread|floatformat:1 }}
+                  {% else %}{{ entry.signal.spread|floatformat:1 }}
+                  {% endif %}
+                </span>
+                {% if entry.signal.favorite_team_name %}
+                <span class="mlb-opportunity-card__detail">
+                  Favorite: <strong>{{ entry.signal.favorite_team_name }}</strong>
+                </span>
+                {% endif %}
+              </div>
+              {% if entry.tile.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=entry.tile %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=entry.tile %}
+              {% endif %}
+              <p class="mlb-opportunity-card__disclaimer">
+                Not model-backed &mdash; informational only. No bulk action.
+              </p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    {% endif %}
+
+    {% comment %}
+      Tiered Intelligence Phase 1 — Total Opportunities. Same shape as
+      Spread; same disclaimer. Hides under spread or moneyline filter.
+    {% endcomment %}
+    {% if spread_total_signals_enabled and total_tiles %}
+    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--total {% if bet_type_filter != 'all' and bet_type_filter != 'total' %}is-hidden{% endif %}">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F321;&#xFE0F;</span>
+        <span class="mlb-decision-group__title">Total Opportunities</span>
+        <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">Not model-backed &mdash; informational only</span>
+      </div>
+      <section class="mlb-section mlb-section--total">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Over/Under signals</h2>
+          <span class="mlb-section__count">{{ total_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for entry in total_tiles %}
+            <div role="listitem" class="mlb-opportunity-card">
+              <div class="mlb-opportunity-card__signal">
+                <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
+                  {% if entry.signal.signal_type == 'high_scoring' %}High Scoring
+                  {% else %}Low Scoring
+                  {% endif %}
+                </span>
+                <span class="mlb-opportunity-card__value">
+                  O/U {{ entry.signal.total|floatformat:1 }}
+                </span>
+              </div>
+              {% if entry.tile.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=entry.tile %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=entry.tile %}
+              {% endif %}
+              <p class="mlb-opportunity-card__disclaimer">
+                Not model-backed &mdash; informational only. No bulk action.
+              </p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    {% endif %}
 
     {% comment %}
       Section 4 — Unrated: live games without odds, or pre-game games we

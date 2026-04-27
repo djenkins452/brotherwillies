@@ -169,6 +169,17 @@ DEBUG_ODDS_MATCHING = os.environ.get('DEBUG_ODDS_MATCHING', 'false').lower() == 
 FRESH_ODDS_MAX_AGE_MINUTES = int(os.environ.get('FRESH_ODDS_MAX_AGE_MINUTES', '180'))
 STALE_ODDS_MAX_AGE_MINUTES = int(os.environ.get('STALE_ODDS_MAX_AGE_MINUTES', '720'))
 
+# --- Tiered Intelligence — Phase 1 Opportunity Signals (Spread + Total) ---
+# Feature-flag the UI surface so the data layer (signal generation +
+# persistence) can run dark in prod for several days before users see
+# anything. Flipping on requires only a Railway env var change — no
+# code deploy. Default OFF so the initial deploy is a pure no-op for
+# the user-facing pages even though the post_save hook is already
+# generating rows in the new tables.
+SPREAD_TOTAL_SIGNALS_ENABLED = (
+    os.environ.get('SPREAD_TOTAL_SIGNALS_ENABLED', 'false').lower() == 'true'
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')
