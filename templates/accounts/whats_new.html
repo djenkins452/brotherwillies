@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-27-tiered-intel">Apr 27, 2026 &mdash; Tiered Intelligence (Spread + Total Opportunity Signals)</a> <span class="text-sm text-muted">&bull; Rule-based spread + total signals, filter chips, dark-launchable feature flag, Moneyline pipeline frozen by contract</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-source-aware-and-mlb-ux">Apr 27, 2026 &mdash; Source-Aware Betting + MLB Hub UX</a> <span class="text-sm text-muted">&bull; Verified/ESPN/Derived odds badges, decision group boxes, counted bulk-bet confirms, MLB odds reliability</span></li>
         <li style="padding:4px 0;"><a href="#apr-26-odds-intel">Apr 26, 2026 &mdash; Odds Intelligence (UI + Analytics)</a> <span class="text-sm text-muted">&bull; Market movement chips on MLB tiles, game detail panel, agreement performance table</span></li>
         <li style="padding:4px 0;"><a href="#apr-25-odds-intel-foundation">Apr 25, 2026 &mdash; Odds Intelligence (Foundation)</a> <span class="text-sm text-muted">&bull; Sharp-action detection, snapshot scoring, raw-snapshot pruning, MLB end-to-end</span></li>
@@ -32,6 +33,75 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 27 — Tiered Intelligence (Spread + Total Opportunity Signals)    #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-27-tiered-intel">
+    <p class="card-title">Apr 27, 2026 &mdash; Tiered Intelligence (Spread + Total Opportunity Signals)</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">A scalable architecture for multi-market betting intelligence. The MLB hub now surfaces rule-based <strong>opportunity signals</strong> for spread (run line) and total (over/under) markets &mdash; <em>alongside</em>, never replacing, the model-backed Moneyline recommendations. Three trust tiers, never blurred.</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">The trust tiers</p>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px 8px;">Tier</th>
+                    <th style="text-align:left;padding:6px 8px;">Bet Type</th>
+                    <th style="text-align:left;padding:6px 8px;">Source</th>
+                    <th style="text-align:left;padding:6px 8px;">UI</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>Recommendation</strong></td>
+                    <td style="padding:6px 8px;">Moneyline</td>
+                    <td style="padding:6px 8px;">Existing model engine + edge math</td>
+                    <td style="padding:6px 8px;">Recommended / Top Plays, bulk-bet enabled</td>
+                </tr>
+                <tr>
+                    <td style="padding:6px 8px;"><strong>Opportunity Signal</strong></td>
+                    <td style="padding:6px 8px;">Spread, Total</td>
+                    <td style="padding:6px 8px;">Rule-based threshold detection</td>
+                    <td style="padding:6px 8px;">"Informational only" disclaimer, bulk-bet disabled</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">What you'll see (when enabled)</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Filter chip bar</strong> at the top of the MLB hub: <code>[ All ] [ Moneyline ] [ Spread ] [ Total ]</code>. Default is All; clicking a chip filters the page to one bet type.</li>
+            <li><strong>📊 Spread Opportunities</strong> &mdash; cyan-bordered group with two signal types:
+                <ul>
+                    <li><strong>Tight Spread</strong> &mdash; |spread| &le; 1.5</li>
+                    <li><strong>Large Favorite</strong> &mdash; |spread| &ge; 2.5</li>
+                </ul>
+            </li>
+            <li><strong>🌡️ Total Opportunities</strong> &mdash; cyan-bordered group with two signal types:
+                <ul>
+                    <li><strong>High Scoring</strong> &mdash; total &ge; 9.5</li>
+                    <li><strong>Low Scoring</strong> &mdash; total &le; 7.5</li>
+                </ul>
+            </li>
+            <li>Mandatory <strong>"Not model-backed &mdash; informational only"</strong> disclaimer at the group level <em>and</em> repeated on every card. These signals must never be confused with model recommendations.</li>
+            <li>Disabled <strong>"Coming Soon"</strong> bulk buttons for Spread and Total. They render as visual telegraphs &mdash; the markets exist, bulk action is on the Phase 2 roadmap once we have a modeled edge.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Hard guarantees (enforced by tests)</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>The Moneyline recommendation pipeline is unchanged. A sentinel test patches the new related managers to raise on access &mdash; the recommendation engine still returns a moneyline pick, proving the new tables are never consulted.</li>
+            <li>Spread + Total are NEVER labeled "Recommended". They live in their own groups with their own disclaimer.</li>
+            <li>Spread + Total are NEVER mixed into "Bet All" actions. The bulk endpoint, even when hand-rolled with <code>?bet_type=spread</code>, ignores them &mdash; only games whose <em>recommendation</em> status is <code>recommended</code> are eligible.</li>
+            <li>Idempotent persistence: re-running the signal generator on the same snapshot is a no-op (DB constraint).</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">Phase 2 (future): true modeling for spread + totals, promotion to "Recommended" once the edge math clears the bar.</p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

@@ -1186,3 +1186,30 @@
     font-weight: 500;
     border-radius: 0 4px 4px 0;
 }
+
+/* Phase 1 disabled "Coming Soon" bulk buttons for Spread + Total.
+   Rendered visually muted so they read as "not yet available" without
+   being invisible. The architectural intent (these markets exist,
+   and bulk action is on the roadmap) is communicated visually. */
+.mlb-bulk-btn--coming-soon {
+    background: rgba(56,189,248,0.10);
+    color: #7dd3fc;
+    border: 1px dashed rgba(56,189,248,0.50);
+    cursor: not-allowed;
+    opacity: 0.85;
+}
+.mlb-bulk-btn--coming-soon:hover {
+    /* No hover state — emphasizes "this isn't clickable". */
+    background: rgba(56,189,248,0.10);
+    color: #7dd3fc;
+}
+.mlb-bulk-btn--coming-soon em {
+    font-style: italic;
+    font-size: 0.85em;
+    opacity: 0.85;
+    margin-left: 2px;
+}
+.mlb-bulk-btn--coming-soon[disabled] {
+    /* Browsers vary on disabled+button styling; pin it explicitly. */
+    pointer-events: none;
+}

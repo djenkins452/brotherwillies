@@ -32,6 +32,42 @@
         🟡 Bet All ESPN Plays ({{ espn_bulk_count }})
       </button>
       {% endif %}
+      {% comment %}
+        Tiered Intelligence Phase 1 — Spread + Total bulk buttons render
+        as DISABLED "Coming Soon" controls. The server-side endpoint
+        does NOT yet accept spread/total bet types; if any of the
+        existing moneyline endpoints were called with the wrong
+        bet_type the bulk_actions service would skip the games (status
+        != 'recommended' for spread/total). But we don't even let the
+        click reach the JS — the buttons are disabled at the HTML
+        level + carry aria-disabled + a tooltip explaining the state.
+
+        Why render them at all: visibility. Surfacing the buttons (in
+        their disabled state) telegraphs the architectural direction
+        to the user — these markets exist as informational signals
+        today, and bulk action is on the roadmap once we have a
+        modeled edge for them. Rendering them only when there's at
+        least one signal of that type prevents an empty disabled
+        button when nothing's eligible anyway.
+      {% endcomment %}
+      {% if spread_total_signals_enabled and spread_tiles %}
+      <button type="button"
+              class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
+              disabled
+              aria-disabled="true"
+              title="Spread bulk-bet is coming in Phase 2 once we have a model edge for the run line. Until then, place individual bets on opportunities you like.">
+        📊 Bet All Spread &middot; <em>Coming Soon</em>
+      </button>
+      {% endif %}
+      {% if spread_total_signals_enabled and total_tiles %}
+      <button type="button"
+              class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
+              disabled
+              aria-disabled="true"
+              title="Total bulk-bet is coming in Phase 2 once we have a model edge for over/under. Until then, place individual bets on opportunities you like.">
+        🌡️ Bet All Total &middot; <em>Coming Soon</em>
+      </button>
+      {% endif %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--cancel"
               onclick="bulkCancelOpen()">
         Cancel All Open

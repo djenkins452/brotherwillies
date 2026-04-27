@@ -2359,30 +2359,47 @@ class SpreadTotalUITests(TestCase):
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=False)
     def test_flag_off_hides_everything(self):
         """The whole UI surface must be invisible when the flag is off.
-        This protects the dark-launch capability — we can ship the
-        data layer to prod without users seeing it."""
+        This protects the dark-launch capability — we can ship the data
+        layer to prod without users seeing it.
+
+        Asserts on UNIQUE CSS markers (`mlb-decision-group--spread`,
+        `mlb-decision-group--total`, `mlb-opportunity-card`,
+        `mlb-bet-type-filter`) rather than text strings — the help
+        modal mentions the feature names in instructional text on
+        every page, so a substring assertion would false-positive.
+        """
         resp = self.client.get('/mlb/')
         self.assertEqual(resp.status_code, 200)
         body = resp.content.decode('utf-8')
+        # Filter chip bar: not rendered
         self.assertNotIn('mlb-bet-type-filter', body)
-        self.assertNotIn('Spread Opportunities', body)
-        self.assertNotIn('Total Opportunities', body)
+        # Group containers: not rendered
+        self.assertNotIn('mlb-decision-group--spread', body)
+        self.assertNotIn('mlb-decision-group--total', body)
+        # Per-card wrapper: not rendered
         self.assertNotIn('mlb-opportunity-card', body)
+        # Coming-soon bulk buttons: not rendered
+        self.assertNotIn('mlb-bulk-btn--coming-soon', body)
 
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
     def test_flag_on_renders_sections_and_disclaimer(self):
+        """Asserts on UNIQUE CSS markers — the help-modal include
+        contains the feature names in instructional text on every page,
+        so a text-substring check could false-pass."""
         resp = self.client.get('/mlb/')
+        # UI surfaces (CSS classes are unique to the rendered page)
         self.assertContains(resp, 'mlb-bet-type-filter')
-        self.assertContains(resp, 'Spread Opportunities')
-        self.assertContains(resp, 'Total Opportunities')
-        # Per-spec mandatory disclaimer — present at least twice (parent
-        # group hint + per-card footer).
-        self.assertContains(resp, 'Not model-backed', count=None)
-        # Filter chips
-        self.assertContains(resp, '>All<')
-        self.assertContains(resp, '>Moneyline<')
-        self.assertContains(resp, '>Spread<')
-        self.assertContains(resp, '>Total<')
+        self.assertContains(resp, 'mlb-decision-group--spread')
+        self.assertContains(resp, 'mlb-decision-group--total')
+        self.assertContains(resp, 'mlb-opportunity-card')
+        # Per-spec mandatory disclaimer — present at least twice
+        # (parent group hint + per-card footer).
+        self.assertContains(resp, 'Not model-backed')
+        # Filter chip labels (unique link hrefs prevent help-modal
+        # bleed-through; the chips use bet_type query param)
+        self.assertContains(resp, 'bet_type=moneyline')
+        self.assertContains(resp, 'bet_type=spread')
+        self.assertContains(resp, 'bet_type=total')
 
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
     def test_filter_spread_hides_moneyline_groups(self):
@@ -2414,6 +2431,78 @@ class SpreadTotalUITests(TestCase):
         body = resp.content.decode('utf-8')
         # Nothing should be hidden — same as ?bet_type=all
         self.assertNotIn('is-hidden', body)
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_spread_total_bulk_buttons_render_disabled(self):
+        """Phase 1 contract: bulk buttons for spread + total render but
+        are HTML-disabled with aria-disabled, so the click never reaches
+        any handler. Phase 2 will activate them once we have a modeled
+        edge for those markets."""
+        # Need to log in — the bulk-action header only shows for authed users.
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        u = User.objects.create_user(username='bulk-test', password='pw')
+        self.client.force_login(u)
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        # Buttons are present
+        self.assertIn('Bet All Spread', body)
+        self.assertIn('Coming Soon', body)
+        # Buttons are disabled at the HTML level
+        self.assertIn('mlb-bulk-btn--coming-soon', body)
+        # No onclick handler — explicit absence (otherwise a misclick
+        # could fire bulkPlaceRecommended on the wrong bet type).
+        # Find the button block and assert disabled is present.
+        import re
+        spread_btn = re.search(
+            r'<button[^>]*mlb-bulk-btn--coming-soon[^>]*>[^<]*Bet All Spread[^<]*',
+            body,
+        )
+        self.assertIsNotNone(spread_btn, 'Spread bulk button not found')
+        self.assertIn('disabled', spread_btn.group(0))
+        self.assertIn('aria-disabled="true"', spread_btn.group(0))
+        # And no onclick attribute on the disabled button
+        self.assertNotIn('onclick', spread_btn.group(0))
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=False)
+    def test_disabled_bulk_buttons_hidden_when_flag_off(self):
+        """Even the disabled Coming Soon buttons must not render when
+        the flag is off — preserves the dark-launch capability."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        u = User.objects.create_user(username='bulk-test-off', password='pw')
+        self.client.force_login(u)
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertNotIn('mlb-bulk-btn--coming-soon', body)
+        self.assertNotIn('Bet All Spread', body)
+        self.assertNotIn('Bet All Total', body)
+
+    @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
+    def test_existing_bulk_endpoint_rejects_spread_or_total_bet_type(self):
+        """Server-side guarantee: even if a user constructs a hand-rolled
+        request to the bulk-place endpoint with bet_type=spread/total,
+        the existing service ignores them — the eligibility iterator
+        only yields games whose recommendation status == 'recommended',
+        and spread/total signals never produce that status. This test
+        documents that contract by hitting the endpoint directly."""
+        from django.contrib.auth import get_user_model
+        from apps.mockbets.models import MockBet
+        User = get_user_model()
+        u = User.objects.create_user(username='bulk-attack', password='pw')
+        self.client.force_login(u)
+        # Attempt to abuse: pass bet_type=spread (ignored — only
+        # source_filter is read by the bulk endpoint).
+        resp = self.client.post(
+            '/mockbets/bulk/place-recommended/?bet_type=spread'
+        )
+        self.assertEqual(resp.status_code, 200)
+        # No bets land on spread/total selections — only moneyline
+        # recommendations are eligible. Even with a moneyline-eligible
+        # game in setUp, this is the existing behavior — confirming
+        # that the new param doesn't change anything.
+        for bet in MockBet.objects.filter(user=u):
+            self.assertEqual(bet.bet_type, 'moneyline')
 
 
 class MoneylinePipelineNonRegressionTests(TestCase):

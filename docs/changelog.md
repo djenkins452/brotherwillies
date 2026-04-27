@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-04-27 - Tiered Intelligence: Spread + Total Opportunity Signals (Phase 1)
+
+**Summary:** A new architecture layer alongside the Moneyline recommendation engine — rule-based "opportunity signals" for spread (run line) and total (over/under) markets. Three commits, shipped non-breaking and feature-flagged off by default. The Moneyline pipeline is *frozen by contract* for this phase: a sentinel test (`MoneylinePipelineNonRegressionTests`) patches both new related managers to AssertionError-on-access and verifies the recommendation engine still returns a moneyline pick — proving the new tables are never consulted by the existing decision logic.
+
+### Why "Tiered Intelligence"
+Three distinct trust tiers, never blurred:
+
+| Tier | Bet Type | Source | UI Treatment |
+|------|----------|--------|--------------|
+| **Recommendation** | Moneyline | Existing model engine + edge math | "Recommended" / "Top Plays" labels, bulk-bet enabled |
+| **Opportunity Signal** | Spread, Total | Rule-based threshold detection | "Informational only" disclaimer, bulk-bet disabled |
+| (Future) | TBD | TBD | (Phase 2 work, not in this release) |
+
+### Commit A — `4c27b6a`: Domain layer
+- New models: `SpreadOpportunity` (`tight_spread` ≤ 1.5 / `large_favorite` ≥ 2.5), `TotalOpportunity` (`high_scoring` ≥ 9.5 / `low_scoring` ≤ 7.5).
+- Both link to `(game, odds_snapshot, signal_type)` under a `UniqueConstraint` so re-running the generator on the same snapshot is a no-op (load-bearing because ESPN gap-fill writes can re-fire the post-save hook).
+- Service `apps/mlb/services/opportunity_signals.py` is the single source of truth — thresholds are named constants, intentional gap bands (1.5–2.5 for spread, 7.5–9.5 for total) where snapshots get no signal.
+- `post_save` receiver in `apps/mlb/signals.py` auto-generates rows on insert. Wraps in try/except so a buggy signal can never break the snapshot insert that triggered it.
+- 23 new tests covering thresholds (at, above, below), gap-band silence, idempotency, source attribution, favorite/underdog inference, post-save integration, and the Moneyline non-regression sentinel.
+
+### Commit B — `5d32840`: UI under feature flag
+- Env-driven `SPREAD_TOTAL_SIGNALS_ENABLED` flag, default OFF. Flipping requires only a Railway env var change — no redeploy.
+- New filter chip bar at the top of the MLB hub: `[All] [Moneyline] [Spread] [Total]`. Default `all`; query-param persistence; garbage input collapses to `all`.
+- Two new groups on the hub: 📊 **Spread Opportunities** and 🌡️ **Total Opportunities**. Distinct cyan/blue tint so the eye reads "different category" before reading any text. Mandatory **"Not model-backed — informational only"** disclaimer at the group header *and* repeated on every card (so a screenshot crop can't strip the meaning).
+- Existing moneyline groups (Recommended Plays, Not Recommended) gain an `is-hidden` class when the bet-type filter excludes them. Class-based hiding rather than DOM removal — preserves the structure for accessibility consistency.
+- 5 UI tests: flag-off invisibility (dark-launch protection), flag-on rendering + disclaimer presence, filter behavior in both directions, garbage-input safety.
+
+### Commit C — `<this commit>`: Disabled "Coming Soon" bulk buttons
+- Spread + Total each render a disabled "Coming Soon" bulk button in the hub header — visual telegraph of "this market exists, bulk action is on the roadmap." Phase 2 will activate them once we have a modeled edge for those markets.
+- Buttons use HTML `disabled` + `aria-disabled="true"` + tooltip explaining the state. No `onclick` handler — defense in depth so a misclick can't fire a bulk action on the wrong bet type.
+- Server-side guarantee tested: even a hand-rolled POST to the bulk-place endpoint with `?bet_type=spread` is a no-op — the existing eligibility iterator only yields games whose recommendation status is `recommended`, and spread/total signals never produce that status.
+
+**Test count: 616 passing** (started day at 583), only the pre-existing `feedback.tests` ImportError remaining. Zero Moneyline regression.
+
+---
+
 ## 2026-04-26 - MLB hub: decision group boxes + counted bulk-bet confirms
 
 **Summary:** Two UX fixes on the MLB hub. (1) The Top Plays + Recommended Bets sections are now wrapped in a single visually-bordered "Recommended Plays" group; the Not Recommended section is wrapped in its own "Not Recommended" group below it. The Not Recommended group always renders, with a positive empty-state when nothing today qualifies as a fade. (2) Each bulk-bet button shows the visible count in its label, and the confirm modal now says exactly how many bets are about to land.

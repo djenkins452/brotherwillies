@@ -389,6 +389,23 @@
             Visible only in staff diagnostics.</li>
     </ul>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Tiered Intelligence &mdash; Spread + Total opportunity signals (when enabled):</strong>
+        Alongside the model-backed Moneyline recommendations, the MLB hub can also surface
+        <em>rule-based opportunity signals</em> for the run-line and totals markets. These are NOT recommendations
+        and are never mixed into "Bet All" actions. Each card carries a "Not model-backed &mdash; informational only"
+        disclaimer at both the section level and the per-card level. The bet-type filter chip bar at the top of the hub
+        (<code>[All] [Moneyline] [Spread] [Total]</code>) lets you isolate one bet type at a time. Bulk buttons for
+        Spread and Total render as <em>Coming Soon</em> &mdash; Phase 2 will activate them once we have a modeled
+        edge for those markets.
+    </p>
+    <ul class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;padding-left:18px;">
+        <li><strong>Spread signals:</strong> Tight Spread (|spread| &le; 1.5) or Large Favorite (|spread| &ge; 2.5).
+            The 1.5&ndash;2.5 gap intentionally produces no signal &mdash; silence is correct, not a bug.</li>
+        <li><strong>Total signals:</strong> High Scoring (total &ge; 9.5) or Low Scoring (total &le; 7.5).
+            The 7.5&ndash;9.5 gap is similarly silent.</li>
+        <li>Source attribution carries through &mdash; if the underlying snapshot was 🟡 ESPN, the signal card shows it.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>MLB hub decision groups:</strong> Today's games are organized into two clearly-bordered group boxes:
         <strong>👍 Recommended Plays</strong> (green) wraps Top Plays + Recommended Bets (verified) + Recommended Bets
         (ESPN); <strong>⚠️ Not Recommended</strong> (gray) wraps today's fades. The Not Recommended box always renders
