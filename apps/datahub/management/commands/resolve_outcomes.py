@@ -54,6 +54,25 @@ class Command(BaseCommand):
             f"{counts['mlb']} MLB + {counts['college_baseball']} CB outcomes"
         ))
 
+        # ------ Tiered Intelligence Phase 2: settle MLB opportunity signals ------
+        # Settles SpreadOpportunity / TotalOpportunity rows for any MLB game
+        # whose status is now 'final'. Idempotent — re-runs only touch rows
+        # whose outcome is still empty. Wrapped in a broad try/except so a
+        # bug in opportunity-side code can never break the moneyline/snapshot
+        # resolution path that just succeeded above.
+        if sport in ('mlb', 'all'):
+            try:
+                from apps.mlb.services.opportunity_signals import settle_all_unsettled
+                opp_counts = settle_all_unsettled()
+                if opp_counts['spread_settled'] or opp_counts['total_settled']:
+                    self.stdout.write(self.style.SUCCESS(
+                        f"Settled MLB opportunity signals: "
+                        f"{opp_counts['spread_settled']} spread, "
+                        f"{opp_counts['total_settled']} total"
+                    ))
+            except Exception as e:
+                logger.error(f'Failed to settle MLB opportunity signals: {e}')
+
     def _resolve_cfb(self):
         return self._resolve_by_fk(fk='game', time_field='kickoff')
 

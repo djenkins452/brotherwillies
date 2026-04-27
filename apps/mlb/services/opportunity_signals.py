@@ -50,6 +50,37 @@ SPREAD_LARGE_THRESHOLD = 2.5      # |spread| >= 2.5  → large_favorite
 TOTAL_HIGH_THRESHOLD = 9.5        # total >= 9.5     → high_scoring
 TOTAL_LOW_THRESHOLD = 7.5         # total <= 7.5     → low_scoring
 
+# ----- Phase 2: Lean thresholds --------------------------------------- #
+# A signal becomes a "Lean" only when both bars clear:
+#     win_rate     > threshold
+#     sample_size  > minimum
+#
+# Spread bar is intentionally tighter on win rate (53%) since spread
+# bets typically price at -110/+100 and 53% over a 30+ sample is the
+# rough breakeven boundary. Total bar is set per the spec at 54% AND
+# >2% ROI — ROI on a -110 bet at win_rate w is approximately
+# (1.91*w) - 1, so win_rate ~ 0.5236 = breakeven. 54% / 2% ROI is
+# comfortably above breakeven and represents a real edge.
+SPREAD_LEAN_WIN_RATE_THRESHOLD = 0.53
+SPREAD_LEAN_MIN_SAMPLE = 30
+TOTAL_LEAN_WIN_RATE_THRESHOLD = 0.54
+TOTAL_LEAN_MIN_ROI = 0.02
+TOTAL_LEAN_MIN_SAMPLE = 30  # Same minimum so a single hot week can't promote.
+
+# Standard sportsbook -110 vig — used for ROI math. 100 staked at -110
+# returns 90.91 in profit on a win. ROI per unit at win_rate w:
+#     ROI = w * (100/110) - (1 - w)  =  1.91 * w - 1
+_AMERICAN_MINUS_110_PROFIT_FACTOR = 100.0 / 110.0
+
+
+def _approx_roi_at_minus_110(win_rate: float | None) -> float | None:
+    """Estimate ROI per unit at -110 odds for a given win rate.
+    Returns None if win_rate is None. Excludes pushes from the inputs —
+    the caller is expected to pass a push-excluded win rate."""
+    if win_rate is None:
+        return None
+    return win_rate * _AMERICAN_MINUS_110_PROFIT_FACTOR - (1.0 - win_rate)
+
 
 def _classify_spread(spread: float | None) -> list[str]:
     """Return the list of spread signal types that fire for a value.
@@ -116,6 +147,10 @@ def generate_spread_opportunities(game, snapshot) -> list:
 
     created: list = []
     for signal_type in signal_types:
+        # Snapshot the lean status from current historical performance
+        # at create-time. Computing here (not in defaults={...}) so a
+        # cold start with zero history doesn't double-query.
+        is_lean, win_rate, sample = _spread_lean_status(signal_type)
         obj, was_created = SpreadOpportunity.objects.get_or_create(
             game=game,
             odds_snapshot=snapshot,
@@ -126,6 +161,9 @@ def generate_spread_opportunities(game, snapshot) -> list:
                 'underdog_team_name': underdog_name,
                 'source': getattr(snapshot, 'odds_source', 'odds_api'),
                 'source_quality': getattr(snapshot, 'source_quality', 'primary'),
+                'is_lean': is_lean,
+                'historical_win_rate': win_rate,
+                'sample_size': sample,
             },
         )
         if was_created:
@@ -149,6 +187,7 @@ def generate_total_opportunities(game, snapshot) -> list:
 
     created: list = []
     for signal_type in signal_types:
+        is_lean, win_rate, sample = _total_lean_status(signal_type)
         obj, was_created = TotalOpportunity.objects.get_or_create(
             game=game,
             odds_snapshot=snapshot,
@@ -157,6 +196,9 @@ def generate_total_opportunities(game, snapshot) -> list:
                 'total': snapshot.total,
                 'source': getattr(snapshot, 'odds_source', 'odds_api'),
                 'source_quality': getattr(snapshot, 'source_quality', 'primary'),
+                'is_lean': is_lean,
+                'historical_win_rate': win_rate,
+                'sample_size': sample,
             },
         )
         if was_created:
@@ -203,3 +245,262 @@ TOTAL_SIGNAL_LABELS = {
     'high_scoring': 'High Scoring',
     'low_scoring': 'Low Scoring',
 }
+
+
+# ===================================================================== #
+# Phase 2: Settlement
+#
+# Each opportunity row evaluates to win/loss/push once the underlying
+# game finalizes. The "side we evaluated" is fixed per signal_type by
+# the model's EVALUATED_DIRECTION map — see the SpreadOpportunity /
+# TotalOpportunity docstrings for the conventions.
+#
+# Settlement is idempotent — calling it twice is a no-op. It only
+# writes when:
+#   1. The game has status='final' AND both scores are populated.
+#   2. The opportunity row's outcome is currently empty.
+# ===================================================================== #
+
+
+def _spread_outcome(opp) -> str | None:
+    """Win/loss/push for a SpreadOpportunity, given a final game.
+    Returns None if the game isn't ready to settle.
+
+    Convention reminder (defined on the model class):
+        tight_spread     → underdog covers
+        large_favorite   → favorite covers
+
+    Math:
+        spread is from home perspective; negative => home favored.
+        favorite covers iff favorite's margin > |spread|.
+        push when favorite's margin == |spread| (only possible at
+        whole-number lines, which MLB run lines almost never use,
+        but we handle it correctly anyway).
+    """
+    game = opp.game
+    if (
+        game.status != 'final'
+        or game.home_score is None
+        or game.away_score is None
+    ):
+        return None
+
+    home_margin = game.home_score - game.away_score
+    home_is_fav = opp.spread < 0
+    if opp.spread == 0:
+        # Pick'em — neither side is "favorite" so we can only settle
+        # tight_spread if it ever fires at 0 (it does; 0 ≤ 1.5).
+        # Treat the lower-rated/away side as the underdog by
+        # convention; for a true coin flip this is arbitrary.
+        # The signal_type tight_spread is then "underdog covers" =
+        # away wins or it's a push at 0-0 which is impossible in MLB.
+        # We only get here when away_team is treated as dog.
+        fav_margin = abs(home_margin)  # whichever side won
+        fav_covers = fav_margin > 0  # any non-tie favors "the winner"
+        # For spread=0, we don't really have a favorite — collapse
+        # to "tight_spread = home wins or away wins, no push"
+        if opp.signal_type == 'tight_spread':
+            # We're "betting the dog" but there is no dog. Mark push.
+            return 'push'
+        # large_favorite at spread=0 is impossible by definition
+        # (|0| < 2.5), so this branch shouldn't execute. Defensive.
+        return None
+
+    if home_is_fav:
+        fav_margin = home_margin
+    else:
+        fav_margin = -home_margin
+
+    line = abs(opp.spread)
+    if fav_margin == line:
+        return 'push'
+    fav_covers = fav_margin > line
+
+    if opp.signal_type == 'tight_spread':
+        # Underdog covers iff favorite does NOT cover.
+        return 'win' if not fav_covers else 'loss'
+    if opp.signal_type == 'large_favorite':
+        return 'win' if fav_covers else 'loss'
+    return None  # unknown signal_type — defensive
+
+
+def _total_outcome(opp) -> str | None:
+    """Win/loss/push for a TotalOpportunity, given a final game.
+
+    Convention:
+        high_scoring → over hits
+        low_scoring  → under hits
+    """
+    game = opp.game
+    if (
+        game.status != 'final'
+        or game.home_score is None
+        or game.away_score is None
+    ):
+        return None
+
+    total_runs = game.home_score + game.away_score
+    if total_runs == opp.total:
+        return 'push'
+    over_hits = total_runs > opp.total
+
+    if opp.signal_type == 'high_scoring':
+        return 'win' if over_hits else 'loss'
+    if opp.signal_type == 'low_scoring':
+        return 'win' if not over_hits else 'loss'
+    return None
+
+
+def _settle_opportunity_row(opp, outcome_fn) -> bool:
+    """Try to settle one opportunity row. Returns True iff a write
+    happened. Idempotent — already-settled rows return False."""
+    if opp.outcome:
+        return False
+    outcome = outcome_fn(opp)
+    if outcome is None:
+        return False
+    from django.utils import timezone as _tz
+    opp.outcome = outcome
+    opp.settled_at = _tz.now()
+    opp.save(update_fields=['outcome', 'settled_at'])
+    return True
+
+
+def settle_opportunities_for_game(game) -> dict:
+    """Settle every unsettled opportunity row tied to one game.
+
+    Called by the resolve_outcomes pipeline after a game's status
+    flips to 'final'. Safe to call repeatedly — idempotent per row.
+    Returns a counts dict for ops visibility.
+    """
+    spread_settled = 0
+    for opp in game.spread_opportunities.filter(outcome=''):
+        if _settle_opportunity_row(opp, _spread_outcome):
+            spread_settled += 1
+    total_settled = 0
+    for opp in game.total_opportunities.filter(outcome=''):
+        if _settle_opportunity_row(opp, _total_outcome):
+            total_settled += 1
+    return {'spread_settled': spread_settled, 'total_settled': total_settled}
+
+
+def settle_all_unsettled() -> dict:
+    """One-shot pass that settles every unsettled opportunity row whose
+    game is final. Used as a backfill helper / ops command. The normal
+    runtime path is settle_opportunities_for_game called per-game from
+    the resolve_outcomes pipeline."""
+    from apps.mlb.models import Game, SpreadOpportunity, TotalOpportunity
+
+    spread = total = 0
+    final_games_with_signals = (
+        Game.objects.filter(status='final')
+        .filter(
+            home_score__isnull=False,
+            away_score__isnull=False,
+        )
+        .distinct()
+    )
+    for g in final_games_with_signals:
+        for opp in SpreadOpportunity.objects.filter(game=g, outcome=''):
+            if _settle_opportunity_row(opp, _spread_outcome):
+                spread += 1
+        for opp in TotalOpportunity.objects.filter(game=g, outcome=''):
+            if _settle_opportunity_row(opp, _total_outcome):
+                total += 1
+    return {'spread_settled': spread, 'total_settled': total}
+
+
+# ===================================================================== #
+# Phase 2: Performance aggregation
+#
+# Per-signal-type win rate over all settled rows. Push rows are
+# excluded from win_rate (standard sports-betting convention) but
+# included in the raw counts for transparency. Sample size = wins +
+# losses (the decided rows), NOT including pushes.
+# ===================================================================== #
+
+
+def _aggregate(qs, signal_choices) -> dict:
+    """Shared aggregation for both spread and total. Returns a dict
+    keyed by signal_type with {win_rate, wins, losses, pushes,
+    sample_size, roi_estimate}."""
+    from django.db.models import Count, Q
+
+    result = {}
+    for signal_type, _label in signal_choices:
+        sig_qs = qs.filter(signal_type=signal_type)
+        wins = sig_qs.filter(outcome='win').count()
+        losses = sig_qs.filter(outcome='loss').count()
+        pushes = sig_qs.filter(outcome='push').count()
+        decided = wins + losses
+        win_rate = (wins / decided) if decided > 0 else None
+        result[signal_type] = {
+            'win_rate': win_rate,
+            'wins': wins,
+            'losses': losses,
+            'pushes': pushes,
+            'sample_size': decided,
+            'roi_estimate': _approx_roi_at_minus_110(win_rate),
+        }
+    return result
+
+
+def compute_spread_performance() -> dict:
+    """Win rate, sample size, ROI estimate per spread signal_type."""
+    from apps.mlb.models import SpreadOpportunity
+    qs = SpreadOpportunity.objects.exclude(outcome='')
+    return _aggregate(qs, SpreadOpportunity.SIGNAL_CHOICES)
+
+
+def compute_total_performance() -> dict:
+    """Win rate, sample size, ROI estimate per total signal_type."""
+    from apps.mlb.models import TotalOpportunity
+    qs = TotalOpportunity.objects.exclude(outcome='')
+    return _aggregate(qs, TotalOpportunity.SIGNAL_CHOICES)
+
+
+# ===================================================================== #
+# Phase 2: Lean classification
+#
+# At signal-creation time, the generator stamps:
+#     historical_win_rate  the current win rate for THIS signal_type
+#     sample_size          the current decided-rows count
+#     is_lean              True iff thresholds clear
+#
+# Snapshotted at create-time so threshold tweaks / data drift can
+# never retroactively flip an old row's lean status.
+# ===================================================================== #
+
+
+def _spread_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
+    """Returns (is_lean, historical_win_rate, sample_size) for the
+    NEW signal we're about to create. Reads the current historical
+    performance for this signal_type and applies the spread thresholds."""
+    perf = compute_spread_performance().get(signal_type) or {}
+    win_rate = perf.get('win_rate')
+    sample = perf.get('sample_size') or 0
+    is_lean = (
+        sample > SPREAD_LEAN_MIN_SAMPLE
+        and win_rate is not None
+        and win_rate > SPREAD_LEAN_WIN_RATE_THRESHOLD
+    )
+    return is_lean, win_rate, sample if sample else None
+
+
+def _total_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
+    """Returns (is_lean, historical_win_rate, sample_size) for a new
+    total signal. Total leans require BOTH a win-rate clear AND a
+    minimum estimated ROI (per the spec) — protects against a high
+    win rate that only barely covers the vig."""
+    perf = compute_total_performance().get(signal_type) or {}
+    win_rate = perf.get('win_rate')
+    sample = perf.get('sample_size') or 0
+    roi = perf.get('roi_estimate')
+    is_lean = (
+        sample > TOTAL_LEAN_MIN_SAMPLE
+        and win_rate is not None
+        and win_rate > TOTAL_LEAN_WIN_RATE_THRESHOLD
+        and roi is not None
+        and roi > TOTAL_LEAN_MIN_ROI
+    )
+    return is_lean, win_rate, sample if sample else None

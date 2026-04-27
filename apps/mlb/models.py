@@ -286,13 +286,51 @@ class InjuryImpact(models.Model):
 # --------------------------------------------------------------------- #
 
 
+OPPORTUNITY_OUTCOME_CHOICES = [
+    ('win', 'Win'),     # the signal's evaluated direction won
+    ('loss', 'Loss'),   # the signal's evaluated direction lost
+    ('push', 'Push'),   # exact tie at the line — excluded from win-rate math
+]
+
+
 class SpreadOpportunity(models.Model):
-    """Rule-based signal on the run-line market. NOT a recommendation."""
+    """Rule-based signal on the run-line market. NOT a recommendation.
+
+    Phase 1 stored the signal + source. Phase 2 adds:
+      * Settlement: outcome / settled_at populated when the underlying
+        game finalizes. Settlement convention is FIXED per signal_type
+        (see `EVALUATED_DIRECTION` below) so the win-rate math is
+        deterministic and can be back-tested.
+      * Lean classification: at signal-creation time, the generator
+        looks up historical win rate for this signal_type and stamps
+        `is_lean=True` only when the data clears the threshold.
+        These columns are SNAPSHOTTED, not computed on read — so the
+        UI can show "56% win rate, 42 games" cheaply, and a future
+        threshold change wouldn't retroactively re-label old rows.
+    """
 
     SIGNAL_CHOICES = [
         ('tight_spread', 'Tight Spread'),       # |spread| <= 1.5
         ('large_favorite', 'Large Favorite'),   # |spread| >= 2.5
     ]
+
+    # Per-signal convention for "what does a win mean?". Documented at
+    # the model layer because the answer is a product decision, not a
+    # math property — and it's load-bearing for every downstream metric.
+    #
+    #   tight_spread     → 'underdog' covers (small dogs in MLB
+    #                      historically perform well against the run line)
+    #   large_favorite   → 'favorite' covers (testing the conventional
+    #                      wisdom that heavy favorites cover often
+    #                      enough to be exploitable)
+    #
+    # If the data doesn't support a direction, is_lean stays False —
+    # the convention only determines which side is being TESTED, not
+    # the conclusion.
+    EVALUATED_DIRECTION = {
+        'tight_spread': 'underdog',
+        'large_favorite': 'favorite',
+    }
 
     game = models.ForeignKey(
         Game, on_delete=models.CASCADE, related_name='spread_opportunities',
@@ -316,6 +354,20 @@ class SpreadOpportunity(models.Model):
     source_quality = models.CharField(max_length=15, default='primary')
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    # ---- Phase 2: Lean classification ----
+    # Snapshotted at creation time so threshold-tweak / data-drift can
+    # never retroactively flip an old row's lean status.
+    is_lean = models.BooleanField(default=False, db_index=True)
+    historical_win_rate = models.FloatField(null=True, blank=True)  # 0.0..1.0
+    sample_size = models.IntegerField(null=True, blank=True)
+
+    # ---- Phase 2: Settlement ----
+    outcome = models.CharField(
+        max_length=10, choices=OPPORTUNITY_OUTCOME_CHOICES, blank=True, default='',
+        db_index=True,
+    )
+    settled_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
         constraints = [
@@ -327,6 +379,8 @@ class SpreadOpportunity(models.Model):
         indexes = [
             models.Index(fields=['game', '-created_at']),
             models.Index(fields=['signal_type', '-created_at']),
+            models.Index(fields=['outcome']),
+            models.Index(fields=['is_lean']),
         ]
 
     def __str__(self):
@@ -334,12 +388,23 @@ class SpreadOpportunity(models.Model):
 
 
 class TotalOpportunity(models.Model):
-    """Rule-based signal on the runs over/under market. NOT a recommendation."""
+    """Rule-based signal on the runs over/under market. NOT a recommendation.
+
+    See SpreadOpportunity docstring — same Phase 2 additions
+    (settlement + lean classification).
+    """
 
     SIGNAL_CHOICES = [
         ('high_scoring', 'High Scoring'),  # total >= 9.5
         ('low_scoring', 'Low Scoring'),    # total <= 7.5
     ]
+
+    # 'over' means betting the OVER hits (combined score > total).
+    # 'under' means betting the UNDER hits.
+    EVALUATED_DIRECTION = {
+        'high_scoring': 'over',
+        'low_scoring': 'under',
+    }
 
     game = models.ForeignKey(
         Game, on_delete=models.CASCADE, related_name='total_opportunities',
@@ -354,6 +419,18 @@ class TotalOpportunity(models.Model):
     source_quality = models.CharField(max_length=15, default='primary')
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    # ---- Phase 2: Lean classification ----
+    is_lean = models.BooleanField(default=False, db_index=True)
+    historical_win_rate = models.FloatField(null=True, blank=True)
+    sample_size = models.IntegerField(null=True, blank=True)
+
+    # ---- Phase 2: Settlement ----
+    outcome = models.CharField(
+        max_length=10, choices=OPPORTUNITY_OUTCOME_CHOICES, blank=True, default='',
+        db_index=True,
+    )
+    settled_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
         constraints = [
@@ -365,6 +442,8 @@ class TotalOpportunity(models.Model):
         indexes = [
             models.Index(fields=['game', '-created_at']),
             models.Index(fields=['signal_type', '-created_at']),
+            models.Index(fields=['outcome']),
+            models.Index(fields=['is_lean']),
         ]
 
     def __str__(self):

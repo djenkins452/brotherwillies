@@ -2562,3 +2562,464 @@ class MoneylinePipelineNonRegressionTests(TestCase):
         # ran end-to-end with both opportunity managers locked off.
         self.assertIsNotNone(rec)
         self.assertEqual(rec.bet_type, 'moneyline')
+
+
+# ===================================================================== #
+# Phase 2: Settlement, Performance, Lean Classification
+#
+# Adds outcome-tracking + per-signal-type win rate aggregation +
+# is_lean stamping. Must NOT regress Moneyline.
+# ===================================================================== #
+
+
+class _OpportunityPhase2TestBase(TestCase):
+    """Shared setup — fresh teams + minimum viable game for settlement."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        conf = MLBConf.objects.first() or MLBConf.objects.create(
+            name='P2 League', slug='p2-league',
+        )
+        self.home = MLBTeam.objects.create(
+            name='P2 Home', slug='p2-home', conference=conf,
+            rating=70, source='mlb_stats_api', external_id='p2-home',
+        )
+        self.away = MLBTeam.objects.create(
+            name='P2 Away', slug='p2-away', conference=conf,
+            rating=50, source='mlb_stats_api', external_id='p2-away',
+        )
+
+    def _final_game(self, home_score, away_score):
+        from apps.mlb.models import Game as MLBGame
+        return MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=4),
+            status='final',
+            home_score=home_score, away_score=away_score,
+            source='mlb_stats_api',
+            external_id=f'p2-final-{timezone.now().timestamp()}',
+        )
+
+    def _scheduled_game(self):
+        from apps.mlb.models import Game as MLBGame
+        return MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=4),
+            status='scheduled',
+            source='mlb_stats_api',
+            external_id=f'p2-sched-{timezone.now().timestamp()}',
+        )
+
+    def _make_signal_rows(self, game, *, spread=None, total=None, source='odds_api',
+                          signal_type=None, model='spread'):
+        """Bypass the auto-generator — build a row directly so the test
+        can pin signal_type independent of the threshold rules."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity, TotalOpportunity
+        from django.db.models.signals import post_save
+        from apps.mlb import signals as mlb_signals
+        # Disable the post_save hook for the snapshot creation — this
+        # test wants to control exactly which opportunity rows exist.
+        post_save.disconnect(
+            mlb_signals.generate_opportunities_on_snapshot_save,
+            sender=OddsSnapshot,
+        )
+        try:
+            snap = OddsSnapshot.objects.create(
+                game=game, captured_at=timezone.now() - timedelta(hours=5),
+                market_home_win_prob=0.5,
+                spread=spread, total=total, odds_source=source,
+            )
+        finally:
+            post_save.connect(
+                mlb_signals.generate_opportunities_on_snapshot_save,
+                sender=OddsSnapshot,
+            )
+        if model == 'spread':
+            return SpreadOpportunity.objects.create(
+                game=game, odds_snapshot=snap, signal_type=signal_type,
+                spread=spread or 0.0, source=source,
+            )
+        else:
+            return TotalOpportunity.objects.create(
+                game=game, odds_snapshot=snap, signal_type=signal_type,
+                total=total or 0.0, source=source,
+            )
+
+
+class SpreadSettlementTests(_OpportunityPhase2TestBase):
+    """Settlement convention: tight_spread bets the dog, large_favorite
+    bets the favorite. Tests pin both directions explicitly."""
+
+    def test_tight_spread_dog_covers_when_dog_wins(self):
+        # Home is favored at -1.0; dog (away) wins outright → dog covers.
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=2, away_score=4)
+        opp = self._make_signal_rows(g, spread=-1.0, signal_type='tight_spread')
+        result = settle_opportunities_for_game(g)
+        self.assertEqual(result['spread_settled'], 1)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'win')
+        self.assertIsNotNone(opp.settled_at)
+
+    def test_tight_spread_dog_loses_when_fav_wins_by_more_than_line(self):
+        # Home favored at -1.0; home wins by 3 → favorite covers → dog loses.
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=5, away_score=2)
+        opp = self._make_signal_rows(g, spread=-1.0, signal_type='tight_spread')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'loss')
+
+    def test_large_favorite_covers_at_2dot5_line(self):
+        # Home favored at -2.5; home wins by 4 → favorite covers.
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=6, away_score=2)
+        opp = self._make_signal_rows(g, spread=-2.5, signal_type='large_favorite')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'win')
+
+    def test_large_favorite_does_not_cover_when_fav_wins_by_one(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=3, away_score=2)
+        opp = self._make_signal_rows(g, spread=-2.5, signal_type='large_favorite')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'loss')
+
+    def test_push_when_fav_margin_equals_line(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        # Home -2.0 line, home wins by exactly 2 → push.
+        g = self._final_game(home_score=4, away_score=2)
+        opp = self._make_signal_rows(g, spread=-2.0, signal_type='tight_spread')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'push')
+
+    def test_settlement_idempotent(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=5, away_score=2)
+        opp = self._make_signal_rows(g, spread=-1.0, signal_type='tight_spread')
+        first = settle_opportunities_for_game(g)
+        second = settle_opportunities_for_game(g)
+        self.assertEqual(first['spread_settled'], 1)
+        self.assertEqual(second['spread_settled'], 0)
+
+    def test_skips_non_final_game(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._scheduled_game()
+        opp = self._make_signal_rows(g, spread=-1.0, signal_type='tight_spread')
+        result = settle_opportunities_for_game(g)
+        self.assertEqual(result['spread_settled'], 0)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, '')
+
+    def test_away_favorite_settles_correctly(self):
+        """Convention: spread > 0 means away is favored. Make sure the
+        favorite/underdog math doesn't assume home is always the dog."""
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        # Spread +1.5: away favored by 1.5; away wins by 3 → fav covers.
+        g = self._final_game(home_score=2, away_score=5)
+        opp = self._make_signal_rows(g, spread=1.5, signal_type='large_favorite')
+        # 1.5 doesn't actually trigger large_favorite via the auto-gen
+        # path — but here we're testing the settlement math directly.
+        # Reset spread to -2.5 magnitude in the away direction:
+        opp.spread = 2.5
+        opp.save()
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'win')
+
+
+class TotalSettlementTests(_OpportunityPhase2TestBase):
+    def test_high_scoring_over_hits(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=6, away_score=5)  # 11 runs total
+        opp = self._make_signal_rows(g, total=10.0, signal_type='high_scoring', model='total')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'win')
+
+    def test_high_scoring_under_costs_loss(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=2, away_score=3)  # 5 runs
+        opp = self._make_signal_rows(g, total=10.0, signal_type='high_scoring', model='total')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'loss')
+
+    def test_low_scoring_under_hits(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=2, away_score=1)  # 3 runs
+        opp = self._make_signal_rows(g, total=7.0, signal_type='low_scoring', model='total')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'win')
+
+    def test_total_push_at_exact(self):
+        from apps.mlb.services.opportunity_signals import settle_opportunities_for_game
+        g = self._final_game(home_score=4, away_score=4)  # 8 runs
+        opp = self._make_signal_rows(g, total=8.0, signal_type='high_scoring', model='total')
+        settle_opportunities_for_game(g)
+        opp.refresh_from_db()
+        self.assertEqual(opp.outcome, 'push')
+
+
+class PerformanceAggregationTests(_OpportunityPhase2TestBase):
+    """Verify the performance aggregator excludes pushes from win_rate
+    (standard sports-betting convention) but counts them in the totals."""
+
+    def test_win_rate_excludes_pushes(self):
+        from apps.mlb.services.opportunity_signals import compute_spread_performance
+        # Build settled rows directly — 6 wins, 4 losses, 2 pushes.
+        from apps.mlb.models import SpreadOpportunity, OddsSnapshot
+        for outcome, count in [('win', 6), ('loss', 4), ('push', 2)]:
+            for i in range(count):
+                g = self._final_game(home_score=5 + i, away_score=2)
+                snap = OddsSnapshot.objects.create(
+                    game=g, captured_at=timezone.now(),
+                    market_home_win_prob=0.5, spread=-1.0,
+                )
+                # Skip the auto-generated row (different signal_type
+                # might fire). Just directly create with desired outcome.
+                SpreadOpportunity.objects.update_or_create(
+                    game=g, odds_snapshot=snap, signal_type='tight_spread',
+                    defaults={
+                        'spread': -1.0, 'outcome': outcome,
+                        'settled_at': timezone.now(),
+                    },
+                )
+        perf = compute_spread_performance()['tight_spread']
+        # Sample size = wins + losses (decided rows only)
+        self.assertEqual(perf['sample_size'], 10)
+        self.assertEqual(perf['pushes'], 2)
+        # Win rate over decided rows = 6/10 = 0.6
+        self.assertAlmostEqual(perf['win_rate'], 0.6, places=3)
+        # ROI estimate should be > 0 for win_rate=0.6 at -110
+        self.assertGreater(perf['roi_estimate'], 0)
+
+
+class LeanClassificationTests(_OpportunityPhase2TestBase):
+    """When a new signal is created, is_lean / historical_win_rate /
+    sample_size are stamped from current historical performance.
+    Snapshotted at create-time so old rows can never be retroactively
+    re-labeled by a threshold change."""
+
+    def _seed_history(self, signal_type, *, wins, losses, model='spread'):
+        from apps.mlb.models import SpreadOpportunity, TotalOpportunity, OddsSnapshot
+        Model = SpreadOpportunity if model == 'spread' else TotalOpportunity
+        for i in range(wins):
+            g = self._final_game(home_score=5, away_score=2)
+            snap = OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=-1.0 if model == 'spread' else None,
+                total=10.0 if model == 'total' else None,
+            )
+            kwargs = {
+                'game': g, 'odds_snapshot': snap, 'signal_type': signal_type,
+                'outcome': 'win', 'settled_at': timezone.now(),
+            }
+            if model == 'spread':
+                kwargs['spread'] = -1.0
+            else:
+                kwargs['total'] = 10.0
+            Model.objects.update_or_create(
+                game=g, odds_snapshot=snap, signal_type=signal_type,
+                defaults=kwargs,
+            )
+        for i in range(losses):
+            g = self._final_game(home_score=2, away_score=5)
+            snap = OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=-1.0 if model == 'spread' else None,
+                total=10.0 if model == 'total' else None,
+            )
+            kwargs = {
+                'game': g, 'odds_snapshot': snap, 'signal_type': signal_type,
+                'outcome': 'loss', 'settled_at': timezone.now(),
+            }
+            if model == 'spread':
+                kwargs['spread'] = -1.0
+            else:
+                kwargs['total'] = 10.0
+            Model.objects.update_or_create(
+                game=g, odds_snapshot=snap, signal_type=signal_type,
+                defaults=kwargs,
+            )
+
+    def test_lean_off_when_sample_below_minimum(self):
+        # Strong win rate but only 5 samples — bar requires > 30.
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        from apps.mlb.models import OddsSnapshot
+        self._seed_history('tight_spread', wins=4, losses=1)
+        # Now create a NEW signal — should NOT be marked lean.
+        g = self._scheduled_game()
+        snap = OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        # Auto-generated by post_save — find the row.
+        from apps.mlb.models import SpreadOpportunity
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_lean)
+        self.assertEqual(new_opp.sample_size, 5)
+
+    def test_lean_off_when_winrate_below_threshold(self):
+        # 31 samples (>30) but 50% win rate — fails 53% threshold.
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_history('tight_spread', wins=15, losses=16)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_lean)
+        self.assertEqual(new_opp.sample_size, 31)
+
+    def test_lean_on_when_both_thresholds_clear(self):
+        # 35 samples, 60% win rate — clears both bars.
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_history('tight_spread', wins=21, losses=14)  # 60%
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_lean)
+        self.assertEqual(new_opp.sample_size, 35)
+        self.assertAlmostEqual(new_opp.historical_win_rate, 21/35, places=3)
+
+    def test_total_lean_requires_roi_and_winrate(self):
+        """Total leans need BOTH win rate > 54% AND ROI > 2%. A 54.5%
+        win rate at -110 gives ROI ~+4% (clears) — should be a lean."""
+        from apps.mlb.models import OddsSnapshot, TotalOpportunity
+        self._seed_history('high_scoring', wins=22, losses=18, model='total')  # 55%
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, total=10.0,
+        )
+        new_opp = TotalOpportunity.objects.get(game=g, signal_type='high_scoring')
+        self.assertTrue(new_opp.is_lean)
+
+    def test_lean_status_snapshotted_not_recomputed(self):
+        """Old rows must NOT be retroactively re-labeled when history
+        changes. is_lean is set at create-time and stays."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        # Cold start — no history — first signal is_lean=False.
+        g1 = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g1, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        first_opp = SpreadOpportunity.objects.get(game=g1, signal_type='tight_spread')
+        self.assertFalse(first_opp.is_lean)
+        first_opp_id = first_opp.id
+
+        # Now seed enough winning history to meet the bar.
+        self._seed_history('tight_spread', wins=30, losses=5)
+
+        # Re-fetch the original row — it must still be is_lean=False.
+        first_opp.refresh_from_db()
+        self.assertFalse(first_opp.is_lean)
+        self.assertEqual(first_opp.id, first_opp_id)
+
+        # A NEW row created now should pick up the lean status.
+        g2 = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g2, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g2, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_lean)
+
+
+class SettleOutcomesIntegrationTests(_OpportunityPhase2TestBase):
+    """End-to-end: resolve_outcomes management command settles MLB
+    opportunity rows alongside its existing ModelResultSnapshot work."""
+
+    def test_resolve_outcomes_settles_opportunities(self):
+        from django.core.management import call_command
+        from io import StringIO
+        # Build a final game with both spread + total signals seeded.
+        g = self._final_game(home_score=6, away_score=2)  # margin 4
+        self._make_signal_rows(g, spread=-2.5, signal_type='large_favorite')
+        self._make_signal_rows(g, total=10.0, signal_type='high_scoring', model='total')
+        out = StringIO()
+        call_command('resolve_outcomes', sport='mlb', stdout=out)
+        # Both should be settled now
+        from apps.mlb.models import SpreadOpportunity, TotalOpportunity
+        self.assertEqual(
+            SpreadOpportunity.objects.filter(game=g).first().outcome, 'win',
+        )
+        # 8 runs total, line 10.0 → over LOSES (under hit)
+        self.assertEqual(
+            TotalOpportunity.objects.filter(game=g).first().outcome, 'loss',
+        )
+
+
+class Phase2MoneylineNonRegressionTests(TestCase):
+    """Belt-and-suspenders again: the Phase 2 settlement / lean code
+    must NOT cause the Moneyline pipeline to consult the new fields.
+    Same sentinel pattern as Phase 1's MoneylinePipelineNonRegressionTests
+    — patches the related managers AND the new performance functions
+    to AssertionError-on-call, then runs get_recommendation."""
+
+    def test_recommendation_engine_unaffected_by_phase2_layer(self):
+        from unittest.mock import patch, PropertyMock
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot,
+        )
+        from apps.core.services.recommendations import get_recommendation
+
+        conf = MLBConf.objects.first() or MLBConf.objects.create(
+            name='P2 Reg', slug='p2-reg',
+        )
+        h = MLBTeam.objects.create(
+            name='P2R Home', slug='p2r-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='p2r-home',
+        )
+        a = MLBTeam.objects.create(
+            name='P2R Away', slug='p2r-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='p2r-away',
+        )
+        g = MLBGame.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id='p2r-game',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=9.5,
+        )
+
+        with patch.object(MLBGame, 'spread_opportunities',
+                          new_callable=PropertyMock,
+                          side_effect=AssertionError(
+                              'phase2: rec engine touched spread_opportunities'
+                          )):
+            with patch.object(MLBGame, 'total_opportunities',
+                              new_callable=PropertyMock,
+                              side_effect=AssertionError(
+                                  'phase2: rec engine touched total_opportunities'
+                              )):
+                # Also lock down the perf functions — if the rec engine
+                # ever started using them as a soft signal, this would catch.
+                with patch(
+                    'apps.mlb.services.opportunity_signals.compute_spread_performance',
+                    side_effect=AssertionError('phase2 perf leaked into rec'),
+                ):
+                    with patch(
+                        'apps.mlb.services.opportunity_signals.compute_total_performance',
+                        side_effect=AssertionError('phase2 perf leaked into rec'),
+                    ):
+                        rec = get_recommendation('mlb', g, user=None)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.bet_type, 'moneyline')
