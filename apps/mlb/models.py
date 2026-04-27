@@ -259,3 +259,113 @@ class InjuryImpact(models.Model):
 
     def __str__(self):
         return f"{self.team.name} - {self.impact_level} ({self.game})"
+
+
+# --------------------------------------------------------------------- #
+# Tiered Intelligence — Phase 1 Opportunity Signals (NOT recommendations)
+#
+# Spread + Total signals live in their own tables, separate from the
+# Moneyline BettingRecommendation pipeline. They are RULE-BASED — no
+# model inference, no edge math, no tier assignment. The UI labels them
+# "Opportunity Signal — informational only" and they are NEVER mixed
+# into "Bet All" actions.
+#
+# Why separate tables instead of polymorphic columns on a shared model:
+#   - Different schema (favorite/underdog only matters for spread).
+#   - Different signal vocabularies (tight/large vs high/low).
+#   - Independent extensibility (we'll likely add more spread signals
+#     than total signals over time).
+#   - Zero risk of accidentally widening the BettingRecommendation
+#     surface, which the Moneyline guardrails depend on.
+#
+# Idempotency contract: at most one row per (game, odds_snapshot,
+# signal_type) — enforced by UniqueConstraint. Running the generator
+# twice on the same snapshot is a no-op. This matters because the
+# post-save hook fires on every snapshot insert, including ESPN
+# fallback writes that re-cover games primary already wrote for.
+# --------------------------------------------------------------------- #
+
+
+class SpreadOpportunity(models.Model):
+    """Rule-based signal on the run-line market. NOT a recommendation."""
+
+    SIGNAL_CHOICES = [
+        ('tight_spread', 'Tight Spread'),       # |spread| <= 1.5
+        ('large_favorite', 'Large Favorite'),   # |spread| >= 2.5
+    ]
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='spread_opportunities',
+    )
+    odds_snapshot = models.ForeignKey(
+        'OddsSnapshot', on_delete=models.CASCADE,
+        related_name='spread_opportunities',
+    )
+    signal_type = models.CharField(max_length=30, choices=SIGNAL_CHOICES, db_index=True)
+    # Stored from the home-team perspective, same convention as
+    # OddsSnapshot.spread. UI uses the spread_display template filter
+    # to render either side correctly.
+    spread = models.FloatField()
+    favorite_team_name = models.CharField(max_length=120, blank=True)
+    underdog_team_name = models.CharField(max_length=120, blank=True)
+    # Carried through from the source snapshot so the Spread tile can
+    # render the same Verified/ESPN/Derived badge family without an
+    # extra join. Stays in sync because the signal is regenerated only
+    # via the post_save hook, which always reads the snapshot's source.
+    source = models.CharField(max_length=20, default='odds_api', db_index=True)
+    source_quality = models.CharField(max_length=15, default='primary')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'odds_snapshot', 'signal_type'],
+                name='uniq_spread_signal_per_snapshot',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['game', '-created_at']),
+            models.Index(fields=['signal_type', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_signal_type_display()} {self.spread:+.1f} for {self.game}"
+
+
+class TotalOpportunity(models.Model):
+    """Rule-based signal on the runs over/under market. NOT a recommendation."""
+
+    SIGNAL_CHOICES = [
+        ('high_scoring', 'High Scoring'),  # total >= 9.5
+        ('low_scoring', 'Low Scoring'),    # total <= 7.5
+    ]
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='total_opportunities',
+    )
+    odds_snapshot = models.ForeignKey(
+        'OddsSnapshot', on_delete=models.CASCADE,
+        related_name='total_opportunities',
+    )
+    signal_type = models.CharField(max_length=30, choices=SIGNAL_CHOICES, db_index=True)
+    total = models.FloatField()
+    source = models.CharField(max_length=20, default='odds_api', db_index=True)
+    source_quality = models.CharField(max_length=15, default='primary')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'odds_snapshot', 'signal_type'],
+                name='uniq_total_signal_per_snapshot',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['game', '-created_at']),
+            models.Index(fields=['signal_type', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_signal_type_display()} O/U {self.total:.1f} for {self.game}"

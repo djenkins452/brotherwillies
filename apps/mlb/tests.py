@@ -2041,3 +2041,334 @@ class HubTemplateSourceAwareTests(TestCase):
         resp = self.client.get('/mlb/')
         self.assertContains(resp, 'mlb-source-badge--espn')
         self.assertContains(resp, 'ESPN Odds')
+
+
+# ===================================================================== #
+# Tiered Intelligence — Phase 1 Opportunity Signal Tests
+#
+# These cover the rule-based Spread + Total signal generators ONLY.
+# They explicitly do NOT touch Moneyline / BettingRecommendation paths
+# — that pipeline is frozen by contract for this phase. Any Moneyline
+# regression caught here would mean a leak the architecture should
+# prevent at the type level, not just by test.
+# ===================================================================== #
+
+class _OpportunitySignalTestBase(TestCase):
+    """Shared setup for Spread + Total signal tests.
+
+    Uses fresh teams + fresh game per test (TestCase rolls back) so the
+    UniqueConstraint on (game, snapshot, signal_type) can't bleed
+    across tests.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        # Conference is required by Team; reuse the seed-loader's first
+        # conference if it exists, otherwise create one.
+        conf = MLBConf.objects.first()
+        if conf is None:
+            conf = MLBConf.objects.create(name='Test League', slug='test-league')
+        self.home = MLBTeam.objects.create(
+            name='Opp Home', slug='opp-home', conference=conf,
+            rating=70, source='mlb_stats_api', external_id='opp-home',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Opp Away', slug='opp-away', conference=conf,
+            rating=50, source='mlb_stats_api', external_id='opp-away',
+        )
+        self.game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id=f'opp-game-{timezone.now().timestamp()}',
+        )
+
+    def _make_snapshot(self, *, spread=None, total=None, source='odds_api', is_derived=False):
+        from apps.mlb.models import OddsSnapshot
+        # Disable the post_save hook so the test can call the generator
+        # directly without the hook also creating rows. Tests that
+        # exercise the hook re-enable it explicitly.
+        from django.db.models.signals import post_save
+        from apps.mlb import signals as mlb_signals
+        post_save.disconnect(
+            mlb_signals.generate_opportunities_on_snapshot_save,
+            sender=OddsSnapshot,
+        )
+        try:
+            snap = OddsSnapshot.objects.create(
+                game=self.game, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=spread, total=total,
+                odds_source=source, is_derived=is_derived,
+            )
+        finally:
+            post_save.connect(
+                mlb_signals.generate_opportunities_on_snapshot_save,
+                sender=OddsSnapshot,
+            )
+        return snap
+
+
+class SpreadOpportunitySignalTests(_OpportunitySignalTestBase):
+    """Phase 1 spread signals — rule-based, NOT recommendations."""
+
+    def test_tight_spread_at_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        from apps.mlb.models import SpreadOpportunity
+        snap = self._make_snapshot(spread=-1.5)
+        created = generate_spread_opportunities(self.game, snap)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].signal_type, 'tight_spread')
+        self.assertEqual(SpreadOpportunity.objects.count(), 1)
+
+    def test_tight_spread_below_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=1.0)
+        sigs = generate_spread_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['tight_spread'])
+
+    def test_large_favorite_at_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=-2.5)
+        sigs = generate_spread_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['large_favorite'])
+
+    def test_large_favorite_above_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=3.5)
+        sigs = generate_spread_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['large_favorite'])
+
+    def test_no_signal_in_gap_band(self):
+        """Spreads strictly between 1.5 and 2.5 (exclusive) get nothing.
+        Silence is correct — confirms the threshold gap is intentional."""
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=2.0)
+        sigs = generate_spread_opportunities(self.game, snap)
+        self.assertEqual(sigs, [])
+
+    def test_no_spread_field_no_signal(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=None, total=8.5)
+        self.assertEqual(generate_spread_opportunities(self.game, snap), [])
+
+    def test_idempotent_no_duplicate_rows(self):
+        """Running the generator twice on the same snapshot is a no-op
+        the second time — the DB constraint guarantees it. Load-bearing
+        because the post_save hook can fire again on snapshot updates."""
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        from apps.mlb.models import SpreadOpportunity
+        snap = self._make_snapshot(spread=-1.0)
+        first = generate_spread_opportunities(self.game, snap)
+        second = generate_spread_opportunities(self.game, snap)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 0)
+        self.assertEqual(SpreadOpportunity.objects.filter(game=self.game).count(), 1)
+
+    def test_negative_spread_means_home_is_favorite(self):
+        """Convention: snapshot.spread is from home perspective; negative
+        means home is favored. Signal stores team NAMES, not FKs, because
+        the favorite/underdog labels are display data — we don't want
+        downstream code to treat them as authoritative team references."""
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=-1.5)
+        sig = generate_spread_opportunities(self.game, snap)[0]
+        self.assertEqual(sig.favorite_team_name, self.home.name)
+        self.assertEqual(sig.underdog_team_name, self.away.name)
+
+    def test_positive_spread_means_away_is_favorite(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=1.5)
+        sig = generate_spread_opportunities(self.game, snap)[0]
+        self.assertEqual(sig.favorite_team_name, self.away.name)
+        self.assertEqual(sig.underdog_team_name, self.home.name)
+
+    def test_pickem_spread_zero_no_favorite(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=0.0)
+        sig = generate_spread_opportunities(self.game, snap)[0]
+        self.assertEqual(sig.signal_type, 'tight_spread')
+        self.assertEqual(sig.favorite_team_name, '')
+        self.assertEqual(sig.underdog_team_name, '')
+
+    def test_source_attribution_carries_through(self):
+        from apps.mlb.services.opportunity_signals import generate_spread_opportunities
+        snap = self._make_snapshot(spread=-1.5, source='espn')
+        sig = generate_spread_opportunities(self.game, snap)[0]
+        self.assertEqual(sig.source, 'espn')
+
+
+class TotalOpportunitySignalTests(_OpportunitySignalTestBase):
+    """Phase 1 total signals — rule-based, NOT recommendations."""
+
+    def test_high_scoring_at_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=9.5)
+        sigs = generate_total_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['high_scoring'])
+
+    def test_high_scoring_above_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=10.5)
+        sigs = generate_total_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['high_scoring'])
+
+    def test_low_scoring_at_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=7.5)
+        sigs = generate_total_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['low_scoring'])
+
+    def test_low_scoring_below_threshold_fires(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=6.5)
+        sigs = generate_total_opportunities(self.game, snap)
+        self.assertEqual([s.signal_type for s in sigs], ['low_scoring'])
+
+    def test_no_signal_in_gap_band(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=8.5)
+        sigs = generate_total_opportunities(self.game, snap)
+        self.assertEqual(sigs, [])
+
+    def test_no_total_field_no_signal(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=None, spread=-1.0)
+        self.assertEqual(generate_total_opportunities(self.game, snap), [])
+
+    def test_idempotent_no_duplicate_rows(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        from apps.mlb.models import TotalOpportunity
+        snap = self._make_snapshot(total=10.0)
+        generate_total_opportunities(self.game, snap)
+        generate_total_opportunities(self.game, snap)
+        self.assertEqual(TotalOpportunity.objects.filter(game=self.game).count(), 1)
+
+    def test_source_attribution_carries_through(self):
+        from apps.mlb.services.opportunity_signals import generate_total_opportunities
+        snap = self._make_snapshot(total=10.0, source='espn')
+        sig = generate_total_opportunities(self.game, snap)[0]
+        self.assertEqual(sig.source, 'espn')
+
+
+class OpportunityPostSaveHookTests(TestCase):
+    """The post_save signal must auto-generate opportunity rows on insert.
+
+    These tests intentionally do NOT disable the signal — they verify
+    the integration path that a real OddsSnapshot.create() goes through.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        conf = MLBConf.objects.first() or MLBConf.objects.create(name='Test League', slug='test-league')
+        self.home = MLBTeam.objects.create(
+            name='Hook Home', slug='hook-home', conference=conf,
+            rating=70, source='mlb_stats_api', external_id='hook-home',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Hook Away', slug='hook-away', conference=conf,
+            rating=50, source='mlb_stats_api', external_id='hook-away',
+        )
+        self.game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id=f'opp-game-{timezone.now().timestamp()}',
+        )
+
+    def test_insert_with_tight_spread_creates_signal(self):
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.55, spread=-1.0,
+        )
+        self.assertEqual(SpreadOpportunity.objects.filter(game=self.game).count(), 1)
+
+    def test_insert_with_high_total_creates_signal(self):
+        from apps.mlb.models import OddsSnapshot, TotalOpportunity
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, total=10.5,
+        )
+        self.assertEqual(TotalOpportunity.objects.filter(game=self.game).count(), 1)
+
+    def test_insert_in_gap_band_creates_no_signals(self):
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity, TotalOpportunity
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-2.0, total=8.5,
+        )
+        self.assertEqual(SpreadOpportunity.objects.count(), 0)
+        self.assertEqual(TotalOpportunity.objects.count(), 0)
+
+    def test_update_does_not_regenerate_signals(self):
+        """Editing a snapshot must NOT create a duplicate signal — only
+        new inserts trigger generation. Verifies the `created` guard."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        snap = OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.55, spread=-1.0,
+        )
+        self.assertEqual(SpreadOpportunity.objects.count(), 1)
+        snap.market_home_win_prob = 0.60
+        snap.save()
+        self.assertEqual(SpreadOpportunity.objects.count(), 1)
+
+
+class MoneylinePipelineNonRegressionTests(TestCase):
+    """Belt-and-suspenders: verify that introducing the opportunity
+    signal layer did not change the Moneyline recommendation pipeline.
+
+    These tests explicitly assert no SpreadOpportunity / TotalOpportunity
+    is consulted by the recommendation engine. The Tiered Intelligence
+    contract REQUIRES this isolation.
+    """
+
+    def test_get_recommendation_does_not_query_opportunity_tables(self):
+        """The recommendation engine must not depend on opportunity
+        signals. Patch the queryset managers to raise on access — if
+        the engine tries to read either table, this test fails loudly."""
+        from unittest.mock import PropertyMock, patch
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot
+        from apps.core.services.recommendations import get_recommendation
+
+        conf = MLBConf.objects.first() or MLBConf.objects.create(name='Test League', slug='test-league')
+        h = MLBTeam.objects.create(
+            name='Reg Home', slug='reg-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='reg-home',
+        )
+        a = MLBTeam.objects.create(
+            name='Reg Away', slug='reg-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='reg-away',
+        )
+        g = MLBGame.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id=f'opp-game-{timezone.now().timestamp()}',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=9.5,  # would also trigger BOTH opportunity signals
+        )
+
+        # Sentinel: if the recommendation engine touches either related
+        # manager, raise. This proves Moneyline's reasoning never relies
+        # on the new tables.
+        with patch.object(MLBGame, 'spread_opportunities',
+                          new_callable=PropertyMock,
+                          side_effect=AssertionError(
+                              'recommendation engine touched spread_opportunities'
+                          )):
+            with patch.object(MLBGame, 'total_opportunities',
+                              new_callable=PropertyMock,
+                              side_effect=AssertionError(
+                                  'recommendation engine touched total_opportunities'
+                              )):
+                rec = get_recommendation('mlb', g, user=None)
+        # Sanity: a recommendation came back — the moneyline pipeline
+        # ran end-to-end with both opportunity managers locked off.
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.bet_type, 'moneyline')
