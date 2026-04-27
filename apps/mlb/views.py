@@ -74,11 +74,24 @@ def mlb_hub(request):
     if request.GET.get('diag') == '1' and request.user.is_staff:
         diag_rows = _build_diag_rows(all_tiles)
 
+    # Pre-compute bulk-bet button counts so the template can show
+    # "Bet All Verified Plays (8)" and the confirm modal can say "you
+    # are about to place bets on 8 games". Doing this in Python avoids
+    # the {% with foo|length|add:bar|length %} filter-parsing footgun
+    # where Django takes the first post-colon token as the add arg and
+    # a trailing |length is then applied to the wrong intermediate.
+    verified_bulk_count = (
+        len(decision_sections['elite']) + len(decision_sections['recommended'])
+    )
+    espn_bulk_count = len(decision_sections.get('recommended_espn', []))
+
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
         'today_tiles': today_tiles,
         'elite_games': decision_sections['elite'],
         'recommended_games': decision_sections['recommended'],
+        'verified_bulk_count': verified_bulk_count,
+        'espn_bulk_count': espn_bulk_count,
         # Source-Aware Betting (Commit B): ESPN-secondary recommendeds
         # render in their own section under the verified Recommended
         # bets, with a "secondary market — lower confidence" note.

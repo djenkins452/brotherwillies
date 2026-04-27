@@ -14,19 +14,22 @@
       <p class="mlb-hub__subtitle">What matters right now</p>
     </div>
     {% if user.is_authenticated %}
+    {# verified_bulk_count and espn_bulk_count are pre-computed in the   #}
+    {# view so the confirm modal can tell the user exactly how many bets #}
+    {# they're about to place. The number reflects what's visible on     #}
+    {# screen (today's slate); games where the user already has a        #}
+    {# pending bet are skipped server-side and surfaced in the toast.    #}
     <div class="mlb-bulk-actions">
-      {# Verified primary-source bets — shown when there's at least one #}
-      {% if elite_games or recommended_games %}
+      {% if verified_bulk_count %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet"
-              onclick="bulkPlaceRecommended('verified', this)">
-        🟢 Bet All Verified Plays
+              onclick="bulkPlaceRecommended('verified', this, {{ verified_bulk_count }})">
+        🟢 Bet All Verified Plays ({{ verified_bulk_count }})
       </button>
       {% endif %}
-      {# ESPN-secondary bets — separate button + confirm modal copy #}
-      {% if recommended_espn_games %}
+      {% if espn_bulk_count %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--espn"
-              onclick="bulkPlaceRecommended('espn', this)">
-        🟡 Bet All ESPN Plays
+              onclick="bulkPlaceRecommended('espn', this, {{ espn_bulk_count }})">
+        🟡 Bet All ESPN Plays ({{ espn_bulk_count }})
       </button>
       {% endif %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--cancel"
@@ -49,20 +52,31 @@
       el.style.color = isErr ? 'var(--red)' : '#22c55e';
       el.style.display = 'inline';
   }
-  function bulkPlaceRecommended(sourceFilter, btn) {
+  function bulkPlaceRecommended(sourceFilter, btn, gameCount) {
       // sourceFilter is 'verified' (primary, default) or 'espn' (secondary).
       // The confirm copy and the URL param differ between the two so users
       // are warned explicitly when betting on ESPN-fallback odds.
+      // gameCount is the visible count from the hub — used to give the
+      // confirm modal a concrete "you are about to bet on N games" line
+      // so the user can sanity-check before committing. This is the slate
+      // count, not the post-filter count: any games where the user already
+      // has a pending bet are still skipped server-side and reported in
+      // the success toast.
       var originalText = btn.textContent;
+      var n = (typeof gameCount === 'number' && gameCount > 0) ? gameCount : 0;
+      var nLbl = n + ' recommended game' + (n === 1 ? '' : 's');
       var confirmMsg, msgPrefix;
       if (sourceFilter === 'espn') {
-          confirmMsg = 'These bets are based on ESPN fallback odds. Odds may not '
-              + 'reflect true market pricing. Place a $100 mock bet on every ESPN '
-              + 'recommended game you don\'t already have a pending bet on. Continue?';
+          confirmMsg = 'You are about to place a $100 mock bet on each of '
+              + nLbl + ' (ESPN-fallback odds). ESPN odds may not reflect true '
+              + 'market pricing. Games where you already have a pending bet '
+              + 'will be skipped automatically. Proceed?';
           msgPrefix = 'ESPN: ';
       } else {
-          confirmMsg = 'Place a $100 mock bet on every VERIFIED-source recommended '
-              + 'game you don\'t already have a pending bet on. Proceed?';
+          confirmMsg = 'You are about to place a $100 mock bet on each of '
+              + nLbl + ' (verified primary-source odds). Games where you '
+              + 'already have a pending bet will be skipped automatically. '
+              + 'Proceed?';
           msgPrefix = 'Verified: ';
       }
       if (!window.confirm(confirmMsg)) return;
@@ -167,6 +181,21 @@
     </div>
   {% else %}
 
+    {% comment %}
+      Decision Group A — Recommended Plays.
+      Wraps Top Plays + Recommended Bets (verified) + Recommended Bets (ESPN)
+      in a single bordered group box so the user sees at a glance "these are
+      the plays the model said BET on." Section headers within the group are
+      kept (they distinguish elite vs standard, verified vs ESPN), but the
+      outer border + group label make the parent classification obvious.
+    {% endcomment %}
+    <div class="mlb-decision-group mlb-decision-group--recommended">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F44D;</span>
+        <span class="mlb-decision-group__title">Recommended Plays</span>
+        <span class="mlb-decision-group__hint">Model says: BET — edge cleared the threshold</span>
+      </div>
+
     {# Section 1 — 🔥 Top Plays (elite tier, VERIFIED only, capped at 2) #}
     <section class="mlb-section mlb-section--elite">
       <div class="mlb-section__head">
@@ -244,14 +273,31 @@
       </section>
     {% endif %}
 
+    </div>{# /mlb-decision-group--recommended #}
+
+    {% comment %}
+      Decision Group B — Not Recommended.
+      Always renders so the user can confirm "the model has classified all
+      today's games" rather than guessing whether absence means "no fades
+      today" or "the section silently disappeared". When the bucket is
+      empty we show a positive empty-state message; otherwise the same
+      tiles render as before so the user has the full information set
+      (matchup, pitchers, line, model edge) and can still click through.
+    {% endcomment %}
+    <div class="mlb-decision-group mlb-decision-group--fade">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x26A0;&#xFE0F;</span>
+        <span class="mlb-decision-group__title">Not Recommended</span>
+        <span class="mlb-decision-group__hint">Model says: FADE — edge below threshold or heavy juice</span>
+      </div>
+
     {# Section 3 — ⚠️ Not Recommended (dimmed but still clickable) #}
     {% if not_recommended_games %}
       <section class="mlb-section mlb-section--not-recommended">
         <div class="mlb-section__head">
-          <h2 class="mlb-section__title">&#x26A0;&#xFE0F; Not Recommended</h2>
+          <h2 class="mlb-section__title">Today&rsquo;s fades</h2>
           <span class="mlb-section__count">{{ not_recommended_games|length }}</span>
         </div>
-        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">Model said fade — edge below threshold or heavy juice.</p>
         <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
           {% for s in not_recommended_games %}
             <div role="listitem">
@@ -264,7 +310,13 @@
           {% endfor %}
         </div>
       </section>
+    {% else %}
+      <div class="card card-muted mlb-empty-state">
+        <p>No fades today &mdash; every game in today&rsquo;s slate either cleared the decision rules (see Recommended Plays above) or has no odds yet (see Unrated below).</p>
+      </div>
     {% endif %}
+
+    </div>{# /mlb-decision-group--fade #}
 
     {% comment %}
       Section 4 — Unrated: live games without odds, or pre-game games we

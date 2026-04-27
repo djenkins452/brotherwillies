@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-26 - MLB hub: decision group boxes + counted bulk-bet confirms
+
+**Summary:** Two UX fixes on the MLB hub. (1) The Top Plays + Recommended Bets sections are now wrapped in a single visually-bordered "Recommended Plays" group; the Not Recommended section is wrapped in its own "Not Recommended" group below it. The Not Recommended group always renders, with a positive empty-state when nothing today qualifies as a fade. (2) Each bulk-bet button shows the visible count in its label, and the confirm modal now says exactly how many bets are about to land.
+
+### Group boxes
+- **Recommended Plays** group — green-tinted border + faint green background. Wraps Top Plays Today, Recommended Bets (verified), and Recommended Bets (ESPN Fallback) under one "Model says: BET" heading.
+- **Not Recommended** group — neutral gray border + faint gray background. Wraps Today's Fades. Renders even when the bucket is empty so the user gets explicit confirmation ("No fades today — every game cleared the decision rules") instead of silently disappearing copy.
+- Inner section headers are kept (they distinguish elite/standard, verified/ESPN, and Today's fades) but the outer group framing makes the parent classification obvious at a glance.
+
+### Counted bulk-bet buttons + confirm
+- Buttons now read `🟢 Bet All Verified Plays (8)` / `🟡 Bet All ESPN Plays (3)`.
+- Confirm modal: "You are about to place a $100 mock bet on each of 8 recommended games (verified primary-source odds). Games where you already have a pending bet will be skipped automatically. Proceed?"
+- Counts are computed in the view (`verified_bulk_count` + `espn_bulk_count`) and reflect what's visible on the current slate.
+
+---
+
 ## 2026-04-26 - Bulk bet: scope to today's slate (match the visible Top Plays / Recommended sections)
 
 **Bug:** Clicking "Bet All Verified Plays" was placing bets on tomorrow's (and beyond) games too, not just the 2 Top Plays + 6 Recommended Bets visible on screen. Reported in production: 8 plays visible, 18 bets placed.
