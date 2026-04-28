@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login, authenticate, logout
 from django.contrib.auth.decorators import login_required
@@ -340,6 +341,65 @@ def performance_view(request):
     )
     market_movement = compute_market_movement_agreement(user_bets)
 
+    # Phase 2 — Tiered Intelligence: per-signal-type opportunity
+    # performance. Read-side helpers handle their own DB queries; we
+    # only render this section when the leans feature flag is on so
+    # the panel doesn't ship dark with empty data.
+    spread_total_leans_enabled = bool(
+        getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
+    )
+    opportunity_perf_spread = None
+    opportunity_perf_total = None
+    if spread_total_leans_enabled:
+        from apps.mlb.services.opportunity_signals import (
+            compute_spread_performance, compute_total_performance,
+            SPREAD_LEAN_WIN_RATE_THRESHOLD, SPREAD_LEAN_MIN_SAMPLE,
+            TOTAL_LEAN_WIN_RATE_THRESHOLD, TOTAL_LEAN_MIN_ROI,
+            TOTAL_LEAN_MIN_SAMPLE,
+        )
+        # Convert to a list of dicts the template can iterate cleanly.
+        # Win rate gets multiplied to a percentage at this layer for
+        # the same template-keep-stupid reason as the hub view.
+        def _shape_perf(perf_dict, lean_label_thresholds):
+            shaped = []
+            for signal_type, stats in perf_dict.items():
+                wr = stats['win_rate']
+                shaped.append({
+                    'signal_type': signal_type,
+                    'label': signal_type.replace('_', ' ').title(),
+                    'win_rate_pct': round(wr * 100, 1) if wr is not None else None,
+                    'sample_size': stats['sample_size'],
+                    'pushes': stats['pushes'],
+                    'roi_pct': (
+                        round(stats['roi_estimate'] * 100, 1)
+                        if stats['roi_estimate'] is not None else None
+                    ),
+                    'is_lean': lean_label_thresholds(stats),
+                })
+            return shaped
+
+        def _spread_lean(stats):
+            wr = stats['win_rate']
+            return (
+                stats['sample_size'] > SPREAD_LEAN_MIN_SAMPLE
+                and wr is not None
+                and wr > SPREAD_LEAN_WIN_RATE_THRESHOLD
+            )
+
+        def _total_lean(stats):
+            wr = stats['win_rate']
+            roi = stats['roi_estimate']
+            return (
+                stats['sample_size'] > TOTAL_LEAN_MIN_SAMPLE
+                and wr is not None
+                and wr > TOTAL_LEAN_WIN_RATE_THRESHOLD
+                and roi is not None
+                and roi > TOTAL_LEAN_MIN_ROI
+            )
+
+        opportunity_perf_spread = _shape_perf(compute_spread_performance(), _spread_lean)
+        opportunity_perf_total = _shape_perf(compute_total_performance(), _total_lean)
+
     return render(request, 'accounts/performance.html', {
         'overall': _compute_metrics(all_snaps),
         'cfb': _compute_metrics(cfb_snaps),
@@ -350,6 +410,9 @@ def performance_view(request):
         'clv': _compute_clv(all_snaps),
         'market_movement': market_movement,
         'recent_snapshots': all_snaps[:50],
+        'spread_total_leans_enabled': spread_total_leans_enabled,
+        'opportunity_perf_spread': opportunity_perf_spread,
+        'opportunity_perf_total': opportunity_perf_total,
         'help_key': 'performance',
         'nav_active': 'profile',
     })

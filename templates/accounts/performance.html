@@ -167,6 +167,87 @@
 </p>
 {% endif %}
 
+<!-- Tiered Intelligence Phase 2 — opportunity signal performance.
+     Renders only when the SPREAD_TOTAL_LEANS_ENABLED flag is on (the
+     view sets opportunity_perf_spread/_total to None otherwise). The
+     "Lean" row marker mirrors the hub badge so users can see at a
+     glance which signal types currently clear the lean threshold. -->
+{% if spread_total_leans_enabled %}
+<p class="section-title mt-2">Spread &amp; Total Performance (MLB)</p>
+<div class="card">
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;margin-bottom:8px;">
+        Per-signal-type historical performance for the rule-based opportunity
+        signals. <strong>NOT</strong> moneyline recommendations &mdash; these
+        are market signals only. A signal is promoted to <span class="lean-pill">🟡 Lean</span>
+        when the win rate clears the threshold over a 30+ game sample.
+        Win rate excludes pushes; ROI is estimated at -110 standard pricing.
+    </p>
+    {% if opportunity_perf_spread %}
+    <p class="text-sm mt-1" style="color:var(--text-primary);font-weight:600;">Spread (Run Line)</p>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Signal Type</th>
+                    <th class="num">Win Rate</th>
+                    <th class="num">ROI (est)</th>
+                    <th class="num">Sample</th>
+                    <th class="num">Pushes</th>
+                    <th>Lean?</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in opportunity_perf_spread %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td class="num">{% if row.win_rate_pct is not None %}{{ row.win_rate_pct }}%{% else %}&mdash;{% endif %}</td>
+                    <td class="num {% if row.roi_pct and row.roi_pct > 0 %}text-green{% elif row.roi_pct and row.roi_pct < 0 %}text-red{% endif %}">{% if row.roi_pct is not None %}{{ row.roi_pct }}%{% else %}&mdash;{% endif %}</td>
+                    <td class="num">{{ row.sample_size }}</td>
+                    <td class="num">{{ row.pushes }}</td>
+                    <td>{% if row.is_lean %}<span class="lean-pill">🟡 Lean</span>{% else %}<span class="text-muted">no</span>{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if opportunity_perf_total %}
+    <p class="text-sm mt-2" style="color:var(--text-primary);font-weight:600;">Total (Over/Under)</p>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Signal Type</th>
+                    <th class="num">Win Rate</th>
+                    <th class="num">ROI (est)</th>
+                    <th class="num">Sample</th>
+                    <th class="num">Pushes</th>
+                    <th>Lean?</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in opportunity_perf_total %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td class="num">{% if row.win_rate_pct is not None %}{{ row.win_rate_pct }}%{% else %}&mdash;{% endif %}</td>
+                    <td class="num {% if row.roi_pct and row.roi_pct > 0 %}text-green{% elif row.roi_pct and row.roi_pct < 0 %}text-red{% endif %}">{% if row.roi_pct is not None %}{{ row.roi_pct }}%{% else %}&mdash;{% endif %}</td>
+                    <td class="num">{{ row.sample_size }}</td>
+                    <td class="num">{{ row.pushes }}</td>
+                    <td>{% if row.is_lean %}<span class="lean-pill">🟡 Lean</span>{% else %}<span class="text-muted">no</span>{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    <p class="text-sm text-muted mt-1">
+        These are <strong>opportunity signals</strong>, not model recommendations.
+        Past performance does not predict future outcomes. Bulk betting on
+        Spread/Total is intentionally disabled in Phase 2.
+    </p>
+</div>
+{% endif %}
+
 <!-- Calibration -->
 {% if calibration %}
 <p class="section-title mt-2">Calibration</p>

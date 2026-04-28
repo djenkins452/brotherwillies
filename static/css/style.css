@@ -521,6 +521,21 @@ select.form-control {
 .text-muted { color: var(--text-muted); }
 .text-green { color: var(--green); }
 .text-red { color: var(--red); }
+
+/* Phase 2 lean pill — used on the Performance panel's spread/total
+   table to match the yellow Lean badge family on the MLB hub. */
+.lean-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(250,204,21,0.18);
+    border: 1px solid rgba(250,204,21,0.55);
+    color: #fde047;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
 .text-sm { font-size: 0.8rem; }
 .mt-1 { margin-top: 8px; }
 .mt-2 { margin-top: 16px; }

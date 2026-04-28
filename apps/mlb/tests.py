@@ -2962,6 +2962,150 @@ class SettleOutcomesIntegrationTests(_OpportunityPhase2TestBase):
         )
 
 
+class Phase2LeanUITests(TestCase):
+    """UI surface for Phase 2 Lean intelligence. Hard contract:
+       - flag OFF: no yellow Lean badge, no Leans Only chip, no
+         "(Market Signals Only)" subtitle, no Performance panel rows.
+         (Phase 1 surfaces still render normally if Phase 1 flag is on.)
+       - flag ON: badge + chip + subtitle render when data supports them.
+       - Leans Only filter hides non-lean cards via is-hidden.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot, SpreadOpportunity
+        conf = MLBConf.objects.first() or MLBConf.objects.create(name='B', slug='b')
+        self.home = MLBTeam.objects.create(
+            name='B Home', slug='b-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='b-home',
+        )
+        self.away = MLBTeam.objects.create(
+            name='B Away', slug='b-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='b-away',
+        )
+        self.game = MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api',
+            external_id=f'b-game-{timezone.now().timestamp()}',
+        )
+        # Snapshot drives the post_save signal → SpreadOpportunity row.
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            market_home_win_prob=0.58,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=10.0,
+        )
+        # Force the auto-generated row to is_lean=True so the UI
+        # branches under test actually fire. This bypasses the
+        # threshold gate (which we already test elsewhere).
+        for opp in SpreadOpportunity.objects.filter(game=self.game):
+            opp.is_lean = True
+            opp.historical_win_rate = 0.56
+            opp.sample_size = 42
+            opp.save(update_fields=['is_lean', 'historical_win_rate', 'sample_size'])
+
+    @override_settings(
+        SPREAD_TOTAL_SIGNALS_ENABLED=True,
+        SPREAD_TOTAL_LEANS_ENABLED=False,
+    )
+    def test_leans_flag_off_hides_lean_ui(self):
+        """Phase 1 surfaces stay visible; Phase 2 leans surfaces stay hidden."""
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        # Phase 1 still on
+        self.assertIn('mlb-decision-group--spread', body)
+        # Phase 2 surfaces NOT rendered
+        self.assertNotIn('mlb-lean-badge', body)
+        self.assertNotIn('mlb-bet-type-chip--leans', body)
+        self.assertNotIn('Market Signals Only', body)
+
+    @override_settings(
+        SPREAD_TOTAL_SIGNALS_ENABLED=True,
+        SPREAD_TOTAL_LEANS_ENABLED=True,
+    )
+    def test_leans_flag_on_renders_badge_chip_and_subtitle(self):
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('mlb-lean-badge', body)
+        self.assertIn('mlb-bet-type-chip--leans', body)
+        self.assertIn('Market Signals Only', body)
+        # Win rate is precomputed as percentage in the view (56.0)
+        self.assertIn('56.0% win rate', body)
+        self.assertIn('42 games', body)
+
+    @override_settings(
+        SPREAD_TOTAL_SIGNALS_ENABLED=True,
+        SPREAD_TOTAL_LEANS_ENABLED=True,
+    )
+    def test_leans_only_filter_hides_non_lean_cards(self):
+        """Cards whose signal is_lean=False get is-hidden when filter
+        is 'leans'. Non-lean cards still exist in the DOM (hidden via
+        CSS) so the structure stays intact for accessibility."""
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam, Game as MLBGame,
+            OddsSnapshot, SpreadOpportunity,
+        )
+        # Add a SECOND game with a non-lean spread signal.
+        conf = MLBConf.objects.first()
+        h2 = MLBTeam.objects.create(
+            name='B Home 2', slug='b-home-2', conference=conf,
+            rating=70, source='mlb_stats_api', external_id='b-home-2',
+        )
+        a2 = MLBTeam.objects.create(
+            name='B Away 2', slug='b-away-2', conference=conf,
+            rating=50, source='mlb_stats_api', external_id='b-away-2',
+        )
+        g2 = MLBGame.objects.create(
+            home_team=h2, away_team=a2,
+            first_pitch=timezone.now() + timedelta(hours=4),
+            status='scheduled',
+            source='mlb_stats_api',
+            external_id=f'b-game2-{timezone.now().timestamp()}',
+        )
+        OddsSnapshot.objects.create(
+            game=g2, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-130, moneyline_away=110,
+            spread=-1.0, total=10.5,
+        )
+        # Don't promote g2's signals — they stay is_lean=False.
+        resp = self.client.get('/mlb/?bet_type=leans')
+        body = resp.content.decode('utf-8')
+        # is-hidden appears on cards (not just the moneyline groups).
+        # Exact structure: both moneyline groups hidden + non-lean cards
+        # hidden.
+        self.assertIn('is-hidden', body)
+        # The Leans Only chip is currently active
+        self.assertIn('"true"', body)  # aria-pressed="true" somewhere
+
+
+class Phase2PerformancePanelTests(TestCase):
+    """Performance panel on /profile/performance/ surfaces the per-
+    signal-type stats table when leans flag is on, hides when off."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='perf-test', password='pw')
+        self.client.force_login(self.user)
+
+    @override_settings(SPREAD_TOTAL_LEANS_ENABLED=False)
+    def test_panel_hidden_when_flag_off(self):
+        resp = self.client.get('/profile/performance/')
+        body = resp.content.decode('utf-8')
+        self.assertNotIn('Spread &amp; Total Performance', body)
+
+    @override_settings(SPREAD_TOTAL_LEANS_ENABLED=True)
+    def test_panel_renders_when_flag_on(self):
+        resp = self.client.get('/profile/performance/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('Spread &amp; Total Performance', body)
+        # Both bet-type sub-tables present
+        self.assertIn('Spread (Run Line)', body)
+        self.assertIn('Total (Over/Under)', body)
+
+
 class Phase2MoneylineNonRegressionTests(TestCase):
     """Belt-and-suspenders again: the Phase 2 settlement / lean code
     must NOT cause the Moneyline pipeline to consult the new fields.

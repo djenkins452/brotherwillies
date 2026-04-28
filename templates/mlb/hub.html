@@ -185,6 +185,15 @@
       <a href="?bet_type=total{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
          class="mlb-bet-type-chip {% if bet_type_filter == 'total' %}is-active{% endif %}"
          aria-pressed="{% if bet_type_filter == 'total' %}true{% else %}false{% endif %}">Total</a>
+      {# Phase 2: Leans Only chip — only renders when the leans flag    #}
+      {# is on. Visually distinct (yellow rim) so the user understands  #}
+      {# this filter is showing a different KIND of result, not just a  #}
+      {# subset of one bet type.                                        #}
+      {% if spread_total_leans_enabled %}
+      <a href="?bet_type=leans{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip mlb-bet-type-chip--leans {% if bet_type_filter == 'leans' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'leans' %}true{% else %}false{% endif %}">🟡 Leans Only</a>
+      {% endif %}
     </div>
   {% endif %}{% endif %}
 
@@ -389,10 +398,22 @@
       Recommended Plays.
     {% endcomment %}
     {% if spread_total_signals_enabled and spread_tiles %}
-    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--spread {% if bet_type_filter != 'all' and bet_type_filter != 'spread' %}is-hidden{% endif %}">
+    {# Phase 2: when the Leans Only filter is active, hide individual    #}
+    {# group containers if NONE of their cards are leans. The simpler    #}
+    {# approach (always show, mark non-leans is-hidden at card level)    #}
+    {# is what we do — preserves the visual structure for accessibility. #}
+    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--spread {% if bet_type_filter != 'all' and bet_type_filter != 'spread' and bet_type_filter != 'leans' %}is-hidden{% endif %}">
       <div class="mlb-decision-group__head">
         <span class="mlb-decision-group__icon">&#x1F4CA;</span>
-        <span class="mlb-decision-group__title">Spread Opportunities</span>
+        <span class="mlb-decision-group__title">
+          Spread Opportunities
+          {# Phase 2: section title gains "(Market Signals Only)" when    #}
+          {# the leans flag is on so users know the section combines     #}
+          {# raw signals AND data-supported leans.                       #}
+          {% if spread_total_leans_enabled %}
+          <span class="mlb-decision-group__title-suffix">(Market Signals Only)</span>
+          {% endif %}
+        </span>
         <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">Not model-backed &mdash; informational only</span>
       </div>
       <section class="mlb-section mlb-section--spread">
@@ -402,7 +423,7 @@
         </div>
         <div class="mlb-rail tiles-container" role="list">
           {% for entry in spread_tiles %}
-            <div role="listitem" class="mlb-opportunity-card">
+            <div role="listitem" class="mlb-opportunity-card {% if bet_type_filter == 'leans' and not entry.signal.is_lean %}is-hidden{% endif %}">
               <div class="mlb-opportunity-card__signal">
                 <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
                   {% if entry.signal.signal_type == 'tight_spread' %}Tight Spread
@@ -417,6 +438,18 @@
                 {% if entry.signal.favorite_team_name %}
                 <span class="mlb-opportunity-card__detail">
                   Favorite: <strong>{{ entry.signal.favorite_team_name }}</strong>
+                </span>
+                {% endif %}
+                {# Phase 2: yellow Lean badge — only when the row is     #}
+                {# is_lean=True AND the flag is on. Carries the data    #}
+                {# inline so users understand WHY it's a lean.          #}
+                {% if spread_total_leans_enabled and entry.signal.is_lean %}
+                <span class="mlb-lean-badge"
+                      title="Lean = data-supported signal. Win rate over a 30+ game sample exceeds the threshold. NOT a model recommendation.">
+                  🟡 Lean
+                  <span class="mlb-lean-badge__data">
+                    ({{ entry.historical_win_rate_pct }}% win rate, {{ entry.signal.sample_size }} games)
+                  </span>
                 </span>
                 {% endif %}
               </div>
@@ -440,10 +473,15 @@
       Spread; same disclaimer. Hides under spread or moneyline filter.
     {% endcomment %}
     {% if spread_total_signals_enabled and total_tiles %}
-    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--total {% if bet_type_filter != 'all' and bet_type_filter != 'total' %}is-hidden{% endif %}">
+    <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--total {% if bet_type_filter != 'all' and bet_type_filter != 'total' and bet_type_filter != 'leans' %}is-hidden{% endif %}">
       <div class="mlb-decision-group__head">
         <span class="mlb-decision-group__icon">&#x1F321;&#xFE0F;</span>
-        <span class="mlb-decision-group__title">Total Opportunities</span>
+        <span class="mlb-decision-group__title">
+          Total Opportunities
+          {% if spread_total_leans_enabled %}
+          <span class="mlb-decision-group__title-suffix">(Market Signals Only)</span>
+          {% endif %}
+        </span>
         <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">Not model-backed &mdash; informational only</span>
       </div>
       <section class="mlb-section mlb-section--total">
@@ -453,7 +491,7 @@
         </div>
         <div class="mlb-rail tiles-container" role="list">
           {% for entry in total_tiles %}
-            <div role="listitem" class="mlb-opportunity-card">
+            <div role="listitem" class="mlb-opportunity-card {% if bet_type_filter == 'leans' and not entry.signal.is_lean %}is-hidden{% endif %}">
               <div class="mlb-opportunity-card__signal">
                 <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
                   {% if entry.signal.signal_type == 'high_scoring' %}High Scoring
@@ -463,6 +501,15 @@
                 <span class="mlb-opportunity-card__value">
                   O/U {{ entry.signal.total|floatformat:1 }}
                 </span>
+                {% if spread_total_leans_enabled and entry.signal.is_lean %}
+                <span class="mlb-lean-badge"
+                      title="Lean = data-supported signal. Win rate over a 30+ game sample exceeds the threshold AND clears a 2% ROI floor. NOT a model recommendation.">
+                  🟡 Lean
+                  <span class="mlb-lean-badge__data">
+                    ({{ entry.historical_win_rate_pct }}% win rate, {{ entry.signal.sample_size }} games)
+                  </span>
+                </span>
+                {% endif %}
               </div>
               {% if entry.tile.game.status == 'live' %}
                 {% include "mlb/_tile_live.html" with s=entry.tile %}

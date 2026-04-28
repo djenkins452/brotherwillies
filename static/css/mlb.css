@@ -1213,3 +1213,58 @@
     /* Browsers vary on disabled+button styling; pin it explicitly. */
     pointer-events: none;
 }
+
+/* ----- Phase 2: Lean badge + Leans Only filter chip + title suffix ---- */
+
+/* Yellow Lean pill — used inline next to the signal-type pill on
+   opportunity cards. Distinct from the green Recommended labels by
+   color (amber/yellow) and by the explicit "Lean" copy + supporting
+   stats. The trust-tier ladder for the user is now:
+       green Recommended  >  yellow Lean  >  cyan Signal Only
+*/
+.mlb-lean-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(250,204,21,0.18);
+    border: 1px solid rgba(250,204,21,0.55);
+    color: #fde047;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.mlb-lean-badge__data {
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    color: rgba(253,224,71,0.85);
+    font-size: 10px;
+}
+
+/* "(Market Signals Only)" subtitle in the section header — when the
+   leans flag is on, the section can carry both raw signals and
+   data-supported leans, so we soften the section title with a hint
+   that it's the union of both. */
+.mlb-decision-group__title-suffix {
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--text-muted);
+    margin-left: 6px;
+}
+
+/* Leans Only filter chip — yellow rim + glow when active so users can
+   see at a glance that they're in the data-supported view. */
+.mlb-bet-type-chip--leans {
+    border-color: rgba(250,204,21,0.55);
+}
+.mlb-bet-type-chip--leans.is-active {
+    background: #fde047;
+    border-color: #fde047;
+    color: #1c1917;
+    box-shadow: 0 0 0 2px rgba(250,204,21,0.35);
+}

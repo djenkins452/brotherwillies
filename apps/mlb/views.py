@@ -112,16 +112,47 @@ def mlb_hub(request):
         for tile in all_tiles:
             sig = latest_spread_opportunity_for_game(tile.game)
             if sig is not None:
-                spread_tiles.append({'signal': sig, 'tile': tile})
+                # Pre-compute the percentage for the Lean badge — the
+                # template can't easily multiply a float by 100 without
+                # custom filter gymnastics. Doing it in Python is one
+                # line and keeps the template stupid.
+                wr_pct = (
+                    round(sig.historical_win_rate * 100, 1)
+                    if sig.historical_win_rate is not None
+                    else None
+                )
+                spread_tiles.append({
+                    'signal': sig, 'tile': tile,
+                    'historical_win_rate_pct': wr_pct,
+                })
             sig = latest_total_opportunity_for_game(tile.game)
             if sig is not None:
-                total_tiles.append({'signal': sig, 'tile': tile})
+                wr_pct = (
+                    round(sig.historical_win_rate * 100, 1)
+                    if sig.historical_win_rate is not None
+                    else None
+                )
+                total_tiles.append({
+                    'signal': sig, 'tile': tile,
+                    'historical_win_rate_pct': wr_pct,
+                })
 
-    # Filter param — `?bet_type=moneyline|spread|total|all`. Default 'all'.
+    # Filter param — `?bet_type=moneyline|spread|total|leans|all`. Default 'all'.
     # Any other value (typo, stale link, malicious param) collapses to 'all'
     # so the page is robust to garbage input.
     bet_type_filter = request.GET.get('bet_type', 'all')
-    if bet_type_filter not in ('all', 'moneyline', 'spread', 'total'):
+    if bet_type_filter not in ('all', 'moneyline', 'spread', 'total', 'leans'):
+        bet_type_filter = 'all'
+
+    # Phase 2 — Leans intelligence layer. Separate flag from Phase 1 so
+    # we can keep Phase 1 in prod while iterating on the Lean copy.
+    spread_total_leans_enabled = bool(
+        getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
+    )
+    # The Leans Only filter only makes sense when the Leans layer is on.
+    # If a stale URL has bet_type=leans but the flag is off, fall back
+    # to 'all' so the page still renders normally.
+    if bet_type_filter == 'leans' and not spread_total_leans_enabled:
         bet_type_filter = 'all'
 
     return render(request, 'mlb/hub.html', {
@@ -150,6 +181,7 @@ def mlb_hub(request):
         # so nothing renders. (Belt + suspenders: gating on the list
         # alone would render an empty section header.)
         'spread_total_signals_enabled': spread_total_signals_enabled,
+        'spread_total_leans_enabled': spread_total_leans_enabled,
         'spread_tiles': spread_tiles,
         'total_tiles': total_tiles,
         'bet_type_filter': bet_type_filter,

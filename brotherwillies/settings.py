@@ -179,6 +179,14 @@ STALE_ODDS_MAX_AGE_MINUTES = int(os.environ.get('STALE_ODDS_MAX_AGE_MINUTES', '7
 SPREAD_TOTAL_SIGNALS_ENABLED = (
     os.environ.get('SPREAD_TOTAL_SIGNALS_ENABLED', 'false').lower() == 'true'
 )
+# Phase 2 — Lean intelligence layer. Independent flag from Phase 1 so
+# we can run Phase 1 (raw signals) in prod without yet exposing the
+# Lean badge / "Market Signals Only" copy / Leans Only filter / per-
+# signal performance panel. Both flags off = the page renders as it
+# did before any Tiered Intelligence work.
+SPREAD_TOTAL_LEANS_ENABLED = (
+    os.environ.get('SPREAD_TOTAL_LEANS_ENABLED', 'false').lower() == 'true'
+)
 
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
