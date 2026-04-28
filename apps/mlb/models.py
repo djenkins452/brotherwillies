@@ -40,6 +40,9 @@ class Team(models.Model):
     source = models.CharField(max_length=30, choices=SOURCE_CHOICES, blank=True, default='')
     wins = models.IntegerField(null=True, blank=True)
     losses = models.IntegerField(null=True, blank=True)
+    # Dynamic Elo rating — see apps.cfb.models.Team for documentation.
+    elo_rating = models.FloatField(null=True, blank=True)
+    elo_last_updated = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']

@@ -19,6 +19,9 @@ class Team(models.Model):
     conference = models.ForeignKey(Conference, on_delete=models.CASCADE, related_name='teams')
     rating = models.FloatField(default=50.0)
     primary_color = models.CharField(max_length=7, blank=True, default='')
+    # Dynamic Elo rating — see apps.cfb.models.Team for documentation.
+    elo_rating = models.FloatField(null=True, blank=True)
+    elo_last_updated = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']

@@ -41,10 +41,17 @@ def _compute_win_prob(game, injuries, weights):
     Core probability computation using team ratings and adjustments.
     Returns home win probability (0.0 to 1.0).
     """
+    from apps.core.services.elo_service import team_rating_for_model
+
     home = game.home_team
     away = game.away_team
 
-    rating_diff = (home.rating - away.rating) * weights.get('rating', 1.0)
+    # team_rating_for_model returns the legacy-scale rating regardless of
+    # whether dynamic Elo is enabled (see settings.USE_DYNAMIC_RATINGS).
+    # Keeps every other line of this formula identical to the static path.
+    rating_diff = (
+        team_rating_for_model(home) - team_rating_for_model(away)
+    ) * weights.get('rating', 1.0)
 
     # Home field advantage
     hfa = 3.0 * weights.get('hfa', 1.0) if not game.neutral_site else 0.0

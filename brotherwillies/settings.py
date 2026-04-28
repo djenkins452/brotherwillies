@@ -225,6 +225,17 @@ SPREAD_TOTAL_BULK_COOLDOWN_SECONDS = int(
     os.environ.get('SPREAD_TOTAL_BULK_COOLDOWN_SECONDS', '10')
 )
 
+# --- Dynamic Elo ratings ---
+# When True, the four sport model_services read each team's `elo_rating`
+# (projected onto the legacy 50-scale) instead of the static `team.rating`
+# field. Defaults to False so production behavior doesn't change until the
+# operator validates the dynamic ratings via the backtest harness.
+# When True but a team has no `elo_rating` set, model_service falls back
+# to the static rating — never produces a hybrid.
+USE_DYNAMIC_RATINGS = os.environ.get('USE_DYNAMIC_RATINGS', 'false').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

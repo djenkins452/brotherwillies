@@ -19,6 +19,12 @@ class Team(models.Model):
     conference = models.ForeignKey(Conference, on_delete=models.CASCADE, related_name='teams')
     rating = models.FloatField(default=50.0)
     primary_color = models.CharField(max_length=7, blank=True, default='')
+    # Dynamic Elo rating — updated after every final game by
+    # apps/core/services/elo_service. Nullable so the rest of the system
+    # can detect "rating not yet built" and fall back to the static
+    # `rating` field. Used only when settings.USE_DYNAMIC_RATINGS is True.
+    elo_rating = models.FloatField(null=True, blank=True)
+    elo_last_updated = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['name']

@@ -29,7 +29,12 @@ def _injury_adjustment(injuries, team, weight=1.0):
 
 
 def _compute_win_prob(game, injuries, weights):
-    rating_diff = (game.home_team.rating - game.away_team.rating) * weights.get('rating', 1.0)
+    from apps.core.services.elo_service import team_rating_for_model
+    # team_rating_for_model returns Elo-projected legacy scale when
+    # USE_DYNAMIC_RATINGS is on; static team.rating otherwise.
+    rating_diff = (
+        team_rating_for_model(game.home_team) - team_rating_for_model(game.away_team)
+    ) * weights.get('rating', 1.0)
     hfa = 3.5 * weights.get('hfa', 1.0) if not game.neutral_site else 0.0
     home_inj = _injury_adjustment(injuries, game.home_team, weights.get('injury', 1.0))
     away_inj = _injury_adjustment(injuries, game.away_team, weights.get('injury', 1.0))

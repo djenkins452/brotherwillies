@@ -87,7 +87,12 @@ def _pitcher_diff(game):
 
 
 def _score(game, weights):
-    team_diff = (game.home_team.rating - game.away_team.rating) * 0.35 * weights['rating']
+    from apps.core.services.elo_service import team_rating_for_model
+    # Reads Elo (projected onto legacy scale) when USE_DYNAMIC_RATINGS is
+    # enabled and team has a populated elo_rating; static rating otherwise.
+    team_diff = (
+        team_rating_for_model(game.home_team) - team_rating_for_model(game.away_team)
+    ) * 0.35 * weights['rating']
     pitcher_diff_raw, _both_known = _pitcher_diff(game)
     pitcher_diff = pitcher_diff_raw * 0.65 * weights['pitcher']
     hfa = HFA * weights['hfa'] if not game.neutral_site else 0.0

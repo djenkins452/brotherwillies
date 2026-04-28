@@ -93,3 +93,88 @@ class BacktestRun(models.Model):
 
     def __str__(self):
         return f"BacktestRun({self.sport}, {self.created_at:%Y-%m-%d %H:%M})"
+
+
+class TeamEloHistory(models.Model):
+    """Append-only log of every Elo rating change.
+
+    Two rows per processed game (one per team). Powers the rebuild's
+    idempotence check (`is this game already processed?`) and lets us
+    reconstruct what a team's rating was at any point in time — the
+    backtest service will eventually use this to do true historical
+    reconstruction instead of approximating with current ratings.
+
+    Polymorphic FKs match the MockBet pattern for cross-sport tables:
+    one of the four `<sport>_team` and one of the four `<sport>_game`
+    fields is set per row.
+    """
+    SPORT_CHOICES = [
+        ('cfb', 'CFB'),
+        ('cbb', 'CBB'),
+        ('mlb', 'MLB'),
+        ('college_baseball', 'College Baseball'),
+    ]
+    captured_at = models.DateTimeField(auto_now_add=True)
+    sport = models.CharField(max_length=20, choices=SPORT_CHOICES, db_index=True)
+
+    # Team being updated — exactly one is non-null per row, matching `sport`.
+    cfb_team = models.ForeignKey(
+        'cfb.Team', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    cbb_team = models.ForeignKey(
+        'cbb.Team', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    mlb_team = models.ForeignKey(
+        'mlb.Team', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    college_baseball_team = models.ForeignKey(
+        'college_baseball.Team', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+
+    # Game that caused the change — exactly one is non-null per row.
+    cfb_game = models.ForeignKey(
+        'cfb.Game', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    cbb_game = models.ForeignKey(
+        'cbb.Game', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    mlb_game = models.ForeignKey(
+        'mlb.Game', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+    college_baseball_game = models.ForeignKey(
+        'college_baseball.Game', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='elo_history',
+    )
+
+    pre_rating = models.FloatField()
+    post_rating = models.FloatField()
+    k_factor = models.FloatField()
+    is_home = models.BooleanField()
+    won = models.BooleanField()
+    # Margin (winner - loser), nullable because MLB and college_baseball
+    # don't use margin-of-victory in their Elo updates.
+    margin = models.IntegerField(null=True, blank=True)
+    margin_multiplier = models.FloatField(default=1.0)
+
+    class Meta:
+        ordering = ['-captured_at']
+        indexes = [
+            models.Index(fields=['sport', 'cfb_game']),
+            models.Index(fields=['sport', 'cbb_game']),
+            models.Index(fields=['sport', 'mlb_game']),
+            models.Index(fields=['sport', 'college_baseball_game']),
+        ]
+
+    def __str__(self):
+        team = (
+            self.cfb_team or self.cbb_team
+            or self.mlb_team or self.college_baseball_team
+        )
+        return f"EloHistory({self.sport}, {team}, {self.pre_rating:.1f} → {self.post_rating:.1f})"

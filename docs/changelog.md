@@ -2,6 +2,60 @@
 
 ---
 
+## 2026-04-28 - Phase 2 (Elo): Auto-Updating Team Ratings
+
+**Summary:** Replaces (when enabled) the static `Team.rating` floats that have been the modeling foundation since v1 with a dynamic Elo system that updates after every final game. Behind a feature flag (default OFF). The recommendation engine, decision rules, and thresholds are all unchanged — this swap is intentionally minimally invasive so the backtest harness can produce a clean static-vs-dynamic comparison.
+
+### Sport-specific behavior
+- **MLB / college_baseball** — win/loss only. Margin of victory is intentionally NOT used because run differentials in baseball are too noisy (bullpen blow-ups, garbage-time scoring) to reliably reflect team strength. K-factor is small (4) to suit a 60-162-game season.
+- **CFB / CBB** — margin-adjusted Elo via the 538-style multiplier `ln(margin + 1) * (2.2 / (rating_diff_for_winner * 0.001 + 2.2))`. Margins are capped at MAX_MARGIN (24 for CFB ≈ 4 TDs, 20 for CBB) to prevent blowouts from breaking the rating system. The multiplier dampens chalk wins (favorite + big margin → less informative) and amplifies upsets (underdog wins → more informative).
+- All four sports use sport-specific HFA in Elo points (CFB=65, CBB=85, MLB=24, college_baseball=20), zeroed at neutral-site games.
+
+### Integration approach (minimally invasive)
+- New helper `apps/core/services/elo_service.py::team_rating_for_model(team)` returns either the legacy `team.rating` (flag off, or no Elo built yet) or the Elo rating projected onto the legacy 50-scale via `(elo - 1500) / 25 + 50`.
+- This is the single integration point. Each sport's `model_service._compute_win_prob` (or `_score` for baseball) substitutes `team.rating` → `team_rating_for_model(team)`. Every other line of every formula — HFA, injuries, pitcher math, sigmoid divisor, clamps — is unchanged.
+- Elo=1500 maps to legacy=50, which is the static `Team.rating` default. So a freshly-rebuilt team produces identical model output to one that's never been touched.
+- When `USE_DYNAMIC_RATINGS=True` but a team has `elo_rating=None`, the helper falls back to the static rating rather than producing a hybrid.
+
+### Storage
+- New fields on each `Team` model (CFB, CBB, MLB, college_baseball): `elo_rating` (FloatField, nullable) + `elo_last_updated` (DateTimeField, nullable).
+- New polymorphic `TeamEloHistory` in `apps/analytics/models.py` — append-only log of every rating change, two rows per game (one per team). Pre/post rating, K-factor, margin used (null for MLB/CB), margin multiplier. Powers idempotence (the rebuild's "is this game already processed?" check) and the future backtest-time-machine: we can reconstruct what a team's rating was at any point in time.
+
+### Operations
+- `python manage.py rebuild_elo_ratings [--sport <s>]` — wipes the sport's Elo state and replays all final games chronologically. Strongly idempotent: run it twice and the final ratings are identical. Use after K-factor or HFA changes, or to bring a sport online for the first time.
+- `python manage.py update_elo_ratings [--sport <s>]` — incremental, designed for cron. Skips games already represented in `TeamEloHistory`. Safe to run on every refresh cycle.
+
+### Feature flag
+- `USE_DYNAMIC_RATINGS` (env var or settings.py). Default `False` — production behavior unchanged until validated through the backtest harness.
+
+### Defaults
+| Sport | K | HFA (Elo pts) | Max margin |
+|-------|---|---|---|
+| CFB | 20 | 65 | 24 |
+| CBB | 20 | 85 | 20 |
+| MLB | 4 | 24 | n/a |
+| college_baseball | 4 | 20 | n/a |
+Initial rating: 1500 (= legacy 50.0 after projection).
+
+### Files
+- New: `apps/core/services/elo_service.py`, `apps/core/test_elo_service.py`, `apps/datahub/management/commands/rebuild_elo_ratings.py`, `apps/datahub/management/commands/update_elo_ratings.py`
+- Modified: 4 Team models (CFB/CBB/MLB/CB) for `elo_rating` + `elo_last_updated`; `apps/analytics/models.py` for `TeamEloHistory`; 4 model_services for the rating-source swap; `brotherwillies/settings.py` for the flag
+- Migrations: `cfb/0007`, `cbb/0007`, `mlb/0009`, `college_baseball/0006` (Team Elo fields), `analytics/0005` (TeamEloHistory)
+
+### Tests
+34 new tests in `apps.core.test_elo_service` covering: Elo expected-prob symmetry + 400-pt gap calibration, margin-multiplier diminishing returns + cap + underdog amplification + sport-aware constant-1.0 for baseball, K-factor scaling, conservation (home delta == -away delta), HFA dampening on home wins, scale conversion, all four feature-flag branches (off, on+no-elo, on+elo-set, on+elo-baseline-matches-default), `process_game` idempotence + tie/missing-score skipping, `reset_sport` targeting one sport only, rebuild idempotence (twice → same final ratings, same row count), update-after-rebuild no-op, and integration smoke through `_compute_win_prob` (flag-off uses static, flag-on with Elo uses Elo, flag-on without Elo falls back).
+
+### What this does NOT change
+- The recommendation engine (`apps/core/services/recommendations.py`) — zero changes.
+- Decision rules (MIN_EDGE, STRONG_EDGE, ELITE_EDGE, HEAVY_FAVORITE_ODDS, MAX_ELITE_PER_SLATE) — zero changes.
+- Edge calculation, de-vigging, status/tier classification — zero changes.
+- Backtest service — zero changes.
+
+### Next step
+Run the backtest harness with `USE_DYNAMIC_RATINGS=False` to capture the static-rating baseline, then again with `True` (after `rebuild_elo_ratings --sport all`) to capture the dynamic-rating result. The verdict, calibration curve, and ROI-by-edge-bucket comparisons answer whether dynamic Elo is actually a net improvement before flipping the flag in production.
+
+---
+
 ## 2026-04-27 - Phase 2: Backtest Intelligence Layer
 
 **Summary:** Strictly-additive layer on top of Phase 1 that turns raw backtest output into decision intelligence. Answers three questions: where is the edge, which decisions were good vs lucky, and is the system actually working. No Phase 1 calculation, bucket, or moneyline logic was changed.
