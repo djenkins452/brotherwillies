@@ -2,6 +2,57 @@
 
 ---
 
+## 2026-04-27 - Tiered Intelligence Phase 2: Lean Intelligence Layer
+
+**Summary:** Promotes spread and total opportunity signals from passive markers to **evidence-based "Lean" markers** when historical data supports them. Two commits — data + UI — both feature-flagged independent of Phase 1 so the leans surface can be turned on without re-shipping. The Moneyline pipeline remains *frozen* by both the Phase 1 sentinel test AND a new Phase 2 sentinel that locks down the new performance functions too.
+
+### The trust-tier ladder, now with three rungs
+| Tier | Marker | Bet Type | Source |
+|------|--------|----------|--------|
+| **Recommendation** | 🟢 Green "Recommended" pill | Moneyline | Existing model engine + edge math (frozen) |
+| **Lean** *(new)* | 🟡 Yellow "Lean (56% WR, 42 games)" badge | Spread, Total | Rule-based signal + historical performance clears threshold |
+| **Signal Only** | Cyan info pill | Spread, Total | Rule-based signal, no Lean status yet |
+
+Lean ≠ Recommended. The yellow badge is intentionally distinct from the green Recommended tier so users can never confuse them. Bulk betting on Lean opportunities is *still disabled* — leans express data support, not modeled edge.
+
+### Phase 2 A — `93f4ca2`: Settlement, performance, classification
+- New per-row fields: `outcome` (win/loss/push), `settled_at`, `is_lean`, `historical_win_rate`, `sample_size`.
+- Settlement convention is fixed at the model layer:
+  - `tight_spread` → underdog covers wins
+  - `large_favorite` → favorite covers wins
+  - `high_scoring` → over hits wins
+  - `low_scoring` → under hits wins
+  - Push at the exact line is handled correctly.
+- `settle_opportunities_for_game(game)` and `settle_all_unsettled()` are idempotent — re-running on already-settled rows is a no-op.
+- Performance aggregators (`compute_spread_performance`, `compute_total_performance`) compute per-signal-type win rate (pushes excluded), sample size, and ROI estimate at -110.
+- Lean classifiers gate on:
+  - **Spread:** win rate > 53% AND sample > 30
+  - **Total:** win rate > 54% AND ROI > 2% AND sample > 30 (stricter — totals are noisier)
+- Lean status is **snapshotted at create time**, not recomputed. A future threshold tweak or data drift can never retroactively re-label an old row.
+- `resolve_outcomes` management command now calls `settle_all_unsettled()` for MLB after the existing snapshot resolution, wrapped in try/except so a Phase 2 bug can never break the moneyline path.
+
+### Phase 2 B — `bf1e8cb`: Yellow Lean UI + Performance panel
+- New `SPREAD_TOTAL_LEANS_ENABLED` env flag (default OFF, independent from Phase 1).
+- Yellow Lean badge inline on each opportunity card with the supporting stats (e.g., "🟡 Lean (56.0% win rate, 42 games)").
+- Section title gains "(Market Signals Only)" subtitle when leans flag is on.
+- New "🟡 Leans Only" filter chip (yellow rim/glow when active). Hides non-lean cards via the existing `is-hidden` class so DOM structure stays intact.
+- New Performance panel on `/profile/performance/`: two tables (Spread / Total) with per-signal-type win rate, ROI, sample, pushes, and the Lean? marker.
+
+### Hard guarantees enforced by tests
+- **Moneyline non-regression** (Phase 1 sentinel + Phase 2 sentinel) — both still pass. The recommendation engine has zero awareness of Phase 2 fields, performance functions, or Lean status.
+- Settlement is idempotent; settlement skips non-final games; settlement handles push correctly.
+- Lean status is snapshotted, not recomputed (test_lean_status_snapshotted_not_recomputed).
+- UI surface is invisible when the flag is off (test_leans_flag_off_hides_lean_ui).
+- "Leans Only" filter hides non-lean cards (test_leans_only_filter_hides_non_lean_cards).
+- Performance panel hidden when flag off; visible with both sub-tables when on.
+
+**Test count: 641 passing** after Phase 2 (up from 616 yesterday; +25 new tests). One pre-existing `GolfOddsProviderPersistGateTests::test_persist_dedupes_same_day_duplicates` failure is unrelated (flagged as a separate task).
+
+### Phase 3 (future)
+True modeling for spread + totals — once a stable lean shows multi-month positive ROI, we can graduate it to "Recommended" by wiring an edge calculation similar to `_moneyline_candidate` and activating its bulk button.
+
+---
+
 ## 2026-04-27 - Tiered Intelligence: Spread + Total Opportunity Signals (Phase 1)
 
 **Summary:** A new architecture layer alongside the Moneyline recommendation engine — rule-based "opportunity signals" for spread (run line) and total (over/under) markets. Three commits, shipped non-breaking and feature-flagged off by default. The Moneyline pipeline is *frozen by contract* for this phase: a sentinel test (`MoneylinePipelineNonRegressionTests`) patches both new related managers to AssertionError-on-access and verifies the recommendation engine still returns a moneyline pick — proving the new tables are never consulted by the existing decision logic.

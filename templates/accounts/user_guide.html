@@ -389,7 +389,24 @@
             Visible only in staff diagnostics.</li>
     </ul>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
-        <strong>Tiered Intelligence &mdash; Spread + Total opportunity signals (when enabled):</strong>
+        <strong>Tiered Intelligence Phase 2 &mdash; Lean Layer (when enabled):</strong>
+        Spread + total opportunity signals can be promoted to <strong>Lean</strong> status when their
+        historical win rate clears the threshold. A Lean is shown on the card with a yellow badge:
+        <span class="lean-pill" style="font-size:10px;">🟡 Lean</span> followed by the supporting stats
+        (e.g., <em>"56.0% win rate, 42 games"</em>). Lean &ne; Recommended &mdash; the yellow badge is
+        intentionally distinct from the green Recommended tier so the trust levels never blur.
+    </p>
+    <ul class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;padding-left:18px;">
+        <li><strong>Spread Lean:</strong> requires historical win rate &gt; 53% over a 30+ game sample.</li>
+        <li><strong>Total Lean:</strong> requires historical win rate &gt; 54% <em>AND</em> ROI &gt; 2% over a 30+ game sample (stricter because total markets are noisier).</li>
+        <li><strong>Pushes excluded</strong> from win-rate math (standard sports-betting convention) but counted in raw totals for transparency.</li>
+        <li><strong>Snapshotted at create time</strong> &mdash; once a signal is stamped Lean (or not), threshold tweaks won't retroactively re-label it. The data on the badge is the data the signal saw when it fired.</li>
+        <li><strong>"🟡 Leans Only"</strong> filter chip on the MLB hub isolates just the data-supported leans across spread + total.</li>
+        <li><strong>Bulk betting on Lean opportunities is disabled</strong> &mdash; Lean expresses evidence, not modeled edge.</li>
+        <li>New <strong>"Spread &amp; Total Performance"</strong> panel at <a href="/profile/performance/">/profile/performance/</a> &mdash; per-signal-type win rate, ROI estimate, sample, pushes, Lean? marker.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Tiered Intelligence Phase 1 &mdash; Spread + Total opportunity signals (when enabled):</strong>
         Alongside the model-backed Moneyline recommendations, the MLB hub can also surface
         <em>rule-based opportunity signals</em> for the run-line and totals markets. These are NOT recommendations
         and are never mixed into "Bet All" actions. Each card carries a "Not model-backed &mdash; informational only"
