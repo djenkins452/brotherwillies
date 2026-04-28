@@ -2471,16 +2471,22 @@ class SpreadTotalUITests(TestCase):
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=False)
     def test_disabled_bulk_buttons_hidden_when_flag_off(self):
         """Even the disabled Coming Soon buttons must not render when
-        the flag is off — preserves the dark-launch capability."""
+        the flag is off — preserves the dark-launch capability.
+
+        Asserts on UNIQUE BUTTON CLASSES rather than text. The help
+        modal mentions "Bet All Spread" / "Bet All Total" in the Phase
+        3 bullet on every page (instructional copy), so a substring
+        check would false-positive."""
         from django.contrib.auth import get_user_model
         User = get_user_model()
         u = User.objects.create_user(username='bulk-test-off', password='pw')
         self.client.force_login(u)
         resp = self.client.get('/mlb/')
         body = resp.content.decode('utf-8')
+        # No Coming Soon button class (Phase 1 path)
         self.assertNotIn('mlb-bulk-btn--coming-soon', body)
-        self.assertNotIn('Bet All Spread', body)
-        self.assertNotIn('Bet All Total', body)
+        # No active Phase 3 button class either
+        self.assertNotIn('mlb-bulk-btn--bet-rec', body)
 
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
     def test_existing_bulk_endpoint_rejects_spread_or_total_bet_type(self):

@@ -389,6 +389,23 @@
             Visible only in staff diagnostics.</li>
     </ul>
     <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
+        <strong>Tiered Intelligence Phase 3 &mdash; Promoted Recommendations (when enabled):</strong>
+        Statistically proven Spread/Total Leans graduate to <strong>Recommendations</strong> &mdash; the
+        green-tier trust level previously reserved for Moneyline. Promotion thresholds are stricter than
+        Lean and add ROI floors:
+    </p>
+    <ul class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;padding-left:18px;">
+        <li><strong>Spread:</strong> sample &ge; 50 games AND win rate &ge; 54.5% AND ROI &ge; 2.0%</li>
+        <li><strong>Total:</strong> sample &ge; 50 games AND win rate &ge; 55.0% AND ROI &ge; 2.5% (stricter &mdash; total markets are noisier)</li>
+        <li><strong>Source-safety:</strong> ESPN-source rows and synthesized rows are <em>never</em> promoted, regardless of stats. Recommendations require both "the signal works" AND "we trust THIS row's price."</li>
+        <li><strong>Break-even display:</strong> Lean and Recommended badges now show win rate vs break-even price, e.g. <code>56.0% vs 52.4% break-even</code>. Recommended adds the ROI: <code>57.2% vs 52.4%, +3.1% ROI</code>.</li>
+        <li>Two new green-bordered sections on the MLB hub: <strong>🟢 Spread Recommendations (Proven Edge)</strong> and <strong>🟢 Total Recommendations (Proven Edge)</strong>.</li>
+        <li><strong>"🟢 Recommended"</strong> filter chip isolates promoted recommendations across spread + total.</li>
+        <li>Active bulk-bet buttons: <code>🟢 Bet All Spread (N)</code> and <code>🟢 Bet All Total (N)</code> replace the Phase 1 "Coming Soon" disabled buttons when promoted recs exist.</li>
+        <li>The previously-named <em>"Bet All Verified Plays"</em> button is now <strong>"Bet All Moneyline Plays"</strong> so the bet type is unambiguous.</li>
+        <li>New <strong>"Promoted Recommendations (Proven Edge)"</strong> sub-panel on the Performance page.</li>
+    </ul>
+    <p class="text-sm mt-1" style="color:var(--text-secondary);line-height:1.6;">
         <strong>Tiered Intelligence Phase 2 &mdash; Lean Layer (when enabled):</strong>
         Spread + total opportunity signals can be promoted to <strong>Lean</strong> status when their
         historical win rate clears the threshold. A Lean is shown on the card with a yellow badge:

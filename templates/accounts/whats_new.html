@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#apr-27-tiered-intel-phase3">Apr 27, 2026 &mdash; Tiered Intelligence Phase 3 (Promoted Recommendations)</a> <span class="text-sm text-muted">&bull; 🟢 Recommended badge, break-even display, active "Bet All Spread/Total" buttons, source-safety guards, Recommended filter chip</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel-phase2">Apr 27, 2026 &mdash; Tiered Intelligence Phase 2 (Lean Layer)</a> <span class="text-sm text-muted">&bull; Yellow Lean badge, settlement engine, per-signal performance panel, "Leans Only" filter chip</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel">Apr 27, 2026 &mdash; Tiered Intelligence Phase 1 (Spread + Total Opportunity Signals)</a> <span class="text-sm text-muted">&bull; Rule-based spread + total signals, filter chips, dark-launchable feature flag, Moneyline pipeline frozen by contract</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-source-aware-and-mlb-ux">Apr 27, 2026 &mdash; Source-Aware Betting + MLB Hub UX</a> <span class="text-sm text-muted">&bull; Verified/ESPN/Derived odds badges, decision group boxes, counted bulk-bet confirms, MLB odds reliability</span></li>
@@ -34,6 +35,87 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Apr 27 — Tiered Intelligence Phase 3 (Promoted Recommendations)      #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="apr-27-tiered-intel-phase3">
+    <p class="card-title">Apr 27, 2026 &mdash; Tiered Intelligence Phase 3 (Promoted Recommendations)</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">Phase 3 graduates statistically proven Spread/Total Leans into <strong>true Recommendations</strong> &mdash; the green-tier trust level previously reserved for Moneyline. With break-even display so you can see profit clarity at a glance, and source-safety guards that mean ESPN-source rows can <em>never</em> reach the green tier regardless of stats.</p>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">The trust-tier ladder, finalized</p>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px 8px;">Tier</th>
+                    <th style="text-align:left;padding:6px 8px;">Marker</th>
+                    <th style="text-align:left;padding:6px 8px;">Bet Type</th>
+                    <th style="text-align:left;padding:6px 8px;">Bulk-Bet</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>Recommendation (Moneyline)</strong></td>
+                    <td style="padding:6px 8px;">🟢 Green pill</td>
+                    <td style="padding:6px 8px;">Moneyline</td>
+                    <td style="padding:6px 8px;">Active</td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>Recommendation (Proven Edge)</strong> <span class="text-sm text-muted">(NEW)</span></td>
+                    <td style="padding:6px 8px;">🟢 Green badge w/ stats</td>
+                    <td style="padding:6px 8px;">Spread, Total</td>
+                    <td style="padding:6px 8px;"><strong>Active when promoted</strong></td>
+                </tr>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>Lean</strong></td>
+                    <td style="padding:6px 8px;">🟡 Yellow badge w/ stats</td>
+                    <td style="padding:6px 8px;">Spread, Total</td>
+                    <td style="padding:6px 8px;">Disabled</td>
+                </tr>
+                <tr>
+                    <td style="padding:6px 8px;"><strong>Signal Only</strong></td>
+                    <td style="padding:6px 8px;">Cyan info pill</td>
+                    <td style="padding:6px 8px;">Spread, Total</td>
+                    <td style="padding:6px 8px;">Disabled</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">When does a Lean become a Recommendation?</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li><strong>Spread:</strong> sample &ge; 50 AND win rate &ge; 54.5% AND ROI &ge; 2.0%</li>
+            <li><strong>Total:</strong> sample &ge; 50 AND win rate &ge; 55.0% AND ROI &ge; 2.5% (stricter &mdash; total markets are noisier)</li>
+            <li><strong>Source-safety:</strong> ESPN-source rows and synthesized (derived) rows are <em>never</em> promoted, regardless of stats. Recommendations require <em>both</em> "the signal works" AND "we trust THIS row's price."</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">What you'll see (when enabled)</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>Two new green-bordered sections: <strong>🟢 Spread Recommendations (Proven Edge)</strong> and <strong>🟢 Total Recommendations (Proven Edge)</strong>. Same trust family as the moneyline Recommended Plays group.</li>
+            <li>Upgraded Lean badge format with break-even comparison: <code>🟡 Lean (56.0% vs 52.4% break-even, 42 games)</code> &mdash; you see the gap to profitability inline.</li>
+            <li>New green Recommended badge: <code>🟢 Recommended (57.2% vs 52.4%, +3.1% ROI, 120 games)</code></li>
+            <li>New <strong>🟢 Recommended</strong> filter chip alongside the existing Leans Only chip.</li>
+            <li>Active <code>🟢 Bet All Spread (N)</code> and <code>🟢 Bet All Total (N)</code> bulk buttons &mdash; replaces the Phase 1 "Coming Soon" disabled buttons when promoted recs exist for that bet type.</li>
+            <li>"Bet All Verified Plays" renamed to <strong>"Bet All Moneyline Plays"</strong> so the bet type is unambiguous alongside the new spread/total bulk buttons.</li>
+            <li>New <strong>"Promoted Recommendations (Proven Edge)"</strong> panel on <a href="/profile/performance/">/profile/performance/</a> &mdash; shows per-signal-type win rate, ROI, sample for any signal type currently above the promotion bar.</li>
+        </ul>
+    </div>
+
+    <div class="mb-2">
+        <p class="section-title" style="margin-bottom:8px;">Hard guarantees</p>
+        <ul style="margin:0;padding-left:18px;">
+            <li>Moneyline pipeline remains frozen. Three sentinel tests now lock down the recommendation engine's ignorance of Phase 1/2/3 fields.</li>
+            <li>Promoted rows render exactly once &mdash; in their green Proven Edge section, not also in the cyan Opportunity Signals section.</li>
+            <li>ESPN-source promotion is blocked at both the data layer AND the bulk-bet placement layer (defense in depth).</li>
+        </ul>
+    </div>
+
+    <p class="text-sm text-muted">Phase 3 will only show promoted recommendations once enough settled history accumulates to clear the 50-game minimum at the stricter win-rate + ROI bars &mdash; give it a few weeks of live data after Phase 1+2 are flipped.</p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

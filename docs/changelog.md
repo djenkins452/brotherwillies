@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-04-27 - Tiered Intelligence Phase 3: Promoted Recommendations (Proven Edge)
+
+**Summary:** Phase 3 graduates statistically proven Spread/Total Leans into true Recommendations — with break-even display, source-safety guards, and individually-active bulk-bet buttons. Three commits: data layer (`7d0c149`), UI + bulk-bet (`223a005`), docs (this commit). Both prior Moneyline non-regression sentinels still pass; a new Phase 3 sentinel locks down the promotion classifier + break-even helper too.
+
+### The trust-tier ladder, finalized
+
+| Tier | Marker | Bet Type | Bulk-bet | Source Trust |
+|------|--------|----------|----------|--------------|
+| **Recommendation (Moneyline)** | 🟢 Green pill | Moneyline | Active | Verified or ESPN |
+| **Recommendation (Spread/Total Proven Edge)** *(new)* | 🟢 Green badge with stats | Spread, Total | **Active** when promoted | Verified ONLY (ESPN/derived blocked) |
+| **Lean** | 🟡 Yellow badge with stats | Spread, Total | Disabled | Any |
+| **Signal Only** | Cyan info pill | Spread, Total | Disabled | Any |
+
+### Phase 3 A — `7d0c149`: Promotion classifier + break-even
+- New per-row fields: `is_recommended` (default False, indexed), `roi` (decimal 0..1).
+- Migration `0008` is purely additive.
+- `calculate_break_even(odds)`: standard implied-probability formula. -110 → 52.38%, -150 → 60%, +150 → 40%, +100 → 50%.
+- Promotion thresholds (stricter than Lean):
+  - **Spread:** sample ≥ 50 AND win rate ≥ 54.5% AND ROI ≥ 2.0%
+  - **Total:** sample ≥ 50 AND win rate ≥ 55.0% AND ROI ≥ 2.5%
+  - Use `>=` (boundary cases promote) per spec.
+- Source-safety gate `_is_promotable_source(odds_source, is_derived)`: ESPN-source rows and `is_derived=True` rows are NEVER promoted regardless of stats. Asymmetric vs Lean (which doesn't gate on source) — Leans say "the signal works"; a Recommendation says "the signal works AND we trust THIS row's price."
+- Snapshotted at create time; old rows can never be retroactively re-labeled.
+- 15 new tests including a Phase 3 Moneyline non-regression sentinel that locks down the new classifier + break-even helper.
+
+### Phase 3 B — `223a005`: UI + bulk-bet activation
+- New env flag `SPREAD_TOTAL_RECOMMENDATIONS_ENABLED` (default OFF, independent from Phase 1+2).
+- Two new sections on the MLB hub: 🟢 Spread Recommendations (Proven Edge) + 🟢 Total Recommendations (Proven Edge). Same green-bordered family as the moneyline Recommended Plays group.
+- Updated badge format with break-even comparison:
+  - Lean: `🟡 Lean (56.0% vs 52.4% break-even, 42 games)`
+  - Recommended: `🟢 Recommended (57.2% vs 52.4%, +3.1% ROI, 120 games)`
+- New `🟢 Recommended` filter chip (green rim/glow) alongside the existing `🟡 Leans Only`.
+- Active bulk buttons: `🟢 Bet All Spread (N)` / `🟢 Bet All Total (N)` replace the Phase 1 "Coming Soon" disabled buttons when promoted recs exist. Server-side bulk endpoint extended with `bet_type=spread|total` routing to new `place_bulk_proven_spread_bets` / `place_bulk_proven_total_bets` services.
+- Source-safety enforced again at the placement layer (defense in depth — data layer also blocks).
+- New "Promoted Recommendations" sub-section on `/profile/performance/` showing per-signal-type win rate, ROI, sample for any signal type currently above the promotion bar.
+- 8 new UI + service tests, including E2E POST through the bulk endpoint.
+
+### Bonus copy fix in Phase 3 B
+- Renamed bulk button "Bet All Verified Plays" → "Bet All Moneyline Plays" so the bet type is unambiguous alongside the new spread/total bulk buttons. Two existing tests updated.
+
+### Hard guarantees (test-enforced)
+- **Moneyline pipeline frozen** — Phase 1, Phase 2, AND Phase 3 sentinels all still pass. The recommendation engine has zero awareness of Phase 3 fields, the classifier, or `calculate_break_even`.
+- **ESPN/derived rows are NEVER promoted** — verified at the data layer (post-save hook never sets `is_recommended=True` on those) AND at the placement layer (`place_bulk_proven_*` excludes them too).
+- **Promoted rows render ONCE** — when Phase 3 is on, they appear in the green Proven Edge section only, not also in the cyan Opportunity Signals section.
+- **Lean badge format upgrades automatically** — when the recs flag is on, the existing yellow Lean cards gain the break-even comparison ("X% vs Y% break-even").
+
+**Test count: 664 passing** (was 641 after Phase 2; +23 from Phase 3 A+B). Two pre-existing failures only (feedback.tests ImportError, golf same-day-dedupe flake — both flagged separately).
+
+### To flip Phase 3 on in production
+```
+SPREAD_TOTAL_SIGNALS_ENABLED=true       # Phase 1
+SPREAD_TOTAL_LEANS_ENABLED=true         # Phase 2
+SPREAD_TOTAL_RECOMMENDATIONS_ENABLED=true  # Phase 3 (new)
+```
+All three flags are independent and runtime-toggleable. Phase 3 will only show promoted recommendations once enough settled history accumulates to clear the 50-game minimum at the stricter win-rate + ROI bars — give it a few weeks of live data after Phase 1+2 are flipped.
+
+---
+
 ## 2026-04-27 - Tiered Intelligence Phase 2: Lean Intelligence Layer
 
 **Summary:** Promotes spread and total opportunity signals from passive markers to **evidence-based "Lean" markers** when historical data supports them. Two commits — data + UI — both feature-flagged independent of Phase 1 so the leans surface can be turned on without re-shipping. The Moneyline pipeline remains *frozen* by both the Phase 1 sentinel test AND a new Phase 2 sentinel that locks down the new performance functions too.
