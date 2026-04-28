@@ -65,6 +65,15 @@ def mlb_hub(request):
     # games without a recommendation (no odds yet) fall into not_recommended.
     decision_sections = partition_games_by_decision(all_tiles)
 
+    # Two-Lane partition (2026-04-28). Orthogonal to decision_sections —
+    # this slices the SAME tiles by lane (core / qualified / pass) rather
+    # than by status/tier. Drives the new Core / Qualified / Pass sections
+    # in the template, and the Bet All filter ensures only `core` is bulk-
+    # bet eligible. We compute it on the same all_tiles list so it stays
+    # consistent with whatever the existing decision_sections rendered.
+    from apps.core.services.recommendations import partition_games_by_lane
+    lane_sections = partition_games_by_lane(all_tiles)
+
     # Focus Engine: single "do this right now" surface. None when no game
     # meets the bar — the banner is simply omitted rather than forced.
     focus = get_focus_game(all_tiles)
@@ -215,6 +224,16 @@ def mlb_hub(request):
         # NEVER bulk-bet eligible. Defaults to empty list so a page
         # render with the partition unchanged still works.
         'value_games': decision_sections.get('value', []),
+        # Two-Lane sections (2026-04-28). Always passed; the template
+        # decides whether to show the new Core/Qualified/Pass sections
+        # alongside (or in place of) the existing decision sections.
+        # core_games is bulk-bet eligible; qualified is visible-but-
+        # excluded; pass is hidden (or in a collapsed "Not actionable"
+        # bucket).
+        'core_games': lane_sections['core'],
+        'qualified_games': lane_sections['qualified'],
+        'pass_games': lane_sections['pass'],
+        'core_bulk_count': len(lane_sections['core']),
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,

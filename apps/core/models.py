@@ -137,6 +137,21 @@ class BettingRecommendation(models.Model):
     # is unchanged — only the user-facing display reflects the discount.
     is_secondary = models.BooleanField(default=False)
 
+    # Two-Lane System (2026-04-28). Orthogonal classifier on top of the
+    # status/tier axes. Drives the Bet All filter (`lane == 'core'`) and
+    # the Core/Qualified/Pass UI sections. Default 'pass' so a row missing
+    # explicit classification is never bulk-bet eligible by accident.
+    LANE_CHOICES = [
+        ('core', 'Core'),
+        ('qualified', 'Qualified'),
+        ('pass', 'Pass'),
+    ]
+    lane = models.CharField(
+        max_length=10, choices=LANE_CHOICES, default='pass', db_index=True,
+    )
+    risk_flags = models.JSONField(default=dict, blank=True)
+    risk_score = models.IntegerField(default=0)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

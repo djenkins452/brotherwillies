@@ -51,6 +51,32 @@ MIN_PROBABILITY_FOR_RECOMMENDED = 0.55   # actual recommended threshold (configu
 MAX_ABS_ODDS_FOR_RECOMMENDED = 300       # avoid extreme longshots / extreme favorites
                                           # (configurable; 300 keeps normal markets in range)
 
+# ---------------------------------------------------------------------------
+# Two-Lane System (2026-04-28)
+#
+# Orthogonal classifier on top of the existing status/tier rules. Splits
+# every recommendation into:
+#   - 'core'      → safe for "Bet All" automation (zero risk flags)
+#   - 'qualified' → visible but excluded from automation (1-2 risk flags)
+#   - 'pass'      → fails hard gates OR carries 3+ risk flags
+#
+# DOES NOT modify edge math, decision rules, or the existing status/tier
+# axes — those continue to drive the model's "recommended" / "value" /
+# "blocked" / "not_recommended" labels. The lane is a *separate* gate that
+# protects automation: bulk-bet endpoints filter on lane=='core', so a
+# qualified pick is still surfaced to the user (with risk flags shown)
+# but cannot be placed in a one-click batch.
+#
+# Spec source: master prompt 2026-04-28 (two-lane recommendation system).
+LANE_CORE = 'core'
+LANE_QUALIFIED = 'qualified'
+LANE_PASS = 'pass'
+
+LANE_HARD_GATES_PROBABILITY_MIN = 0.55   # decimal — confidence floor for any non-pass lane
+LANE_HARD_GATES_EDGE_MIN = 0.03          # decimal — edge floor (3pp); MIN_EDGE matches today
+LANE_HARD_GATES_MAX_ABS_ODDS = 300       # |american odds| ceiling
+LANE_RISK_FLAGS_MAX_FOR_QUALIFIED = 2    # >=3 flags drops the pick to 'pass'
+
 _TIER_LABELS = {
     'elite': '🔥 High Confidence',
     'strong': 'Strong Edge',
@@ -265,6 +291,14 @@ class Recommendation:
     #                   math is preserved untouched.
     is_secondary: bool = False
 
+    # Two-Lane System (2026-04-28). Orthogonal to status/tier — drives
+    # the Bet All filter and the Core/Qualified/Pass UI sections. lane
+    # defaults to 'pass' so a recommendation that hasn't been classified
+    # is never treated as bulk-bet eligible by accident.
+    lane: str = LANE_PASS
+    risk_flags: dict = field(default_factory=dict)
+    risk_score: int = 0
+
     @property
     def tier_label(self) -> str:
         return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
@@ -411,6 +445,133 @@ def _format_american(odds: int) -> str:
     return f"+{odds}" if odds > 0 else str(odds)
 
 
+def _lane_hard_gates_pass(
+    *, probability: float, edge: float, odds_american: int, source_quality: str,
+) -> bool:
+    """All four lane hard gates must clear for any non-pass classification.
+
+    Inputs are decimal: probability in [0,1], edge in [-1,1] (0.03 == 3pp),
+    odds_american signed, source_quality the OddsSnapshot.source_quality
+    value (typically 'primary' / 'fallback' / 'stale' / 'unavailable').
+    """
+    if probability is None or probability < LANE_HARD_GATES_PROBABILITY_MIN:
+        return False
+    if edge is None or edge < LANE_HARD_GATES_EDGE_MIN:
+        return False
+    if odds_american is None or abs(int(odds_american)) > LANE_HARD_GATES_MAX_ABS_ODDS:
+        return False
+    if source_quality != 'primary':
+        return False
+    return True
+
+
+def _lane_compute_risk_flags(
+    *, probability: float, odds_american: int, edge_decimal: float,
+    movement_class: Optional[str], movement_supports_pick: bool,
+    insight_conflicts: bool = False,
+) -> dict:
+    """Soft risk flags. Each is a boolean; the sum is the risk_score.
+
+    Definitions (per master prompt):
+      - market_conflict: market is moving STRONGLY or with SHARP action
+            against our pick.
+      - sanity_mismatch: model says a moderate favorite but the market
+            prices it as a dog (or vice versa). Specifically:
+              probability > 0.65 AND odds > +120  (we like a price-dog)
+              OR
+              probability < 0.55 AND odds < -150  (we shrug at a chalk)
+            Both signal that something disagrees between our model and
+            the market beyond just "we found edge".
+      - thin_edge: post-vig edge against the picked side's RAW implied
+            probability (not the de-vigged) is under 4pp. Different from
+            `edge_decimal` (which is de-vigged) — this catches picks where
+            the de-vig math made the edge look bigger than it really is.
+      - insight_conflict: AI insight direction conflicts with our pick.
+            Today insights are unstructured text and not reliably parsed
+            for direction, so this is supplied by callers when known and
+            defaults to False otherwise.
+    """
+    market_conflict = (
+        movement_class in ('strong', 'sharp')
+        and not movement_supports_pick
+    )
+    sanity_mismatch = False
+    if odds_american is not None and probability is not None:
+        if probability > 0.65 and odds_american > 120:
+            sanity_mismatch = True
+        elif probability < 0.55 and odds_american < -150:
+            sanity_mismatch = True
+
+    thin_edge = False
+    if odds_american is not None and probability is not None:
+        from apps.core.utils.odds import american_to_implied_prob
+        raw_implied = american_to_implied_prob(int(odds_american))
+        # Spec uses raw implied (with vig). When (prob - raw_implied) <
+        # 0.04 the bet is informationally thin even if the de-vigged edge
+        # looked larger.
+        thin_edge = (probability - raw_implied) < 0.04
+
+    return {
+        'market_conflict': bool(market_conflict),
+        'sanity_mismatch': bool(sanity_mismatch),
+        'thin_edge': bool(thin_edge),
+        'insight_conflict': bool(insight_conflicts),
+    }
+
+
+def _lane_classify(
+    *, probability: float, edge_decimal: float, odds_american: int,
+    source_quality: str, movement_class: Optional[str],
+    movement_supports_pick: bool, insight_conflicts: bool = False,
+):
+    """Run hard gates → risk flags → lane assignment.
+
+    Returns (lane, risk_flags_dict, risk_score). Hard-gate failure
+    short-circuits to ('pass', {}, 0) without computing risk flags.
+    """
+    if not _lane_hard_gates_pass(
+        probability=probability, edge=edge_decimal,
+        odds_american=odds_american, source_quality=source_quality,
+    ):
+        return LANE_PASS, {}, 0
+
+    flags = _lane_compute_risk_flags(
+        probability=probability, odds_american=odds_american,
+        edge_decimal=edge_decimal,
+        movement_class=movement_class,
+        movement_supports_pick=movement_supports_pick,
+        insight_conflicts=insight_conflicts,
+    )
+    score = sum(1 for v in flags.values() if v)
+
+    if score == 0:
+        return LANE_CORE, flags, score
+    if 1 <= score <= LANE_RISK_FLAGS_MAX_FOR_QUALIFIED:
+        return LANE_QUALIFIED, flags, score
+    return LANE_PASS, flags, score
+
+
+def partition_games_by_lane(tiles) -> dict:
+    """Partition rendered game tiles into the three lane buckets.
+
+    Each tile is expected to expose a `recommendation` attribute (the
+    Recommendation dataclass returned by `get_recommendation`). Tiles
+    without a recommendation default to LANE_PASS so they appear in the
+    "not actionable" bucket rather than vanishing.
+
+    Returns a dict with three lists keyed by 'core' / 'qualified' / 'pass'.
+    Order within each list is preserved from the input.
+    """
+    out = {LANE_CORE: [], LANE_QUALIFIED: [], LANE_PASS: []}
+    for tile in tiles:
+        rec = getattr(tile, 'recommendation', None)
+        lane = getattr(rec, 'lane', LANE_PASS) if rec is not None else LANE_PASS
+        if lane not in out:
+            lane = LANE_PASS
+        out[lane].append(tile)
+    return out
+
+
 def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendation]:
     odds = data.get('latest_odds')
     if not odds or odds.moneyline_home is None or odds.moneyline_away is None:
@@ -493,6 +654,29 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
     from apps.core.services.odds_movement import movement_signal_for_pick
     sig = movement_signal_for_pick(type(odds), game, pick_side)
 
+    # Two-Lane classification — orthogonal to status/tier. Runs after the
+    # existing decision rules so it reads the *resolved* status, but the
+    # lane itself is derived from the spec's hard gates + risk flags. Hard
+    # gates use OddsSnapshot.source_quality (added by Provider Health
+    # Reliability work) — falls back to '' which fails the gate.
+    source_quality = getattr(odds, 'source_quality', '') or ''
+    lane, risk_flags, risk_score = _lane_classify(
+        probability=confidence,
+        edge_decimal=edge,
+        odds_american=pick_odds,
+        source_quality=source_quality,
+        movement_class=sig['movement_class'],
+        movement_supports_pick=sig['supports_pick'],
+        insight_conflicts=False,  # AI insights aren't programmatically directional yet
+    )
+    # Defense in depth: a 'blocked' tier (synthesized odds) must never be
+    # core, regardless of how the gates resolve. Same for is_secondary —
+    # ESPN-fallback picks shouldn't reach Bet All even if their numbers
+    # otherwise clear the gates.
+    if tier == 'blocked' or is_secondary:
+        if lane == LANE_CORE:
+            lane = LANE_QUALIFIED
+
     return Recommendation(
         sport='',
         game=game,
@@ -511,6 +695,9 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         movement_supports_pick=sig['supports_pick'],
         market_warning=sig['market_warning'],
         is_secondary=is_secondary,
+        lane=lane,
+        risk_flags=risk_flags,
+        risk_score=risk_score,
     )
 
 
@@ -572,5 +759,11 @@ def persist_recommendation(sport: str, game, user=None):
         movement_supports_pick=rec.movement_supports_pick,
         market_warning=rec.market_warning,
         is_secondary=rec.is_secondary,
+        # Two-Lane snapshot — frozen at recommendation creation so
+        # historical analytics can answer "was this rec bulk-eligible
+        # at the time?" without re-running classification rules.
+        lane=rec.lane,
+        risk_flags=rec.risk_flags,
+        risk_score=rec.risk_score,
         **{game_fk_field: game},
     )

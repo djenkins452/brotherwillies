@@ -2,6 +2,57 @@
 
 ---
 
+## 2026-04-28 - Two-Lane Recommendation System (Core / Qualified / Pass)
+
+**Summary:** Adds an orthogonal classifier on top of the existing status/tier axes that splits every moneyline recommendation into one of three lanes — `core` (safe for "Bet All" automation), `qualified` (visible but excluded from bulk), or `pass` (not actionable). The principle: *filter for automation, not visibility*. No bets are lost; previously-blocked picks are reclassified into Qualified instead of disappearing, surfacing more opportunities without lowering the safety bar on bulk placement.
+
+### Hard rules (per spec)
+- **No moneyline calculation logic changed.** Edge math, de-vigging, status/tier rules, decision thresholds, slate caps — all unchanged.
+- **No odds ingestion changed.**
+- **No slate caps reintroduced** beyond what already existed.
+- **Qualified bets NEVER reach Bet All.** Bulk-bet endpoint filters on `lane == 'core'` as defense in depth alongside the upstream classifier.
+- **Existing tests preserved**, 29 new tests added.
+
+### How the classifier works
+1. **Hard gates** — `probability >= 0.55`, `edge >= 0.03`, `abs(odds) <= 300`, `source_quality == 'primary'`. Failure short-circuits to `lane='pass'`.
+2. **Risk flags** (soft):
+   - `market_conflict`: line moving with strong/sharp action against our pick
+   - `sanity_mismatch`: high prob but priced as a dog, OR low prob but priced as chalk
+   - `thin_edge`: probability − raw implied < 4pp
+   - `insight_conflict`: AI insight disagrees (caller-supplied; defaults False)
+3. **Lane assignment** based on `risk_score = sum(flags.values())`:
+   - 0 flags → `core`
+   - 1–2 flags → `qualified`
+   - 3+ flags → `pass`
+
+### Defense in depth
+- `tier='blocked'` (synthesized odds) is force-demoted from core to qualified before persistence.
+- `is_secondary` (ESPN fallback) similarly cannot reach core.
+- Bulk-bet `_eligible_games_for_user` adds `if rec.lane != 'core': continue` even though the upstream classifier already enforces it.
+
+### Storage
+- New fields on `BettingRecommendation`: `lane` (CharField, indexed), `risk_flags` (JSONField), `risk_score` (IntegerField). Persisted at recommendation creation so historical analytics can answer "was this rec bulk-eligible at the time?" without re-running classification rules.
+- Migration: `core/0006_bettingrecommendation_lane_and_more`.
+
+### UI
+- New "Two-Lane View" overview block at the top of the MLB hub showing Core / Qualified / Pass sections in collapsible `<details>` blocks. Core is open by default, Qualified opens when populated, Pass stays collapsed.
+- Qualified cards display the active risk-flag chips ("Market Against", "Thin Edge", "Sanity Mismatch", "Insight Conflict") above the tile.
+- Existing decision sections (Top Plays, Recommended Plays, Not Recommended, Value Plays, etc.) remain intact below the lane view for backward compatibility.
+
+### Files
+- New: `apps/core/test_two_lane_system.py` (29 tests covering hard-gate boundaries, every risk flag, all five spec scenarios, the partitioner, and bulk-bet integration)
+- Modified: `apps/core/services/recommendations.py` (added `_lane_hard_gates_pass`, `_lane_compute_risk_flags`, `_lane_classify`, `partition_games_by_lane`, plus `lane`/`risk_flags`/`risk_score` on the `Recommendation` dataclass and wiring inside `_moneyline_candidate`); `apps/core/models.py` (BettingRecommendation lane fields); `apps/mockbets/services/bulk_actions.py` (lane gate); `apps/mlb/views.py` (lane partition in context); `templates/mlb/hub.html` (Core/Qualified/Pass sections)
+- Migrations: `core/0006_bettingrecommendation_lane_and_more`
+
+### What this does NOT change
+- The recommendation engine's edge math, de-vigging, or decision rules.
+- `compute_status` / `_raw_tier` / `assign_tiers` semantics.
+- Existing decision_sections (`elite`, `recommended`, `not_recommended`, etc.) on the MLB hub.
+- Spread/Total Phase 1/2/3 sections — the lane system is moneyline-specific.
+- The Backtest service or Phase 2 intelligence layer.
+
+---
+
 ## 2026-04-28 - Phase 2 (Elo): Auto-Updating Team Ratings
 
 **Summary:** Replaces (when enabled) the static `Team.rating` floats that have been the modeling foundation since v1 with a dynamic Elo system that updates after every final game. Behind a feature flag (default OFF). The recommendation engine, decision rules, and thresholds are all unchanged — this swap is intentionally minimally invasive so the backtest harness can produce a clean static-vs-dynamic comparison.

@@ -305,6 +305,89 @@
   </details>
   {% endif %}
 
+  {% comment %}
+    Two-Lane sections (2026-04-28). Orthogonal slice of the same slate by
+    automation safety. Core lane is the Bet All filter; Qualified is
+    visible-but-excluded; Pass is collapsed by default since those picks
+    failed hard gates and are not actionable.
+
+    These sections render IN ADDITION TO the existing decision sections
+    below — same tiles may appear in both. The lane view is the spec's
+    primary partition for automation; the legacy decision sections remain
+    for backward compatibility with downstream tooling and tests.
+  {% endcomment %}
+  {% if core_games or qualified_games or pass_games %}
+  <section class="mlb-lane-overview" style="margin-bottom: 1.25rem;">
+    <h2 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.6rem;">Two-Lane View</h2>
+
+    {# 🟢 Core — bulk-bet eligible. Open by default. #}
+    <details open style="margin-bottom: 0.5rem; border: 1px solid #1f4534; border-radius: 6px; padding: 0.5rem 0.75rem; background: #0f1f17;">
+      <summary style="cursor: pointer; font-weight: 600; color: #22c55e;">
+        🟢 Core Recommendations (Auto) — {{ core_games|length }}
+      </summary>
+      {% if core_games %}
+        <div class="mlb-rail tiles-container" role="list" style="margin-top: 0.6rem;">
+          {% for s in core_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p style="color: #888; font-size: 0.85rem; margin: 0.5rem 0 0;">No core picks on this slate.</p>
+      {% endif %}
+    </details>
+
+    {# 🟡 Qualified — visible but EXCLUDED from Bet All. Open by default if any. #}
+    <details {% if qualified_games %}open{% endif %} style="margin-bottom: 0.5rem; border: 1px solid #4a3a14; border-radius: 6px; padding: 0.5rem 0.75rem; background: #1f1a0e;">
+      <summary style="cursor: pointer; font-weight: 600; color: #d97706;">
+        🟡 Qualified Opportunities (Review) — {{ qualified_games|length }}
+      </summary>
+      {% if qualified_games %}
+        <p style="color: #aaa; font-size: 0.8rem; margin: 0.5rem 0;">
+          These picks pass the hard gates but carry 1–2 risk flags. Excluded from "Bet All" — review individually before placing.
+        </p>
+        <div class="mlb-rail tiles-container" role="list" style="margin-top: 0.4rem;">
+          {% for s in qualified_games %}
+            <div role="listitem">
+              {% if s.recommendation and s.recommendation.risk_flags %}
+                <div style="margin-bottom: 0.3rem; font-size: 0.78rem; color: #d97706;">
+                  Flags:
+                  {% if s.recommendation.risk_flags.market_conflict %}<span style="margin-right: 0.5rem;">Market Against</span>{% endif %}
+                  {% if s.recommendation.risk_flags.sanity_mismatch %}<span style="margin-right: 0.5rem;">Sanity Mismatch</span>{% endif %}
+                  {% if s.recommendation.risk_flags.thin_edge %}<span style="margin-right: 0.5rem;">Thin Edge</span>{% endif %}
+                  {% if s.recommendation.risk_flags.insight_conflict %}<span style="margin-right: 0.5rem;">Insight Conflict</span>{% endif %}
+                </div>
+              {% endif %}
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p style="color: #888; font-size: 0.85rem; margin: 0.5rem 0 0;">No qualified opportunities on this slate.</p>
+      {% endif %}
+    </details>
+
+    {# 🚫 Pass — collapsed by default since these are not actionable. #}
+    <details style="margin-bottom: 0.5rem; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.5rem 0.75rem; background: #161616;">
+      <summary style="cursor: pointer; font-weight: 600; color: #888;">
+        🚫 Pass — {{ pass_games|length }}
+      </summary>
+      <p style="color: #888; font-size: 0.8rem; margin: 0.5rem 0 0;">
+        Failed hard gates (probability, edge, max odds, or source quality) or carry 3+ risk flags. Not actionable.
+      </p>
+    </details>
+  </section>
+  {% endif %}
+
   {% if not elite_games and not recommended_games and not recommended_espn_games and not not_recommended_games and not unrated_games and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>

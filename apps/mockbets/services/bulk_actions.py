@@ -91,6 +91,14 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
             continue
         if rec.status != 'recommended':
             continue
+        # Two-Lane gate (2026-04-28). Bulk-bet automation requires
+        # `lane == 'core'` — picks with risk flags drop to 'qualified'
+        # and are explicitly excluded from "Bet All" per the spec
+        # ("Filter for automation, not visibility"). The upstream
+        # classifier already enforces this, but the bulk path duplicates
+        # the check as defense in depth.
+        if getattr(rec, 'lane', '') != 'core':
+            continue
         # 2026-04-27: hard safety. Belt-and-suspenders even though
         # compute_status enforces these — the bulk path must never
         # depend on upstream classification staying perfect.
