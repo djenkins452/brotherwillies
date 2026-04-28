@@ -19,7 +19,9 @@ from django.utils import timezone
 from apps.analytics.models import BacktestRun, ModelResultSnapshot
 from apps.core.services.backtesting_service import (
     CALIBRATION_LABELS,
+    DECISION_QUALITY_LABELS,
     EDGE_BUCKET_LABELS,
+    EDGE_INTEL_BUCKET_LABELS,
     FAV_DOG_LABELS,
     FLAT_STAKE,
     HOME_AWAY_LABELS,
@@ -29,7 +31,10 @@ from apps.core.services.backtesting_service import (
     _BacktestAggregator,
     _BucketAccumulator,
     _calibration_bucket,
+    _decision_quality,
     _edge_bucket,
+    _edge_intel_bucket,
+    _system_verdict,
     aggregate_results,
     evaluate_game,
     iter_evaluations,
@@ -562,3 +567,243 @@ class RunBacktestTests(TestCase):
         _make_settled_mlb_game()
         evs = list(iter_evaluations('mlb'))
         self.assertEqual(len(evs), 1)
+
+
+# ===========================================================================
+# Phase 2 — Backtest Intelligence Layer
+# ===========================================================================
+# These tests cover decision quality classification, the finer-grained
+# "Where Is My Edge?" buckets, the system verdict, and confirm Phase 2 is
+# strictly additive — it must NEVER alter a Phase 1 metric or bucket.
+
+
+class DecisionQualityClassificationTests(TestCase):
+    """Pure-function classification: outcome × CLV → label."""
+
+    def test_won_with_positive_clv_is_perfect(self):
+        self.assertEqual(_decision_quality(won=True, clv_decimal=0.05), 'perfect')
+
+    def test_won_with_zero_clv_is_lucky(self):
+        # clv == 0 means we got the closing price exactly — no value
+        # was captured timing-wise even though we won.
+        self.assertEqual(_decision_quality(won=True, clv_decimal=0.0), 'lucky')
+
+    def test_won_with_negative_clv_is_lucky(self):
+        self.assertEqual(_decision_quality(won=True, clv_decimal=-0.03), 'lucky')
+
+    def test_lost_with_positive_clv_is_unlucky(self):
+        # We beat the line but the dice didn't roll — model was right.
+        self.assertEqual(_decision_quality(won=False, clv_decimal=0.04), 'unlucky')
+
+    def test_lost_with_zero_or_negative_clv_is_bad(self):
+        self.assertEqual(_decision_quality(won=False, clv_decimal=0.0), 'bad')
+        self.assertEqual(_decision_quality(won=False, clv_decimal=-0.05), 'bad')
+
+    def test_undefined_clv_returns_none(self):
+        # Without a CLV signal we can't classify — must skip these bets
+        # from the breakdown rather than mis-labeling them.
+        self.assertIsNone(_decision_quality(won=True, clv_decimal=None))
+        self.assertIsNone(_decision_quality(won=False, clv_decimal=None))
+
+
+class EdgeIntelBucketTests(TestCase):
+    """Phase 2's finer 0-2/2-4/4-6/6+ bands. [low, high) semantics."""
+
+    def test_zero_falls_in_zero_to_two(self):
+        self.assertEqual(_edge_intel_bucket(0.0), '0-2')
+        self.assertEqual(_edge_intel_bucket(0.0199), '0-2')
+
+    def test_two_pct_starts_two_to_four(self):
+        self.assertEqual(_edge_intel_bucket(0.02), '2-4')
+
+    def test_four_pct_starts_four_to_six(self):
+        self.assertEqual(_edge_intel_bucket(0.04), '4-6')
+
+    def test_six_pct_starts_six_plus(self):
+        self.assertEqual(_edge_intel_bucket(0.06), '6+')
+        self.assertEqual(_edge_intel_bucket(0.50), '6+')
+
+    def test_negative_edge_falls_into_zero_to_two(self):
+        self.assertEqual(_edge_intel_bucket(-0.01), '0-2')
+
+
+class SystemVerdictTests(TestCase):
+    """Verdict from (roi, positive_clv_rate) per the Phase 2 spec."""
+
+    def test_strong_when_roi_positive_and_clv_above_50pct(self):
+        self.assertEqual(_system_verdict(roi_pct=0.05, positive_clv_rate=0.55), 'STRONG')
+
+    def test_neutral_when_roi_positive_but_clv_at_or_below_50pct(self):
+        # 0.5 itself is the boundary — only > 0.5 qualifies as STRONG.
+        self.assertEqual(_system_verdict(roi_pct=0.05, positive_clv_rate=0.50), 'NEUTRAL')
+        self.assertEqual(_system_verdict(roi_pct=0.05, positive_clv_rate=0.30), 'NEUTRAL')
+
+    def test_neutral_when_roi_positive_but_clv_undefined(self):
+        # No CLV sample → can't verify edge quality but ROI is up.
+        self.assertEqual(_system_verdict(roi_pct=0.05, positive_clv_rate=None), 'NEUTRAL')
+
+    def test_weak_when_roi_zero_or_negative(self):
+        self.assertEqual(_system_verdict(roi_pct=0.0, positive_clv_rate=0.99), 'WEAK')
+        self.assertEqual(_system_verdict(roi_pct=-0.10, positive_clv_rate=0.99), 'WEAK')
+
+    def test_weak_when_roi_undefined(self):
+        # Empty run — no bets, no ROI to evaluate. Defaults to WEAK so
+        # the verdict never falsely signals confidence on no data.
+        self.assertEqual(_system_verdict(roi_pct=None, positive_clv_rate=None), 'WEAK')
+
+
+class GameEvaluationDecisionQualityTests(TestCase):
+    """End-to-end: evaluate_game sets decision_quality from CLV + outcome."""
+
+    def _build_game_with_movement(self, *, home_score, away_score, opening_ml, closing_ml):
+        # Pick will be home (house 0.65 > market 0.50). We control the
+        # opening/closing home moneylines to drive CLV sign.
+        game = _make_settled_mlb_game(
+            market_home_prob=0.50,
+            home_score=home_score, away_score=away_score,
+            moneyline_home=closing_ml, moneyline_away=110,
+            extra_snapshots=[(timedelta(hours=10), opening_ml, 100)],
+        )
+        snap = ModelResultSnapshot.objects.create(
+            mlb_game=game, market_prob=0.50, house_prob=0.65,
+        )
+        snap.captured_at = game.first_pitch - timedelta(hours=2)
+        snap.save()
+        return game
+
+    def test_perfect_when_won_and_beat_line(self):
+        # Home wins; opening -110 → closing -130 = +CLV
+        game = self._build_game_with_movement(
+            home_score=10, away_score=2,
+            opening_ml=-110, closing_ml=-130,
+        )
+        ev = evaluate_game('mlb', game)
+        self.assertTrue(ev.won)
+        self.assertGreater(ev.clv_decimal, 0)
+        self.assertEqual(ev.decision_quality, 'perfect')
+
+    def test_lucky_when_won_but_lost_line(self):
+        # Home wins; opening -130 → closing -110 = -CLV
+        game = self._build_game_with_movement(
+            home_score=10, away_score=2,
+            opening_ml=-130, closing_ml=-110,
+        )
+        ev = evaluate_game('mlb', game)
+        self.assertTrue(ev.won)
+        self.assertLess(ev.clv_decimal, 0)
+        self.assertEqual(ev.decision_quality, 'lucky')
+
+    def test_unlucky_when_lost_but_beat_line(self):
+        # Home loses; opening -110 → closing -130 = +CLV
+        game = self._build_game_with_movement(
+            home_score=2, away_score=10,
+            opening_ml=-110, closing_ml=-130,
+        )
+        ev = evaluate_game('mlb', game)
+        self.assertFalse(ev.won)
+        self.assertGreater(ev.clv_decimal, 0)
+        self.assertEqual(ev.decision_quality, 'unlucky')
+
+    def test_bad_when_lost_and_lost_line(self):
+        # Home loses; opening -130 → closing -110 = -CLV
+        game = self._build_game_with_movement(
+            home_score=2, away_score=10,
+            opening_ml=-130, closing_ml=-110,
+        )
+        ev = evaluate_game('mlb', game)
+        self.assertFalse(ev.won)
+        self.assertLess(ev.clv_decimal, 0)
+        self.assertEqual(ev.decision_quality, 'bad')
+
+    def test_decision_quality_none_when_clv_unavailable(self):
+        # Single snapshot → CLV None → quality undefined.
+        game = _make_settled_mlb_game()
+        snap = ModelResultSnapshot.objects.create(
+            mlb_game=game, market_prob=0.50, house_prob=0.65,
+        )
+        snap.captured_at = game.first_pitch - timedelta(hours=2)
+        snap.save()
+        ev = evaluate_game('mlb', game)
+        self.assertIsNone(ev.clv_decimal)
+        self.assertIsNone(ev.decision_quality)
+
+
+class WhereIsMyEdgeTests(TestCase):
+    """The intelligence-layer edge buckets in the summary JSON."""
+
+    def test_summary_has_full_edge_intel_structure(self):
+        run = run_backtest(sport='mlb', persist=False)
+        s = run.summary
+        self.assertIn('where_is_my_edge', s)
+        for label in EDGE_INTEL_BUCKET_LABELS:
+            self.assertIn(label, s['where_is_my_edge'])
+
+    def test_edge_intel_uses_phase2_boundaries(self):
+        # Edge 0.05 should land in 4-6 in the intel buckets, NOT in 6-8
+        # or 4-6 of the Phase 1 buckets (which use the same numbers but
+        # we want to verify the bucketing is independent).
+        agg = _BacktestAggregator()
+        ev = GameEvaluation(
+            sport='mlb', game_id='gx', game_label='X', game_time=timezone.now(),
+            predicted_home_prob=0.6, market_home_prob_fair=0.55,
+            pick_is_home=True, pick_predicted_prob=0.6,
+            pick_market_prob_fair=0.55,
+            pick_opening_odds_american=110, pick_closing_odds_american=110,
+            edge=0.05, status='recommended', status_reason='', tier='standard',
+            won=True, clv_decimal=None, is_approximate=False,
+            is_favorite=False, is_home_pick=True,
+        )
+        agg.add(ev)
+        s = agg.to_summary()
+        self.assertEqual(s['where_is_my_edge']['4-6']['sample'], 1)
+        self.assertEqual(s['where_is_my_edge']['6+']['sample'], 0)
+        # Phase 1 buckets independent — same edge lands in '4-6' there too.
+        self.assertEqual(s['by_edge_bucket']['4-6']['sample'], 1)
+
+
+class SystemVerdictIntegrationTests(TestCase):
+    """End-to-end: run_backtest emits a system_verdict reflecting the data."""
+
+    def test_empty_run_verdict_is_weak(self):
+        run = run_backtest(sport='mlb', persist=False)
+        self.assertEqual(run.summary['system_verdict'], 'WEAK')
+
+    def test_verdict_in_summary_keys(self):
+        run = run_backtest(sport='mlb', persist=False)
+        self.assertIn('system_verdict', run.summary)
+        self.assertIn('clv_metrics', run.summary)
+
+
+class Phase2NonRegressionTests(TestCase):
+    """Hard guarantees: Phase 2 must not mutate Phase 1 outputs."""
+
+    def test_phase1_keys_still_present_with_same_shape(self):
+        run = run_backtest(sport='mlb', persist=False)
+        s = run.summary
+        # Every Phase 1 top-level key still here.
+        for key in (
+            'overall', 'overall_recommended_only',
+            'by_sport', 'by_sport_recommended_only',
+            'by_edge_bucket', 'by_tier',
+            'by_favorite_underdog', 'by_home_away',
+            'calibration_curve', 'validation',
+        ):
+            self.assertIn(key, s, f"Phase 1 key '{key}' missing — Phase 2 broke contract")
+
+        # Phase 1 calibration shape is unchanged: {count, predicted, actual}.
+        for label in CALIBRATION_LABELS:
+            bucket = s['calibration_curve'][label]
+            self.assertEqual(set(bucket.keys()), {'count', 'predicted', 'actual'})
+
+    def test_phase1_edge_buckets_unchanged(self):
+        # Phase 1 buckets remain at 0-4/4-6/6-8/8+, NOT the Phase 2 set.
+        run = run_backtest(sport='mlb', persist=False)
+        labels = list(run.summary['by_edge_bucket'].keys())
+        self.assertEqual(labels, EDGE_BUCKET_LABELS)
+        self.assertNotEqual(labels, EDGE_INTEL_BUCKET_LABELS)
+
+    def test_phase2_keys_are_additive(self):
+        run = run_backtest(sport='mlb', persist=False)
+        s = run.summary
+        for key in ('where_is_my_edge', 'decision_quality', 'clv_metrics', 'system_verdict'):
+            self.assertIn(key, s)

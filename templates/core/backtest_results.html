@@ -46,8 +46,53 @@
         </div>
 
         {% with summary=latest.summary %}
+            {# Phase 2 — System Verdict at the top so the headline answer is visible first. #}
+            {% if summary.system_verdict %}
+                {% if summary.system_verdict == 'STRONG' %}
+                    {% with verdict_color='#10b981' verdict_bg='#0f2922' %}
+                    <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: {{ verdict_bg }}; border: 2px solid {{ verdict_color }}; border-radius: 6px;">
+                        <div style="font-size: 0.85rem; color: #888;">System Verdict</div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: {{ verdict_color }};">{{ summary.system_verdict }}</div>
+                        <div style="font-size: 0.85rem; color: #aaa; margin-top: 0.3rem;">Positive ROI AND positive-CLV rate &gt; 50%. Edge looks real, not just variance.</div>
+                    </div>
+                    {% endwith %}
+                {% elif summary.system_verdict == 'NEUTRAL' %}
+                    {% with verdict_color='#d97706' verdict_bg='#2a1f10' %}
+                    <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: {{ verdict_bg }}; border: 2px solid {{ verdict_color }}; border-radius: 6px;">
+                        <div style="font-size: 0.85rem; color: #888;">System Verdict</div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: {{ verdict_color }};">{{ summary.system_verdict }}</div>
+                        <div style="font-size: 0.85rem; color: #aaa; margin-top: 0.3rem;">Positive ROI but CLV doesn't confirm edge. Could be variance — needs more data.</div>
+                    </div>
+                    {% endwith %}
+                {% else %}
+                    {% with verdict_color='#dc2626' verdict_bg='#2a1010' %}
+                    <div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: {{ verdict_bg }}; border: 2px solid {{ verdict_color }}; border-radius: 6px;">
+                        <div style="font-size: 0.85rem; color: #888;">System Verdict</div>
+                        <div style="font-size: 1.6rem; font-weight: 700; color: {{ verdict_color }};">{{ summary.system_verdict }}</div>
+                        <div style="font-size: 0.85rem; color: #aaa; margin-top: 0.3rem;">ROI is zero or negative. CLV signal does not rescue a losing run.</div>
+                    </div>
+                    {% endwith %}
+                {% endif %}
+            {% endif %}
+
             {% include "core/_backtest_section.html" with title="Overall (every evaluated game)" data=summary.overall %}
             {% include "core/_backtest_section.html" with title="Recommended only (status=recommended)" data=summary.overall_recommended_only %}
+
+            {# Phase 2 — Where Is My Edge? finer 0-2/2-4/4-6/6+ buckets. #}
+            <h2 style="margin-top: 1.5rem;">Where Is My Edge?</h2>
+            <p style="color: #888; font-size: 0.85rem;">
+                Finer-grained breakdown of bets by predicted edge. Look for the bucket where ROI and +CLV rate are both healthy.
+            </p>
+            {% include "core/_backtest_table.html" with rows=summary.where_is_my_edge %}
+
+            {# Phase 2 — Decision quality (good pick vs lucky outcome). #}
+            <h2 style="margin-top: 1.5rem;">Decision Quality</h2>
+            <p style="color: #888; font-size: 0.85rem;">
+                Outcome × CLV. <strong>Perfect</strong> = won and beat the line; <strong>Lucky</strong> = won but lost the line;
+                <strong>Unlucky</strong> = lost but beat the line; <strong>Bad</strong> = lost and lost the line.
+                Bets without a defined CLV (single snapshot, ESPN/cached/manual source) are excluded.
+            </p>
+            {% include "core/_backtest_table.html" with rows=summary.decision_quality %}
 
             <h2 style="margin-top: 1.5rem;">By Sport</h2>
             {% include "core/_backtest_table.html" with rows=summary.by_sport %}

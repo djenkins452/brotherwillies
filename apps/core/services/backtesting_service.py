@@ -109,6 +109,82 @@ def _calibration_label(low: float, high: float) -> str:
 
 CALIBRATION_LABELS = [_calibration_label(low, high) for low, high in CALIBRATION_BUCKETS]
 
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Backtest Intelligence Layer
+#
+# Phase 2 is strictly ADDITIVE on top of Phase 1: it derives decision-quality
+# tags from existing GameEvaluation fields, slices edge into finer buckets,
+# and emits a system-level verdict — but never modifies a Phase 1 metric or
+# bucket. The Phase 1 contract (game-time-only data, ROI = profit/stake,
+# decimal edge, calibration shape, CLV source guard, incremental aggregation,
+# stable JSON keys) is unchanged.
+
+# Decision-quality classes — answer "good decision vs lucky outcome".
+#   perfect:  won AND beat the closing line (good pick, good price)
+#   lucky:    won BUT got worse-than-close price (right side, wrong timing)
+#   unlucky:  lost BUT beat the closing line (right side, dice didn't roll)
+#   bad:      lost AND lost the line (wrong on both)
+# Bets with no CLV (single snapshot, ESPN-source, manual/cached) are
+# excluded from this breakdown — we can't classify "did you beat the
+# line" without two trustworthy snapshots.
+DECISION_QUALITY_LABELS = ['perfect', 'lucky', 'unlucky', 'bad']
+
+
+def _decision_quality(won: bool, clv_decimal: Optional[float]) -> Optional[str]:
+    """Classify a settled bet by outcome × CLV. None when CLV is undefined."""
+    if clv_decimal is None:
+        return None
+    if won and clv_decimal > 0:
+        return 'perfect'
+    if won and clv_decimal <= 0:
+        return 'lucky'
+    if (not won) and clv_decimal > 0:
+        return 'unlucky'
+    return 'bad'
+
+
+# Phase 2 edge buckets — finer-grained than Phase 1's 0-4/4-6/6-8/8+ for
+# the "Where Is My Edge?" intelligence table. Decimal scale, [low, high).
+EDGE_INTEL_BUCKET_LABELS = ['0-2', '2-4', '4-6', '6+']
+EDGE_INTEL_BUCKETS = [
+    ('0-2', 0.00, 0.02),
+    ('2-4', 0.02, 0.04),
+    ('4-6', 0.04, 0.06),
+    ('6+',  0.06, float('inf')),
+]
+
+
+def _edge_intel_bucket(edge: float) -> str:
+    for label, low, high in EDGE_INTEL_BUCKETS:
+        if low <= edge < high:
+            return label
+    return EDGE_INTEL_BUCKET_LABELS[0]  # negative edges → '0-2'
+
+
+# System verdict thresholds (decimal — match the rest of the service).
+VERDICT_STRONG_CLV_RATE = 0.5
+VERDICT_LABELS = ['STRONG', 'NEUTRAL', 'WEAK']
+
+
+def _system_verdict(roi_pct: Optional[float], positive_clv_rate: Optional[float]) -> str:
+    """Distill overall ROI + CLV signal into one of three verdicts.
+
+    STRONG  — winning AND beating the close more than half the time.
+              Both signals point the same way, so the edge is real, not
+              just variance.
+    NEUTRAL — winning but no CLV signal (or CLV below 50%). Could be edge,
+              could be variance — needs more data or a CLV improvement.
+    WEAK    — losing money. Doesn't matter what CLV says when ROI is red.
+    """
+    if roi_pct is None:
+        return 'WEAK'
+    if roi_pct > 0 and positive_clv_rate is not None and positive_clv_rate > VERDICT_STRONG_CLV_RATE:
+        return 'STRONG'
+    if roi_pct > 0:
+        return 'NEUTRAL'
+    return 'WEAK'
+
 TIER_LABELS = ['elite', 'strong', 'standard']
 FAV_DOG_LABELS = ['favorite', 'underdog']
 HOME_AWAY_LABELS = ['home', 'away']
@@ -144,6 +220,10 @@ class GameEvaluation:
     is_approximate: bool
     is_favorite: bool
     is_home_pick: bool
+    # Phase 2 — derived after construction. None when CLV is undefined,
+    # since we can't classify a bet's quality without a trustworthy line
+    # movement signal. Set in evaluate_game().
+    decision_quality: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +357,15 @@ class _BacktestAggregator:
         self.by_home_away = OrderedDict((label, _BucketAccumulator()) for label in HOME_AWAY_LABELS)
         self.calibration = OrderedDict((label, _CalibrationAccumulator()) for label in CALIBRATION_LABELS)
 
+        # Phase 2 — additive intelligence layer. Same _BucketAccumulator
+        # type so we get all the metrics for free; just different binning.
+        self.by_edge_intel = OrderedDict(
+            (label, _BucketAccumulator()) for label in EDGE_INTEL_BUCKET_LABELS
+        )
+        self.decision_quality = OrderedDict(
+            (label, _BucketAccumulator()) for label in DECISION_QUALITY_LABELS
+        )
+
         self._seen_keys = set()
         self.total = 0
         self.duplicates = 0
@@ -312,10 +401,36 @@ class _BacktestAggregator:
             if ev.sport in self.by_sport_recommended:
                 self.by_sport_recommended[ev.sport].add(ev)
 
+        # Phase 2 — additive intelligence layer. Edge-intel slices the
+        # same bet stream into finer 0-2/2-4/4-6/6+ bands; decision_quality
+        # only counts bets with a defined CLV (others have None).
+        self.by_edge_intel[_edge_intel_bucket(ev.edge)].add(ev)
+        if ev.decision_quality and ev.decision_quality in self.decision_quality:
+            self.decision_quality[ev.decision_quality].add(ev)
+
     def to_summary(self) -> dict:
-        """Build the persisted JSON. Shape is stable across runs."""
+        """Build the persisted JSON. Shape is stable across runs.
+
+        Phase 1 keys (overall, by_sport, by_edge_bucket, by_tier, ...) are
+        unchanged. Phase 2 adds new top-level keys without modifying any
+        existing bucket — additive only, by contract.
+        """
+        overall_dict = self.overall.to_dict()
+        # CLV metrics surfaced at the top level for the system verdict
+        # consumer. These derive from the same overall accumulator, just
+        # exposed under the names Phase 2 callers expect.
+        clv_metrics = {
+            'sample': overall_dict['clv_sample'],
+            'avg_clv': overall_dict['avg_clv'],
+            'positive_clv_rate': overall_dict['positive_clv_rate'],
+        }
+        verdict = _system_verdict(
+            roi_pct=overall_dict['roi_pct'],
+            positive_clv_rate=overall_dict['positive_clv_rate'],
+        )
         return {
-            'overall': self.overall.to_dict(),
+            # ---- Phase 1 (unchanged shape) ----
+            'overall': overall_dict,
             'overall_recommended_only': self.overall_recommended.to_dict(),
             'by_sport': {k: v.to_dict() for k, v in self.by_sport.items()},
             'by_sport_recommended_only': {
@@ -331,6 +446,11 @@ class _BacktestAggregator:
                 'duplicates_dropped': self.duplicates,
                 'approximate_games': self.approximate_count,
             },
+            # ---- Phase 2 (additive intelligence layer) ----
+            'where_is_my_edge': {k: v.to_dict() for k, v in self.by_edge_intel.items()},
+            'decision_quality': {k: v.to_dict() for k, v in self.decision_quality.items()},
+            'clv_metrics': clv_metrics,
+            'system_verdict': verdict,
         }
 
 
@@ -556,6 +676,7 @@ def evaluate_game(sport: str, game) -> Optional[GameEvaluation]:
         is_approximate=is_approximate,
         is_favorite=pick_closing_odds < 0,
         is_home_pick=pick_is_home,
+        decision_quality=_decision_quality(won, clv_decimal),
     )
 
 

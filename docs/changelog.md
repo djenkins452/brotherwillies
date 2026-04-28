@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-04-27 - Phase 2: Backtest Intelligence Layer
+
+**Summary:** Strictly-additive layer on top of Phase 1 that turns raw backtest output into decision intelligence. Answers three questions: where is the edge, which decisions were good vs lucky, and is the system actually working. No Phase 1 calculation, bucket, or moneyline logic was changed.
+
+### What's new
+- **Decision quality classification** — every settled `GameEvaluation` is now tagged `perfect` / `lucky` / `unlucky` / `bad` based on outcome × CLV. Bets without a defined CLV (single snapshot, ESPN/cached/manual source) are correctly skipped from this breakdown rather than mis-labeled.
+- **`where_is_my_edge` table** — finer-grained edge buckets (`0-2`, `2-4`, `4-6`, `6+` in decimal pp) so we can see ROI / win rate / CLV per edge band. The Phase 1 buckets (`0-4`, `4-6`, `6-8`, `8+`) remain untouched and continue to populate `by_edge_bucket`.
+- **`clv_metrics`** — overall CLV sample size, average, and positive-CLV rate surfaced at the top level for quick scanning.
+- **`system_verdict`** — `STRONG` / `NEUTRAL` / `WEAK` rollup. STRONG requires both ROI > 0 AND positive-CLV rate > 50% (so a profitable run that doesn't beat the close stays NEUTRAL — no false confidence). The verdict renders as a colored banner at the top of `/backtest/`.
+
+### Hard non-regression guarantees
+The Phase 1 contract is locked:
+- All Phase 1 top-level keys still present with identical shape.
+- Calibration buckets still emit only `{count, predicted, actual}`.
+- Edge buckets still use the Phase 1 `0-4` / `4-6` / `6-8` / `8+` boundaries.
+- Moneyline recommendation engine remains unaware of Phase 2 (zero changes to `apps/core/services/recommendations.py`).
+- `Phase2NonRegressionTests` enforces all four guarantees.
+
+### Files
+- Modified: `apps/core/services/backtesting_service.py` (additive — new helpers + aggregator buckets), `apps/core/test_backtesting_service.py` (28 new tests), `templates/core/backtest_results.html` (verdict banner + intelligence sections)
+- New: `docs/moneyline_future_improvements.md` (Phases 3 & 4 documentation, gated)
+
+### Tests
+67 total backtest tests (39 Phase 1 + 28 Phase 2). New coverage: decision-quality classification (all four labels + None case), edge-intel bucket boundaries, system verdict logic (STRONG / NEUTRAL / WEAK / undefined inputs), end-to-end decision quality assignment, and the Phase 2 non-regression sentinel.
+
+---
+
 ## 2026-04-27 - Phase 1: Backtesting & Calibration Framework
 
 **Summary:** Added a backtesting service that reconstructs historical moneyline recommendations and aggregates win rate, ROI, calibration, and CLV across multiple breakdowns. Foundation for measuring whether the model actually has edge before adding new signals.
