@@ -675,8 +675,11 @@ class ActionLabelTests(TestCase):
     """Phase 1 actionable language — 'Recommended Bet' vs 'Model Lean'."""
 
     def test_recommended_bet_label(self):
+        # 2026-04-27 strict correction: "Recommended Bet" → "✅ High
+        # Probability Play" so the label reflects the new probability-
+        # gated definition (Recommended now requires >=55% probability).
         from apps.core.services.recommendations import action_label, STATUS_RECOMMENDED
-        self.assertEqual(action_label(STATUS_RECOMMENDED), 'Recommended Bet')
+        self.assertEqual(action_label(STATUS_RECOMMENDED), '✅ High Probability Play')
 
     def test_model_lean_label(self):
         from apps.core.services.recommendations import action_label, STATUS_NOT_RECOMMENDED
@@ -685,7 +688,7 @@ class ActionLabelTests(TestCase):
     def test_unknown_status_falls_back_to_recommended(self):
         """Defensive: a blank/unknown status shouldn't produce empty UI copy."""
         from apps.core.services.recommendations import action_label
-        self.assertEqual(action_label(''), 'Recommended Bet')
+        self.assertEqual(action_label(''), '✅ High Probability Play')
 
 
 class StalePendingRegressionTests(TestCase):

@@ -1339,3 +1339,21 @@
     background: #15803d;
     border-color: #15803d;
 }
+
+/* ----- 2026-04-27 strict correction: Value Plays section ------------ */
+
+/* Orange-bordered group for high-edge / low-probability picks. The
+   color is intentionally distinct from green Recommended (safe) and
+   yellow Lean (statistical edge) — value is "interesting but risky",
+   which orange reads as. The dashed border signals "informational,
+   not actionable in bulk". */
+.mlb-decision-group--value {
+    border-color: rgba(249,115,22,0.45);
+    background: rgba(249,115,22,0.04);
+}
+.mlb-decision-group--value .mlb-decision-group__title {
+    color: #fb923c;
+}
+.mlb-section--value .mlb-section__title {
+    color: #fb923c;
+}

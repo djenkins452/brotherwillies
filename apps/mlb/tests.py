@@ -1931,7 +1931,17 @@ class BulkActionsSourceFilterTests(TestCase):
         self.assertEqual(result['placed'], 2)
         self.assertEqual(result['source_filter'], 'verified')
 
-    def test_espn_filter_excludes_verified_bets(self):
+    def test_espn_filter_now_places_zero_after_correction(self):
+        """2026-04-27 strict correction: ESPN-source picks are never
+        Recommended at the engine level (compute_status returns
+        status='not_recommended', reason='secondary_source'). The bulk
+        endpoint with source_filter='espn' therefore places ZERO bets
+        — the surface is intentionally not-bulk-eligible per spec
+        ('visible but NOT actionable in bulk').
+
+        Previously this test asserted placed==2 with the old behavior
+        where ESPN picks could be Recommended and bulk-bettable. The
+        correction explicitly removes that path."""
         from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
         self._seed_snapshot(self.team_pairs[0], source='odds_api')
         self._seed_snapshot(self.team_pairs[1], source='espn')
@@ -1939,7 +1949,7 @@ class BulkActionsSourceFilterTests(TestCase):
         result = place_bulk_recommended_bets(
             self.user, source_filter='espn',
         )
-        self.assertEqual(result['placed'], 2)
+        self.assertEqual(result['placed'], 0)
 
     def test_derived_never_bulk_bet_regardless_of_filter(self):
         # Defense in depth: even if source_filter='all' or 'espn', a
@@ -2023,16 +2033,17 @@ class HubTemplateSourceAwareTests(TestCase):
         self.assertNotContains(resp, 'mlb-section--espn')
         self.assertNotContains(resp, 'These bets use ESPN odds')
 
-    def test_both_bulk_buttons_render_when_both_sources_present(self):
+    def test_only_moneyline_bulk_button_renders_after_correction(self):
+        """2026-04-27 strict correction: 'Bet All ESPN Plays' button
+        REMOVED from the hub. ESPN-source picks are visible in their
+        Insights section but never bulk-eligible per the spec rule
+        'visible but NOT actionable in bulk'. Even when both sources
+        are present, only the green Moneyline bulk button renders."""
         self._seed(self.verified_game, source='odds_api')
         self._seed(self.espn_game, source='espn')
         resp = self.client.get('/mlb/')
-        # Renamed from "Bet All Verified Plays" → "Bet All Moneyline Plays"
-        # to be unambiguous about bet type alongside the new Phase 3
-        # spread/total bulk buttons. The "verified" trust tier is still
-        # reflected via the green source badge + the source_filter param.
         self.assertContains(resp, 'Bet All Moneyline Plays')
-        self.assertContains(resp, 'Bet All ESPN Plays')
+        self.assertNotContains(resp, 'Bet All ESPN Plays')
 
     def test_only_verified_button_renders_when_no_secondary(self):
         self._seed(self.verified_game, source='odds_api')
@@ -3951,6 +3962,169 @@ class Phase4CLVGuardTests(_OpportunityPhase2TestBase):
             )
         new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
         self.assertTrue(new_opp.is_recommended)
+
+
+# ===================================================================== #
+# 2026-04-27 STRICT CORRECTION — recommendation safety tests
+#
+# These tests pin the corrected behavior end-to-end: the recommendation
+# engine, the partition, the bulk-bet filter. They cover the three
+# spec cases explicitly and verify the new gates fire at every layer.
+# ===================================================================== #
+
+
+class CorrectionRecommendationSafetyTests(TestCase):
+    """End-to-end safety tests for the strict correction.
+
+    The bug being fixed: a +1700 longshot with 21% probability and 15pp
+    edge previously got Recommended via the elite-edge override. After
+    this correction it's classified as VALUE — visible for manual
+    decision but NEVER Recommended and NEVER in Bet All.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam, Game as MLBGame,
+        )
+        User = get_user_model()
+        self.user = User.objects.create_user(username='corr-test', password='pw')
+        conf = MLBConf.objects.first() or MLBConf.objects.create(
+            name='Corr', slug='corr',
+        )
+        self.high_rated = MLBTeam.objects.create(
+            name='High', slug='corr-high', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='corr-high',
+        )
+        self.low_rated = MLBTeam.objects.create(
+            name='Low', slug='corr-low', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='corr-low',
+        )
+
+    def _make_game(self, **odds_kwargs):
+        from apps.mlb.models import Game as MLBGame, OddsSnapshot
+        g = MLBGame.objects.create(
+            home_team=self.high_rated, away_team=self.low_rated,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api',
+            external_id=f'corr-{timezone.now().timestamp()}',
+        )
+        defaults = {
+            'captured_at': timezone.now(),
+            'market_home_win_prob': 0.5,
+            'moneyline_home': -110, 'moneyline_away': -110,
+            'odds_source': 'odds_api',
+        }
+        defaults.update(odds_kwargs)
+        OddsSnapshot.objects.create(game=g, **defaults)
+        return g
+
+    def test_case1_low_probability_longshot_is_value_not_recommended(self):
+        """SPEC CASE 1: a longshot bet on the dog gets classified as VALUE.
+
+        Setup: high_rated home (rating 80) vs low_rated away (rating 40)
+        with market that prices away as +1700. The model says away has
+        ~21% probability of winning (small but real chance given the
+        rating gap implies maybe 25%). Edge over devigged market is
+        large but probability < 50% → must be VALUE."""
+        from apps.core.services.recommendations import get_recommendation
+        # Market priced as: home -2000, away +1700 (huge favorite).
+        # Devigged this is roughly home 0.94, away 0.06.
+        # Model with ratings 80 vs 40 says home ~0.85, away ~0.15.
+        # Model picks the side with bigger edge — likely away (+9pp edge
+        # at 15% prob) over home (-9pp at 85% prob).
+        g = self._make_game(
+            moneyline_home=-2000, moneyline_away=+1700,
+            market_home_win_prob=0.94,
+        )
+        rec = get_recommendation('mlb', g, user=None)
+        self.assertIsNotNone(rec)
+        # The pick MUST NOT be Recommended — either it's the away side
+        # (low prob → value) or the home side (longshot in the other
+        # direction). Either way, status must be not_recommended.
+        self.assertEqual(rec.status, 'not_recommended')
+        # If it's the away side (more likely given edge math), classify
+        # as value. If somehow the home side won the edge comparison,
+        # it'd hit the longshot gate (-2000 → |odds|>300).
+        self.assertIn(rec.status_reason, ('value', 'longshot'))
+
+    def test_case2_strong_favorite_with_clean_edge_is_recommended(self):
+        """SPEC CASE 2: probability ~62%, edge ~5pp, odds in range,
+        primary source. All gates clear → Recommended."""
+        from apps.core.services.recommendations import get_recommendation
+        # Market home=-140 implies ~58% home. Model with ratings 80 vs
+        # 40 says home is much higher (~85%). Plenty of edge, prob>55%,
+        # |odds|<=300.
+        g = self._make_game(
+            moneyline_home=-140, moneyline_away=+120,
+            market_home_win_prob=0.58,
+        )
+        rec = get_recommendation('mlb', g, user=None)
+        self.assertEqual(rec.status, 'recommended')
+        self.assertGreaterEqual(rec.confidence_score, 55.0)
+        self.assertLessEqual(abs(rec.odds_american), 300)
+
+    def test_case3_espn_fallback_is_visible_but_not_recommended(self):
+        """SPEC CASE 3: ESPN-source pick. Visible (renders in tile) but
+        is_recommended=False, status_reason='secondary_source', NEVER in
+        bulk endpoint."""
+        from apps.core.services.recommendations import get_recommendation
+        g = self._make_game(
+            moneyline_home=-130, moneyline_away=+110,
+            market_home_win_prob=0.58,
+            odds_source='espn',
+        )
+        rec = get_recommendation('mlb', g, user=None)
+        self.assertEqual(rec.status, 'not_recommended')
+        self.assertEqual(rec.status_reason, 'secondary_source')
+        self.assertTrue(rec.is_secondary)
+
+    def test_value_pick_excluded_from_bulk_bet_endpoint(self):
+        """End-to-end: a value-classified pick must never produce a
+        MockBet via the bulk endpoint. Defense in depth — the engine
+        already sets status='not_recommended', and the bulk eligibility
+        iterator double-checks the value tier."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        from apps.mockbets.models import MockBet
+        # Create a single-game slate with a longshot value pick.
+        self._make_game(
+            moneyline_home=-2000, moneyline_away=+1700,
+            market_home_win_prob=0.94,
+        )
+        result = place_bulk_recommended_bets(self.user, source_filter='all')
+        # Zero placements — the pick was classified as value/longshot.
+        self.assertEqual(result['placed'], 0)
+        self.assertEqual(MockBet.objects.filter(user=self.user).count(), 0)
+
+    def test_recommended_per_slate_capped(self):
+        """assign_tiers caps Recommended status at MAX_RECOMMENDED_PER_SLATE.
+        Anything beyond gets demoted to not_recommended with reason='marginal'."""
+        from apps.core.services.recommendations import (
+            Recommendation, STATUS_RECOMMENDED, MAX_RECOMMENDED_PER_SLATE,
+            assign_tiers,
+        )
+        # Build MAX_RECOMMENDED_PER_SLATE + 2 mock recommendations all
+        # currently Recommended. After assign_tiers the bottom two get
+        # demoted.
+        recs = []
+        for i in range(MAX_RECOMMENDED_PER_SLATE + 2):
+            r = Recommendation(
+                sport='mlb', game=None, bet_type='moneyline', pick='X',
+                line='-110', odds_american=-110,
+                confidence_score=60.0 + i * 0.1,
+                model_edge=5.0 + i * 0.1,
+                model_source='house',
+                tier='standard', status=STATUS_RECOMMENDED, status_reason='',
+            )
+            recs.append(r)
+        assign_tiers(recs)
+        rec_count = sum(1 for r in recs if r.status == STATUS_RECOMMENDED)
+        self.assertEqual(rec_count, MAX_RECOMMENDED_PER_SLATE)
+        marginal_count = sum(
+            1 for r in recs if r.status_reason == 'marginal'
+        )
+        self.assertEqual(marginal_count, 2)
 
 
 class Phase4MoneylineNonRegressionTests(TestCase):

@@ -26,7 +26,13 @@
         🟢 Bet All Moneyline Plays ({{ verified_bulk_count }})
       </button>
       {% endif %}
-      {% if espn_bulk_count %}
+      {# 2026-04-27 strict correction: "Bet All ESPN Plays" button     #}
+      {# REMOVED. Per spec: ESPN-source picks are visible (in their    #}
+      {# Insights section) but never bulk-eligible — they're not       #}
+      {# Recommended at the engine level. The button below is kept as  #}
+      {# a hidden no-op so any external link with that JS handler      #}
+      {# fails silently rather than 404-ing.                           #}
+      {% if False and espn_bulk_count %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--espn"
               onclick="bulkPlaceRecommended('espn', this, {{ espn_bulk_count }})">
         🟡 Bet All ESPN Plays ({{ espn_bulk_count }})
@@ -441,6 +447,47 @@
     {% endif %}
 
     </div>{# /mlb-decision-group--fade #}
+
+    {% comment %}
+      2026-04-27 strict correction — Value Plays section.
+
+      High-edge, low-probability picks (the +1700 underdog with 21%
+      probability and 15pp model edge that previously slipped into
+      Recommended). These are now classified as VALUE: visible for
+      manual decision-making, NEVER recommended, NEVER in Bet All.
+      The orange tint + warning copy makes the risk profile obvious.
+    {% endcomment %}
+    {% if value_games %}
+    <div class="mlb-decision-group mlb-decision-group--value {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F4B0;</span>
+        <span class="mlb-decision-group__title">Value Plays <span class="mlb-decision-group__title-suffix">(Manual Only)</span></span>
+        <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">High edge, low probability &mdash; not recommended, not in Bet All</span>
+      </div>
+      <section class="mlb-section mlb-section--value">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">&#x1F4B0; Value Underdogs</h2>
+          <span class="mlb-section__count">{{ value_games|length }}</span>
+        </div>
+        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">
+          The model sees an edge in price, but the projected win
+          probability is below 50%. These bets can pay off when they hit
+          but are <strong>more likely to lose than win</strong>. Decide for yourself.
+        </p>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for s in value_games %}
+            <div role="listitem">
+              {% if s.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=s %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=s %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    {% endif %}
 
     {% comment %}
       Tiered Intelligence Phase 3 — Promoted Recommendations.

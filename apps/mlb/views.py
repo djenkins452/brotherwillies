@@ -209,6 +209,12 @@ def mlb_hub(request):
         # Blocked recommendations are derived-odds rows. They render
         # ONLY when ?diag=1 is on; the public hub never shows them.
         'blocked_games': decision_sections.get('blocked', []),
+        # 2026-04-27 strict correction: 'value' bucket — high-edge,
+        # low-probability picks (e.g., +1700 underdog with 21% prob,
+        # 15pp model edge). Renders in its own Value Plays section.
+        # NEVER bulk-bet eligible. Defaults to empty list so a page
+        # render with the partition unchanged still works.
+        'value_games': decision_sections.get('value', []),
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,

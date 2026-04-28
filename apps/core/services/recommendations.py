@@ -18,17 +18,33 @@ from apps.core.sport_registry import SPORT_REGISTRY
 # Decision thresholds — units are percentage points (pp) to match the stored
 # `model_edge` scale (e.g. 5.2 means 5.2 pp above market). Mixing units here
 # with decimal probabilities would silently misclassify every recommendation.
-MIN_EDGE = 4.0      # 4 pp — below this, the pick is not recommended at all
+#
+# 2026-04-27 strict correction: lowered MIN_EDGE 4.0 → 3.0 per spec, and
+# added new HARD probability + longshot + source gates. The previous
+# elite-edge override let +1700 longshots with 21% probability sneak into
+# Recommended via "edge >= 8pp short-circuits everything"; that was the
+# bug the correction targets. Edge alone is no longer sufficient — the
+# pick must also be high-probability, reasonably-priced, and primary-sourced.
+MIN_EDGE = 3.0      # 3 pp — minimum edge for any recommended bet
 STRONG_EDGE = 6.0   # 6 pp — edge required to overcome heavy-favorite juice
-ELITE_EDGE = 8.0    # 8 pp — strong enough to always recommend regardless of juice
+ELITE_EDGE = 8.0    # 8 pp — elite-tier marker for UI sorting (no longer
+                    # overrides the probability/longshot/source gates)
 
 # Heavy-favorite juice threshold. American odds at or below this are "expensive"
 # enough that the model needs a strong edge to clear them. -150 ≈ 60% implied.
 HEAVY_FAVORITE_ODDS = -150
 
-# Per-slate guardrail caps elite at MAX_ELITE_PER_SLATE — any extras are
-# downgraded to strong so the "elite" signal stays rare and meaningful.
+# Per-slate guardrails.
 MAX_ELITE_PER_SLATE = 2
+MAX_RECOMMENDED_PER_SLATE = 5  # 2026-04-27: cap total recommendations
+                                 # so a noisy slate can't flood Bet All
+
+# 2026-04-27 strict correction: HARD safety rules — a pick can NEVER be
+# Recommended unless ALL of these clear.
+HARD_MIN_PROBABILITY = 0.50              # absolute floor; below this → never recommended
+MIN_PROBABILITY_FOR_RECOMMENDED = 0.55   # actual recommended threshold (configurable 0.55–0.60)
+MAX_ABS_ODDS_FOR_RECOMMENDED = 300       # avoid extreme longshots / extreme favorites
+                                          # (configurable; 300 keeps normal markets in range)
 
 _TIER_LABELS = {
     'elite': '🔥 High Confidence',
@@ -40,6 +56,11 @@ _TIER_LABELS = {
     # The UI hides these from primary surfaces; staff diagnostics still
     # see them with this label.
     'blocked': '🔒 Blocked (Derived Odds)',
+    # 2026-04-27 correction: 'value' tier marks high-edge low-probability
+    # picks (e.g., +1700 longshot with 15pp model edge). They are NEVER
+    # recommended and NEVER in Bet All — but they render in their own
+    # "Value Plays" section so the user can choose manually.
+    'value': '💰 Value Underdog',
 }
 
 STATUS_RECOMMENDED = 'recommended'
@@ -50,12 +71,12 @@ _STATUS_LABELS = {
     STATUS_NOT_RECOMMENDED: 'Not Recommended',
 }
 
-# Action-oriented CTA copy — what the user should actually do. Keeps the
-# passive "Model Pick" language out of the UI while still being honest when
-# the system does not recommend the bet (then it's a "Model Lean" — here's
-# what the model would pick, but the decision rules say don't bet).
+# Action-oriented CTA copy — what the user should actually do.
+# 2026-04-27: replaced "🔥 HIGH CONFIDENCE RECOMMENDED" with
+# "✅ HIGH PROBABILITY PLAY" per spec — the old copy hid the fact that
+# Recommended now requires probability >= 55% on top of the edge.
 _STATUS_ACTION_LABELS = {
-    STATUS_RECOMMENDED: 'Recommended Bet',
+    STATUS_RECOMMENDED: '✅ High Probability Play',
     STATUS_NOT_RECOMMENDED: 'Model Lean',
 }
 
@@ -64,6 +85,11 @@ _STATUS_REASON_LABELS = {
     'high_juice': 'High Juice Risk',
     'marginal': 'Marginal',
     'derived_odds': 'Derived Odds',
+    # 2026-04-27 correction reasons:
+    'low_probability': 'Low Probability',     # < 55% projected win
+    'longshot': 'Longshot',                   # |odds| > 300
+    'value': 'Value Underdog (Manual Only)',  # high edge / low prob — not bulk-eligible
+    'secondary_source': 'ESPN Source (Not Bulk-Eligible)',
     '': '',
 }
 
@@ -87,24 +113,78 @@ def _raw_tier(model_edge: float) -> str:
     return 'standard'
 
 
-def compute_status(model_edge: float, odds_american: int):
-    """Apply decision rules to determine recommended vs not_recommended.
+def compute_status(model_edge: float, odds_american: int,
+                   *, probability: float = None, is_secondary: bool = False):
+    """Apply decision rules to determine recommended vs not_recommended vs value.
 
-    Evaluation order lets the elite-edge override short-circuit heavy-juice
-    skepticism — a model edge of 10pp against -200 odds is still worth flagging.
+    2026-04-27 strict correction: a positive edge alone is no longer
+    sufficient. The bug the correction targets: a +1700 longshot with
+    21% probability and 15pp edge previously got Recommended via the
+    elite-edge override ("edge >= 8pp short-circuits everything"). Now
+    the gates fire in this priority order, and ALL must clear for a
+    pick to be Recommended:
 
-    Returns (status, status_reason). `status_reason` is '' for recommended picks.
+        1. HARD probability gate (< 50%) — never recommended.
+           Edge >= MIN_EDGE → status='not_recommended', reason='value'
+           Edge < MIN_EDGE → status='not_recommended', reason='low_edge'
+        2. Longshot gate (|odds| > MAX_ABS_ODDS_FOR_RECOMMENDED).
+           Even a 51% pick at +500 is too thin a margin to bulk-bet.
+        3. Source gate (is_secondary=True). ESPN-source picks render
+           but are never Recommended. Bulk-bet excludes them entirely.
+        4. Recommended-probability gate (< MIN_PROBABILITY_FOR_RECOMMENDED,
+           default 55%).
+        5. Edge gate (< MIN_EDGE) — the original bar, still applies.
+        6. Heavy-favorite juice gate (odds <= -150, edge < STRONG_EDGE).
+        7. Otherwise → Recommended.
+
+    Returns (status, status_reason). `status_reason` is '' when status is
+    STATUS_RECOMMENDED. The `probability` arg is decimal 0..1 (use the
+    model's home/away probability for the picked side, NOT confidence_score
+    which is in 0..100). When `probability` is None the function falls
+    back to its pre-correction behavior — keeps backward-compatibility for
+    any external caller; new callers should always pass it.
     """
-    # Rule 3 first — elite edge overrides juice risk
-    if model_edge is not None and model_edge >= ELITE_EDGE:
-        return STATUS_RECOMMENDED, ''
-    # Rule 1 — minimum edge to bother
-    if model_edge is None or model_edge < MIN_EDGE:
+    # Gate 0 — defensive: edge missing means we can't classify at all.
+    if model_edge is None:
         return STATUS_NOT_RECOMMENDED, 'low_edge'
-    # Rule 2 — heavy-favorite juice gate
+
+    # Gate 1 — HARD probability floor. 49% pick at +1700 may have
+    # massive edge mathematically but is not a "high-probability play".
+    # Below 50% means more likely to lose than win — not bulk-eligible.
+    if probability is not None and probability < HARD_MIN_PROBABILITY:
+        if model_edge >= MIN_EDGE:
+            # Real edge but low probability: VALUE classification.
+            # Visible in its own UI section, never recommended, never bulk.
+            return STATUS_NOT_RECOMMENDED, 'value'
+        return STATUS_NOT_RECOMMENDED, 'low_edge'
+
+    # Gate 2 — longshot. Even a 51% projection at +400 is too thin
+    # in absolute terms to support bulk betting. Hard cap on |odds|.
+    if odds_american is not None and abs(odds_american) > MAX_ABS_ODDS_FOR_RECOMMENDED:
+        return STATUS_NOT_RECOMMENDED, 'longshot'
+
+    # Gate 3 — source. ESPN-fallback picks render in their own section
+    # (the existing "ESPN Recommended Bets" surface) but are NEVER
+    # actually Recommended at the engine level. The visible-but-not-
+    # bulk-eligible posture matches the spec.
+    if is_secondary:
+        return STATUS_NOT_RECOMMENDED, 'secondary_source'
+
+    # Gate 4 — Recommended-probability threshold. Defaults to 55%.
+    if probability is not None and probability < MIN_PROBABILITY_FOR_RECOMMENDED:
+        return STATUS_NOT_RECOMMENDED, 'low_probability'
+
+    # Gate 5 — minimum edge to bother (original rule, slightly lowered).
+    if model_edge < MIN_EDGE:
+        return STATUS_NOT_RECOMMENDED, 'low_edge'
+
+    # Gate 6 — heavy-favorite juice. Edge must clear STRONG_EDGE when
+    # the price is heavy. Keeps a 5pp edge against -200 from looking
+    # like a pull-the-trigger pick.
     if odds_american is not None and odds_american <= HEAVY_FAVORITE_ODDS and model_edge < STRONG_EDGE:
         return STATUS_NOT_RECOMMENDED, 'high_juice'
-    # Rule 4 — default
+
+    # All gates clear → Recommended.
     return STATUS_RECOMMENDED, ''
 
 
@@ -273,18 +353,30 @@ def _build_explanation_rows(confidence_score, odds_american, model_edge):
 
 
 def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendation']:
-    """Classify each recommendation and enforce the slate-level elite cap.
+    """Classify each recommendation and enforce slate-level caps.
 
     Mutates tier in place and returns the same list for convenience.
 
-    Rules (post-edge migration):
+    Rules:
       - Raw tier from model_edge (_raw_tier). Edge in pp matches stored scale.
+      - PRESERVE special tiers (blocked, value) that the candidate function
+        already set — they're decided by stricter rules upstream and a
+        re-classify here would erase the override.
       - If more than MAX_ELITE_PER_SLATE qualify as elite, only the top N by
         (model_edge desc, confidence_score desc) keep elite; the rest drop to
-        strong. Edge is the primary ranking signal per the selection spec.
+        strong.
+      - 2026-04-27 strict correction: cap RECOMMENDED status at
+        MAX_RECOMMENDED_PER_SLATE per slate. If more picks clear the gates,
+        keep the top N (by edge, then probability) and demote the rest to
+        not_recommended with reason='marginal'. Prevents a noisy slate
+        from flooding Bet All with marginal-edge plays.
     """
+    # Preserve special-tier markers set upstream (blocked / value) — only
+    # re-classify the standard / strong / elite tiers from edge math.
+    SPECIAL_TIERS = {'blocked', 'value'}
     for rec in recommendations:
-        rec.tier = _raw_tier(rec.model_edge)
+        if rec.tier not in SPECIAL_TIERS:
+            rec.tier = _raw_tier(rec.model_edge)
 
     elites = [r for r in recommendations if r.tier == 'elite']
     if len(elites) > MAX_ELITE_PER_SLATE:
@@ -294,6 +386,23 @@ def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendatio
         )
         for demoted in elites[MAX_ELITE_PER_SLATE:]:
             demoted.tier = 'strong'
+
+    # 2026-04-27 correction: hard cap on Recommended count per slate.
+    # Counts only picks that currently have status='recommended' — leaves
+    # value / blocked / not_recommended alone. Demotion mode: flip
+    # status to 'not_recommended' with reason='marginal' so the UI can
+    # render them in the dimmed not-recommended section.
+    recommendeds = [r for r in recommendations if r.status == STATUS_RECOMMENDED]
+    if len(recommendeds) > MAX_RECOMMENDED_PER_SLATE:
+        # Rank by edge, then by probability (confidence_score is %), so
+        # the demotion order is deterministic.
+        recommendeds.sort(
+            key=lambda r: (r.model_edge or 0, r.confidence_score or 0),
+            reverse=True,
+        )
+        for demoted in recommendeds[MAX_RECOMMENDED_PER_SLATE:]:
+            demoted.status = STATUS_NOT_RECOMMENDED
+            demoted.status_reason = 'marginal'
 
     return recommendations
 
@@ -350,28 +459,41 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         pick_side = 'away'
 
     model_edge_pp = round(edge * 100, 1)
-    status, reason = compute_status(model_edge_pp, pick_odds)
-    tier = _raw_tier(model_edge_pp)
-    is_secondary = False
 
-    # Source-Aware Betting trust-tier guardrail.
-    # Decided AFTER the existing math runs so we never alter edge / status
-    # / tier from inside the math itself — we only OVERLAY a stricter
-    # decision when the underlying snapshot fails the trust check.
-    #
-    #   tier='invalid'    → block: not_recommended + reason=derived_odds.
-    #                       Tier becomes 'blocked' (UI hides outside diags).
-    #   tier='secondary'  → preserve recommendation; flip is_secondary=True
-    #                       so displayed_confidence × 0.85 + UI badge fires.
-    #   tier='primary'    → no change; behavior identical to pre-guardrail.
+    # 2026-04-27 strict correction: source-trust check moved BEFORE
+    # compute_status so the source-quality flag can feed into the
+    # decision rules (ESPN/secondary picks are never Recommended).
     from apps.core.services.odds_trust import get_odds_trust_tier
     trust = get_odds_trust_tier(odds)
-    if trust == 'invalid':
+    is_secondary = (trust == 'secondary')
+    is_blocked_source = (trust == 'invalid')
+
+    # Pass probability + secondary flag into compute_status so the new
+    # gates fire (probability >= 55%, |odds| <= 300, source primary,
+    # value-tier split for high-edge / low-prob picks).
+    status, reason = compute_status(
+        model_edge_pp, pick_odds,
+        probability=confidence,        # decimal 0..1 — picked-side prob
+        is_secondary=is_secondary,
+    )
+    tier = _raw_tier(model_edge_pp)
+
+    # Tier overrides for blocked / value / secondary classifications.
+    if is_blocked_source:
+        # Derived-odds rows: forced to a separate Blocked tier so the
+        # UI can hide them entirely from public surfaces.
         status = STATUS_NOT_RECOMMENDED
         reason = 'derived_odds'
         tier = 'blocked'
-    elif trust == 'secondary':
-        is_secondary = True
+    elif reason == 'value':
+        # 2026-04-27 correction: high-edge low-probability picks get
+        # their own tier so the UI can render them in a "Value Plays"
+        # section separate from the green Recommended cohort.
+        tier = 'value'
+    # is_secondary picks keep their natural tier (elite/strong/standard)
+    # so the existing ESPN section's sorting still works — they just
+    # carry status='not_recommended' with reason='secondary_source'
+    # which the bulk-bet filter excludes.
 
     # Movement signal — purely additive. The model still drives the pick,
     # the tier, and the recommendation status. Movement only affects the

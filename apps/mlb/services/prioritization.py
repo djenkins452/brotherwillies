@@ -772,6 +772,10 @@ def partition_games_by_decision(signals: list[GameSignals]) -> dict:
     """
     elite, recommended, recommended_espn = [], [], []
     not_recommended, unrated, blocked = [], [], []
+    # 2026-04-27 strict correction: 'value' bucket holds high-edge low-
+    # probability picks. Renders in its own "Value Plays" section
+    # separately from Recommended. Never bulk-bet eligible.
+    value = []
     for s in signals:
         rec = s.recommendation
         if rec is None:
@@ -782,21 +786,38 @@ def partition_games_by_decision(signals: list[GameSignals]) -> dict:
         if getattr(rec, 'status_reason', '') == 'derived_odds' or rec.tier == 'blocked':
             blocked.append(s)
             continue
+        # 2026-04-27: value tier — high edge, low probability. Goes to
+        # its own bucket, not Recommended, never Bet All. Belt-and-
+        # suspenders check on BOTH the tier AND the status_reason since
+        # either being set marks a value pick.
+        if rec.tier == 'value' or getattr(rec, 'status_reason', '') == 'value':
+            value.append(s)
+            continue
         is_secondary = bool(getattr(rec, 'is_secondary', False))
+        # 2026-04-27 strict correction: ESPN-source picks no longer get
+        # status='recommended' (the source gate in compute_status sets
+        # them to 'not_recommended' with reason='secondary_source').
+        # Route them to recommended_espn anyway so they render in the
+        # existing ESPN-Insights section — visible but not bulk-eligible.
+        # The bulk Bet All ESPN button is removed at the template layer.
+        if (
+            getattr(rec, 'status_reason', '') == 'secondary_source'
+            or (rec.status == 'recommended' and is_secondary)
+        ):
+            recommended_espn.append(s)
+            continue
         if rec.tier == 'elite' and not is_secondary:
             # Top Plays are verified-only by spec — an ESPN-sourced
             # "elite" tier still falls into the ESPN recommended bucket
             # so users never see a Top Play they can't fully trust.
             elite.append(s)
         elif rec.status == 'recommended':
-            if is_secondary:
-                recommended_espn.append(s)
-            else:
-                recommended.append(s)
+            recommended.append(s)
         else:
             not_recommended.append(s)
 
-    for bucket in (elite, recommended, recommended_espn, not_recommended, unrated, blocked):
+    for bucket in (elite, recommended, recommended_espn,
+                   not_recommended, unrated, blocked, value):
         bucket.sort(key=_decision_sort_key)
     return {
         'elite': elite,
@@ -805,4 +826,5 @@ def partition_games_by_decision(signals: list[GameSignals]) -> dict:
         'not_recommended': not_recommended,
         'unrated': unrated,
         'blocked': blocked,
+        'value': value,
     }

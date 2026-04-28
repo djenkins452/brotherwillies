@@ -76,11 +76,33 @@ def _eligible_games_for_user(user, sport: str = 'mlb', tier_filter: str = 'all',
         g for g in upcoming
         if timezone.localtime(g.first_pitch).date() == today_local
     ]
+    # 2026-04-27 strict correction: hard safety bars on top of the
+    # existing source/tier filters. A pick must independently pass
+    # ALL these to be bulk-eligible — defense in depth so a future
+    # engine bug can't leak a value-tier or low-probability pick.
+    from apps.core.services.recommendations import (
+        HARD_MIN_PROBABILITY, MIN_PROBABILITY_FOR_RECOMMENDED,
+        MAX_ABS_ODDS_FOR_RECOMMENDED,
+    )
+
     for game in upcoming:
         rec = get_recommendation('mlb', game, user)
         if rec is None:
             continue
         if rec.status != 'recommended':
+            continue
+        # 2026-04-27: hard safety. Belt-and-suspenders even though
+        # compute_status enforces these — the bulk path must never
+        # depend on upstream classification staying perfect.
+        if rec.tier == 'value' or getattr(rec, 'status_reason', '') == 'value':
+            continue
+        # Probability gate (decimal stored as % in confidence_score).
+        prob_pct = getattr(rec, 'confidence_score', None)
+        if prob_pct is None or prob_pct < (MIN_PROBABILITY_FOR_RECOMMENDED * 100):
+            continue
+        # Longshot gate.
+        odds = getattr(rec, 'odds_american', None)
+        if odds is not None and abs(odds) > MAX_ABS_ODDS_FOR_RECOMMENDED:
             continue
         # Source-Aware Betting: derived odds NEVER bulk-bet, regardless
         # of source_filter. Defense in depth — the recommendation engine

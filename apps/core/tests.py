@@ -228,39 +228,122 @@ class DecisionRuleTests(TestCase):
     """Decision rules — the status/reason assignment used by the UI filter banding."""
 
     def test_low_edge_is_not_recommended(self):
-        status, reason = compute_status(model_edge=3.5, odds_american=+100)
+        # 2pp edge < new MIN_EDGE (3.0). Note: probability gate is None
+        # here so the function falls through to Gate 5 (edge gate).
+        status, reason = compute_status(model_edge=2.5, odds_american=+100)
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
         self.assertEqual(reason, 'low_edge')
 
     def test_exactly_min_edge_is_recommended(self):
-        """4.0pp is the threshold — at the boundary we recommend (clears Rule 1)."""
+        """3.0pp is the new threshold — at the boundary we recommend
+        (clears the edge gate). With no probability passed, the
+        probability gates short-circuit and don't block."""
         status, reason = compute_status(model_edge=MIN_EDGE, odds_american=+100)
         self.assertEqual(status, STATUS_RECOMMENDED)
         self.assertEqual(reason, '')
 
     def test_heavy_favorite_with_weak_edge_is_not_recommended(self):
-        """-150 odds + edge below 6pp → juice gate rejects it."""
+        """-200 odds + edge below 6pp → juice gate rejects it.
+        Important: |200| < 300 so the longshot gate doesn't trip."""
         status, reason = compute_status(model_edge=4.5, odds_american=-200)
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
         self.assertEqual(reason, 'high_juice')
 
     def test_heavy_favorite_with_strong_edge_is_recommended(self):
-        """-300 odds but edge clears STRONG_EDGE → Rule 2 does not trigger."""
-        status, reason = compute_status(model_edge=STRONG_EDGE, odds_american=-300)
+        """-150 odds but edge clears STRONG_EDGE → juice gate skipped.
+        2026-04-27: changed from -300 to -150 because the new longshot
+        gate now caps |odds| <= 300 hard. -150 still tests the juice
+        rule (it's the heavy-favorite threshold itself)."""
+        status, reason = compute_status(
+            model_edge=STRONG_EDGE, odds_american=-150,
+            probability=0.65,
+        )
         self.assertEqual(status, STATUS_RECOMMENDED)
         self.assertEqual(reason, '')
 
-    def test_elite_edge_overrides_juice_rule(self):
-        """10pp edge against -500 odds is still recommended — elite override."""
+    def test_elite_edge_no_longer_overrides_safety_gates(self):
+        """2026-04-27 strict correction: 10pp edge against -500 odds is
+        NO LONGER auto-recommended. The longshot gate (|odds| > 300)
+        now blocks even elite-edge picks. Previously the elite-edge
+        override let +1700 longshots with 21% probability into
+        Recommended — the bug the correction targets."""
         status, reason = compute_status(model_edge=10.0, odds_american=-500)
-        self.assertEqual(status, STATUS_RECOMMENDED)
-        self.assertEqual(reason, '')
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'longshot')
 
     def test_favorite_at_boundary_still_gated(self):
         """Odds of exactly -150 (HEAVY_FAVORITE_ODDS) qualify as heavy favorite."""
-        status, reason = compute_status(model_edge=5.0, odds_american=HEAVY_FAVORITE_ODDS)
+        status, reason = compute_status(
+            model_edge=5.0, odds_american=HEAVY_FAVORITE_ODDS,
+            probability=0.62,
+        )
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
         self.assertEqual(reason, 'high_juice')
+
+    # ---- 2026-04-27 strict correction: new tests for the spec cases ----
+
+    def test_correction_case1_high_edge_low_probability_is_value(self):
+        """SPEC CASE 1: probability 21%, edge 15pp, odds +1700.
+        This is the bug the correction targets. Expected:
+            status='not_recommended', reason='value'
+        Result: NEVER appears in Recommended; goes to Value Plays."""
+        status, reason = compute_status(
+            model_edge=15.0, odds_american=+1700,
+            probability=0.21,
+        )
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'value')
+
+    def test_correction_case2_strong_favorite_recommended(self):
+        """SPEC CASE 2: probability 62%, edge 5pp, odds -140, source=primary.
+        All gates clear → Recommended."""
+        status, reason = compute_status(
+            model_edge=5.0, odds_american=-140,
+            probability=0.62, is_secondary=False,
+        )
+        self.assertEqual(status, STATUS_RECOMMENDED)
+        self.assertEqual(reason, '')
+
+    def test_correction_case3_espn_source_not_recommended(self):
+        """SPEC CASE 3: probability 58%, edge 6pp, source=ESPN.
+        Source gate blocks → status='not_recommended', reason='secondary_source'.
+        Visible but never bulk-eligible."""
+        status, reason = compute_status(
+            model_edge=6.0, odds_american=-130,
+            probability=0.58, is_secondary=True,
+        )
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'secondary_source')
+
+    def test_correction_low_probability_blocks_even_with_strong_edge(self):
+        """49% probability fails the HARD floor (50%). Doesn't matter
+        how much edge the model claims — never recommended."""
+        status, reason = compute_status(
+            model_edge=8.0, odds_american=+150,
+            probability=0.49,
+        )
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'value')
+
+    def test_correction_probability_between_50_and_55_blocks(self):
+        """Above HARD floor but below the 55% recommended threshold.
+        Status not_recommended, reason='low_probability'. NOT 'value'
+        since the prob is above the value threshold (>= 50%)."""
+        status, reason = compute_status(
+            model_edge=4.0, odds_american=+120,
+            probability=0.52,
+        )
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'low_probability')
+
+    def test_correction_longshot_blocks_recommended(self):
+        """Probability >= 55%, edge healthy, but |odds| > 300 → blocked."""
+        status, reason = compute_status(
+            model_edge=5.0, odds_american=+350,
+            probability=0.58,
+        )
+        self.assertEqual(status, STATUS_NOT_RECOMMENDED)
+        self.assertEqual(reason, 'longshot')
 
     def test_recommendation_dataclass_carries_status(self):
         """Recommendations built by get_recommendation include the computed status."""
