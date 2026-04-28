@@ -1547,6 +1547,51 @@ class BulkActionsTests(TestCase):
         # Today's eligible game can still receive its bet.
         self.assertGreaterEqual(summary['placed'], 0)
 
+    def test_bulk_place_respects_max_recommended_per_slate_cap(self):
+        """Regression for the user-reported issue: 'Bet All Moneyline
+        Plays' was placing more than the 5 visible on screen.
+
+        The slate cap (MAX_RECOMMENDED_PER_SLATE=5) is applied via
+        assign_tiers() in the MLB hub view — that's what makes the
+        button label say "(5)" even when more games would otherwise
+        clear the gates. But the bulk endpoint here calls
+        get_recommendation per game independently and the fresh
+        Recommendation instances had not been through assign_tiers,
+        so without an explicit cap on the bulk path, the endpoint
+        would place more bets than the button label implied.
+
+        This test seeds 7 today's games each with a strong
+        recommendation. Asserts that the placed count caps at
+        MAX_RECOMMENDED_PER_SLATE.
+        """
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        from apps.core.services.recommendations import MAX_RECOMMENDED_PER_SLATE
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        conf = MLBConf.objects.first()
+
+        # Build (cap + 2) eligible games. Distinct team pairs per game
+        # so they all qualify for separate recommendations.
+        n_games = MAX_RECOMMENDED_PER_SLATE + 2
+        for i in range(n_games):
+            home = MLBTeam.objects.create(
+                name=f'CapHome{i}', slug=f'cap-home-{i}', conference=conf,
+                rating=80, source='mlb_stats_api', external_id=f'cap-home-{i}',
+            )
+            away = MLBTeam.objects.create(
+                name=f'CapAway{i}', slug=f'cap-away-{i}', conference=conf,
+                rating=40, source='mlb_stats_api', external_id=f'cap-away-{i}',
+            )
+            g = self._game(hours_out=2, t1=home, t2=away,
+                            ext=f'cap-game-{i}')
+            self._add_odds(g)
+
+        summary = place_bulk_recommended_bets(self.user)
+        self.assertLessEqual(
+            summary['placed'], MAX_RECOMMENDED_PER_SLATE,
+            f"bulk place must cap at MAX_RECOMMENDED_PER_SLATE "
+            f"({MAX_RECOMMENDED_PER_SLATE}), got {summary['placed']}",
+        )
+
     def test_bulk_place_skips_when_recommendation_is_not_recommended(self):
         """If decision rules say not_recommended, bulk-place skips. Use a mock
         so the test doesn't depend on the model's exact prob calculation."""
