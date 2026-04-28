@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -48,3 +50,46 @@ class ModelResultSnapshot(models.Model):
 
     def __str__(self):
         return f"Snapshot for {self.game}"
+
+
+class BacktestRun(models.Model):
+    """One execution of the backtesting framework — settings + summary metrics.
+
+    Designed to be written once per run and read many times. Detail-level
+    breakdowns (per edge bucket, calibration curve, CLV stats, etc.) all
+    live inside `summary` as a JSON blob. Rationale: the data is small,
+    the consumers are admin/debug views, and a JSON column keeps the
+    schema simple — no need to normalize aggregations the UI doesn't query.
+
+    `notes` flags methodology caveats — most importantly, when reconstructions
+    fall back to recomputing with current ratings (because a historical
+    ModelResultSnapshot wasn't captured at the time), the run is marked
+    "approximate" so consumers know not to trust it as a true OOS backtest.
+    """
+    SPORT_CHOICES = [
+        ('all', 'All sports'),
+        ('cfb', 'CFB'),
+        ('cbb', 'CBB'),
+        ('mlb', 'MLB'),
+        ('college_baseball', 'College Baseball'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sport = models.CharField(max_length=20, choices=SPORT_CHOICES, default='all')
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    games_evaluated = models.IntegerField(default=0)
+    games_skipped = models.IntegerField(default=0)
+    is_approximate = models.BooleanField(
+        default=False,
+        help_text='True when any games were reconstructed using current '
+                  'ratings instead of stored ModelResultSnapshot.house_prob.',
+    )
+    summary = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"BacktestRun({self.sport}, {self.created_at:%Y-%m-%d %H:%M})"

@@ -557,3 +557,32 @@ def ai_insight_view(request, sport, game_id):
         'content': result['content'],
         'meta': result['meta'],
     })
+
+
+def backtest_results(request):
+    """Staff-only debug page showing the latest BacktestRun summary.
+
+    Intentionally minimal — surfaces the JSON aggregations from the most
+    recent run plus a link to history. Operators trigger new runs from the
+    CLI (`python manage.py run_backtest`); this view is read-only.
+    """
+    if not request.user.is_authenticated or not request.user.is_staff:
+        from django.http import HttpResponseForbidden
+        return HttpResponseForbidden('Staff access required.')
+
+    from apps.analytics.models import BacktestRun
+
+    sport_filter = request.GET.get('sport') or ''
+    runs = BacktestRun.objects.all()
+    if sport_filter:
+        runs = runs.filter(sport=sport_filter)
+
+    latest = runs.first()
+    history = list(BacktestRun.objects.all()[:10])
+
+    return render(request, 'core/backtest_results.html', {
+        'latest': latest,
+        'history': history,
+        'sport_filter': sport_filter,
+        'nav_active': '',
+    })

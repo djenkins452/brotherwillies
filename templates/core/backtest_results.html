@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Backtest Results | Brother Willies{% endblock %}
+
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <h1 style="margin-bottom: 0.5rem;">Backtest Results</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Staff-only debug view. New runs via
+        <code>python manage.py run_backtest [--sport &lt;s&gt;] [--start YYYY-MM-DD] [--end YYYY-MM-DD]</code>.
+    </p>
+
+    <form method="get" style="margin-bottom: 1.25rem;">
+        <label for="sport" style="margin-right: 0.5rem;">Sport filter:</label>
+        <select name="sport" id="sport" onchange="this.form.submit()" style="padding: 0.4rem;">
+            <option value="" {% if not sport_filter %}selected{% endif %}>All runs</option>
+            <option value="all" {% if sport_filter == 'all' %}selected{% endif %}>all</option>
+            <option value="cfb" {% if sport_filter == 'cfb' %}selected{% endif %}>cfb</option>
+            <option value="cbb" {% if sport_filter == 'cbb' %}selected{% endif %}>cbb</option>
+            <option value="mlb" {% if sport_filter == 'mlb' %}selected{% endif %}>mlb</option>
+            <option value="college_baseball" {% if sport_filter == 'college_baseball' %}selected{% endif %}>college_baseball</option>
+        </select>
+    </form>
+
+    {% if not latest %}
+        <div style="padding: 1rem; background: #2a2a2a; border-radius: 6px;">
+            No backtest runs yet. Run <code>python manage.py run_backtest</code> to create one.
+        </div>
+    {% else %}
+        <div style="padding: 1rem; background: #1f1f1f; border: 1px solid #333; border-radius: 6px; margin-bottom: 1.5rem;">
+            <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.9rem;">
+                <div><strong>Run ID:</strong> {{ latest.id }}</div>
+                <div><strong>Created:</strong> {{ latest.created_at|date:"Y-m-d H:i" }}</div>
+                <div><strong>Sport:</strong> {{ latest.sport }}</div>
+                <div><strong>Range:</strong> {{ latest.start_date|default:"—" }} → {{ latest.end_date|default:"—" }}</div>
+                <div><strong>Evaluated:</strong> {{ latest.games_evaluated }}</div>
+                <div><strong>Skipped:</strong> {{ latest.games_skipped }}</div>
+            </div>
+            {% if latest.is_approximate %}
+                <div style="margin-top: 0.75rem; padding: 0.5rem; background: #3a2a1a; border-left: 3px solid #d97706; font-size: 0.85rem;">
+                    ⚠️ Approximate run — some games reconstructed from current ratings.
+                </div>
+            {% endif %}
+            {% if latest.notes %}
+                <pre style="margin-top: 0.75rem; white-space: pre-wrap; font-size: 0.8rem; color: #aaa;">{{ latest.notes }}</pre>
+            {% endif %}
+        </div>
+
+        {% with summary=latest.summary %}
+            {% include "core/_backtest_section.html" with title="Overall (every evaluated game)" data=summary.overall %}
+            {% include "core/_backtest_section.html" with title="Recommended only (status=recommended)" data=summary.overall_recommended_only %}
+
+            <h2 style="margin-top: 1.5rem;">By Sport</h2>
+            {% include "core/_backtest_table.html" with rows=summary.by_sport %}
+
+            <h2 style="margin-top: 1.5rem;">By Edge Bucket (pp)</h2>
+            {% include "core/_backtest_table.html" with rows=summary.by_edge_bucket %}
+
+            <h2 style="margin-top: 1.5rem;">By Tier</h2>
+            {% include "core/_backtest_table.html" with rows=summary.by_tier %}
+
+            <h2 style="margin-top: 1.5rem;">Favorite vs Underdog</h2>
+            {% include "core/_backtest_table.html" with rows=summary.by_favorite_underdog %}
+
+            <h2 style="margin-top: 1.5rem;">Home vs Away Pick</h2>
+            {% include "core/_backtest_table.html" with rows=summary.by_home_away %}
+
+            <h2 style="margin-top: 1.5rem;">Calibration Curve (predicted prob bucket)</h2>
+            <p style="color: #888; font-size: 0.85rem;">
+                A well-calibrated model has avg_predicted_prob ≈ win_rate within each bucket.
+            </p>
+            {% include "core/_backtest_table.html" with rows=summary.calibration_curve %}
+        {% endwith %}
+
+        {% if history|length > 1 %}
+            <h2 style="margin-top: 2rem;">Recent Runs</h2>
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                <thead>
+                    <tr style="background: #1f1f1f; text-align: left;">
+                        <th style="padding: 0.4rem;">When</th>
+                        <th style="padding: 0.4rem;">Sport</th>
+                        <th style="padding: 0.4rem;">Range</th>
+                        <th style="padding: 0.4rem;">Evaluated</th>
+                        <th style="padding: 0.4rem;">Approx</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in history %}
+                        <tr style="border-top: 1px solid #2a2a2a;">
+                            <td style="padding: 0.4rem;">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                            <td style="padding: 0.4rem;">{{ r.sport }}</td>
+                            <td style="padding: 0.4rem;">{{ r.start_date|default:"—" }} → {{ r.end_date|default:"—" }}</td>
+                            <td style="padding: 0.4rem;">{{ r.games_evaluated }}</td>
+                            <td style="padding: 0.4rem;">{% if r.is_approximate %}yes{% else %}no{% endif %}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

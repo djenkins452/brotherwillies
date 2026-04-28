@@ -7,4 +7,5 @@ urlpatterns = [
     path('', views.home, name='home'),
     path('lobby/', views.value_board, name='value_board'),
     path('api/ai-insight/<str:sport>/<uuid:game_id>/', views.ai_insight_view, name='ai_insight'),
+    path('backtest/', views.backtest_results, name='backtest_results'),
 ]

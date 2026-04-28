@@ -1,0 +1,45 @@
+{% load tz_extras %}
+{% comment %}
+Generic breakdown table. `rows` is a dict[label -> metrics dict].
+Metrics are stored in decimal form (0.06 = 6%); decimal_pct converts to display.
+{% endcomment %}
+{% if not rows %}
+    <div style="color: #888; font-size: 0.85rem; padding: 0.5rem 0;">No data.</div>
+{% else %}
+<div style="overflow-x: auto;">
+<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+    <thead>
+        <tr style="background: #1f1f1f; text-align: left;">
+            <th style="padding: 0.4rem;">Bucket</th>
+            <th style="padding: 0.4rem;">Sample</th>
+            <th style="padding: 0.4rem;">W</th>
+            <th style="padding: 0.4rem;">L</th>
+            <th style="padding: 0.4rem;">Win %</th>
+            <th style="padding: 0.4rem;">ROI %</th>
+            <th style="padding: 0.4rem;">Avg edge</th>
+            <th style="padding: 0.4rem;">Avg pred</th>
+            <th style="padding: 0.4rem;">CLV n</th>
+            <th style="padding: 0.4rem;">Avg CLV</th>
+            <th style="padding: 0.4rem;">+CLV %</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for label, m in rows.items %}
+            <tr style="border-top: 1px solid #2a2a2a;">
+                <td style="padding: 0.4rem;"><strong>{{ label }}</strong></td>
+                <td style="padding: 0.4rem;">{{ m.sample }}</td>
+                <td style="padding: 0.4rem;">{{ m.wins }}</td>
+                <td style="padding: 0.4rem;">{{ m.losses }}</td>
+                <td style="padding: 0.4rem;">{{ m.win_rate|decimal_pct }}</td>
+                <td style="padding: 0.4rem;">{{ m.roi_pct|decimal_pct }}</td>
+                <td style="padding: 0.4rem;">{{ m.avg_edge|decimal_pct }}</td>
+                <td style="padding: 0.4rem;">{{ m.avg_predicted_prob|decimal_pct }}</td>
+                <td style="padding: 0.4rem;">{{ m.clv_sample }}</td>
+                <td style="padding: 0.4rem;">{{ m.avg_clv|decimal_signed }}</td>
+                <td style="padding: 0.4rem;">{{ m.positive_clv_rate|decimal_pct }}</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}

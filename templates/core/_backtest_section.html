@@ -1,0 +1,25 @@
+{% load tz_extras %}
+{% comment %}
+Single-row summary card. `data` is a metrics dict from _BucketAccumulator.to_dict.
+Metrics are stored in decimal form (0.06 = 6%); decimal_pct converts to display.
+{% endcomment %}
+<div style="margin-bottom: 1rem; padding: 0.75rem 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+    <div style="font-weight: 600; margin-bottom: 0.4rem;">{{ title }}</div>
+    {% if not data.sample %}
+        <div style="color: #888; font-size: 0.85rem;">No data.</div>
+    {% else %}
+        <div style="display: flex; flex-wrap: wrap; gap: 1.2rem; font-size: 0.85rem;">
+            <div><span style="color: #888;">Sample:</span> {{ data.sample }}</div>
+            <div><span style="color: #888;">W/L:</span> {{ data.wins }}/{{ data.losses }}</div>
+            <div><span style="color: #888;">Win rate:</span> {{ data.win_rate|decimal_pct }}</div>
+            <div><span style="color: #888;">ROI:</span> {{ data.roi_pct|decimal_pct }}</div>
+            <div><span style="color: #888;">Avg edge:</span> {{ data.avg_edge|decimal_pct }}</div>
+            <div><span style="color: #888;">Avg predicted:</span> {{ data.avg_predicted_prob|decimal_pct }}</div>
+            {% if data.clv_sample %}
+                <div><span style="color: #888;">CLV sample:</span> {{ data.clv_sample }}</div>
+                <div><span style="color: #888;">Avg CLV:</span> {{ data.avg_clv|decimal_signed }}</div>
+                <div><span style="color: #888;">+CLV rate:</span> {{ data.positive_clv_rate|decimal_pct }}</div>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>

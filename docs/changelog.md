@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-04-27 - Phase 1: Backtesting & Calibration Framework
+
+**Summary:** Added a backtesting service that reconstructs historical moneyline recommendations and aggregates win rate, ROI, calibration, and CLV across multiple breakdowns. Foundation for measuring whether the model actually has edge before adding new signals.
+
+### What's new
+- **`apps/analytics/models.py::BacktestRun`** — one row per backtest execution with all aggregations in a `summary` JSONField. Stable shape across runs (every sport / edge bucket / tier / fav-vs-dog / home-vs-away pre-populated).
+- **`apps/core/services/backtesting_service.py`** — incremental aggregator (`_BacktestAggregator`) that streams `GameEvaluation`s and computes per-bucket metrics without holding a list of all evaluations in memory.
+- **`python manage.py run_backtest [--sport <s>] [--start YYYY-MM-DD] [--end YYYY-MM-DD]`** — CLI to trigger runs. Idempotent w.r.t. source data; each call creates a new BacktestRun.
+- **Staff-only `/backtest/`** — minimal debug view showing the latest run summary + recent run history. Linked from the staff dropdown next to MLB Diagnostic.
+
+### Validation guarantees
+1. Game-time data only — closing odds AND stored house probability are filtered with `captured_at < game_time`. No leakage from post-game writes.
+2. Approximate flag — runs that fall back to recomputing predictions with current ratings are tagged `is_approximate=True` with caveats in `notes`.
+3. One pick per game — final pre-game ModelResultSnapshot is used for prediction; aggregator dedupes by (sport, game_id).
+4. ROI = profit / total_stake (not win rate).
+5. Edge stored as decimal (0.06 = 6%).
+6. Calibration buckets: strict `{count, predicted, actual}` shape, decimal labels (`0.5-0.55` ... `0.95-1.0`), zero-filled when empty.
+7. **CLV source guard** — reuses the existing `OddsSnapshot.odds_source` field added by the Provider Health Reliability work. CLV is only computed when BOTH opening and closing snapshots have `odds_source='odds_api'`. ESPN-embedded and cached/manual odds are excluded; their snapshots produce `clv_decimal=None` rather than misleading numbers.
+8. Incremental aggregation — single-pass over the evaluation stream.
+9. Stable JSON shape — every breakdown pre-populates all known labels at construction time, so consumers always see the same keys.
+
+### Files
+- New: `apps/core/services/backtesting_service.py`, `apps/core/test_backtesting_service.py`, `apps/datahub/management/commands/run_backtest.py`, `templates/core/backtest_results.html` (+ `_backtest_section.html`, `_backtest_table.html`)
+- Modified: `apps/analytics/models.py` (BacktestRun), `apps/core/views.py`, `apps/core/urls.py`, `apps/core/templatetags/tz_extras.py` (decimal_pct/decimal_signed filters), `templates/base.html` (staff link)
+- Migrations: `analytics/0004_backtestrun`
+
+### Tests
+40 new tests in `apps.core.test_backtesting_service` covering edge bucket boundaries, calibration shape, ROI math, incremental aggregation, source guard for CLV, and stable JSON shape.
+
+---
+
 ## 2026-04-27 - Tiered Intelligence Phase 3: Promoted Recommendations (Proven Edge)
 
 **Summary:** Phase 3 graduates statistically proven Spread/Total Leans into true Recommendations — with break-even display, source-safety guards, and individually-active bulk-bet buttons. Three commits: data layer (`7d0c149`), UI + bulk-bet (`223a005`), docs (this commit). Both prior Moneyline non-regression sentinels still pass; a new Phase 3 sentinel locks down the promotion classifier + break-even helper too.
