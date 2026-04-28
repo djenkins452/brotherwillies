@@ -206,26 +206,16 @@ def place_bulk_recommended_bets(
             skipped_no_odds += 1
 
     # Second pass — actually place the bets, transactional.
+    # No slate-level count cap: every game that clears the per-pick
+    # gates in `_eligible_games_for_user` gets a bet. Per product
+    # direction (2026-04-28), the per-pick gates ARE the safety bar
+    # (probability ≥ 55%, |odds| ≤ 300, edge ≥ 3pp, primary source,
+    # no value-tier, no derived); a "noisy" slate of legit
+    # recommendations is fine — the user wants visibility into all
+    # of them, not an arbitrary count ceiling.
     eligible = list(_eligible_games_for_user(
         user, sport=sport, tier_filter=tier_filter, source_filter=source_filter,
     ))
-
-    # 2026-04-27 strict correction: enforce MAX_RECOMMENDED_PER_SLATE at
-    # the bulk-bet path. The UI's button label already reflects this cap
-    # (verified_bulk_count goes through assign_tiers in the view, which
-    # demotes anything beyond the top N to status='not_recommended' with
-    # reason='marginal'). But the bulk endpoint here calls
-    # get_recommendation per game independently — those fresh
-    # Recommendation instances have NOT been through assign_tiers, so
-    # without this explicit cap the endpoint would place more bets than
-    # the button label implies. Sort tiebreaker mirrors assign_tiers
-    # (model_edge desc, then confidence_score desc).
-    from apps.core.services.recommendations import MAX_RECOMMENDED_PER_SLATE
-    eligible.sort(
-        key=lambda gr: (gr[1].model_edge or 0, gr[1].confidence_score or 0),
-        reverse=True,
-    )
-    eligible = eligible[:MAX_RECOMMENDED_PER_SLATE]
 
     with transaction.atomic():
         for game, rec in eligible:

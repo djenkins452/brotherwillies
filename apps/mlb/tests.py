@@ -4097,18 +4097,19 @@ class CorrectionRecommendationSafetyTests(TestCase):
         self.assertEqual(result['placed'], 0)
         self.assertEqual(MockBet.objects.filter(user=self.user).count(), 0)
 
-    def test_recommended_per_slate_capped(self):
-        """assign_tiers caps Recommended status at MAX_RECOMMENDED_PER_SLATE.
-        Anything beyond gets demoted to not_recommended with reason='marginal'."""
+    def test_recommended_count_not_capped_by_slate(self):
+        """Per product direction (2026-04-28): assign_tiers does NOT
+        impose a count ceiling on Recommended status. The per-pick
+        gates (in compute_status) are the safety bar — every bet that
+        clears them gets surfaced, even if 10+ qualify in one slate.
+
+        Locks the 'no cap' contract at the engine layer."""
         from apps.core.services.recommendations import (
-            Recommendation, STATUS_RECOMMENDED, MAX_RECOMMENDED_PER_SLATE,
-            assign_tiers,
+            Recommendation, STATUS_RECOMMENDED, assign_tiers,
         )
-        # Build MAX_RECOMMENDED_PER_SLATE + 2 mock recommendations all
-        # currently Recommended. After assign_tiers the bottom two get
-        # demoted.
+        # Build 8 mock recommendations all status=Recommended.
         recs = []
-        for i in range(MAX_RECOMMENDED_PER_SLATE + 2):
+        for i in range(8):
             r = Recommendation(
                 sport='mlb', game=None, bet_type='moneyline', pick='X',
                 line='-110', odds_american=-110,
@@ -4119,12 +4120,14 @@ class CorrectionRecommendationSafetyTests(TestCase):
             )
             recs.append(r)
         assign_tiers(recs)
+        # All 8 stay Recommended — no slate cap.
         rec_count = sum(1 for r in recs if r.status == STATUS_RECOMMENDED)
-        self.assertEqual(rec_count, MAX_RECOMMENDED_PER_SLATE)
+        self.assertEqual(rec_count, 8)
+        # No demotions to 'marginal'.
         marginal_count = sum(
             1 for r in recs if r.status_reason == 'marginal'
         )
-        self.assertEqual(marginal_count, 2)
+        self.assertEqual(marginal_count, 0)
 
 
 class Phase4MoneylineNonRegressionTests(TestCase):

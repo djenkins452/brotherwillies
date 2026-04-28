@@ -35,9 +35,14 @@ ELITE_EDGE = 8.0    # 8 pp — elite-tier marker for UI sorting (no longer
 HEAVY_FAVORITE_ODDS = -150
 
 # Per-slate guardrails.
+# MAX_ELITE_PER_SLATE keeps the "🔥 Top Plays" section scarce + meaningful.
+# Total Recommended count is INTENTIONALLY uncapped — every bet that
+# clears the per-pick gates (probability ≥ 55%, |odds| ≤ 300, edge ≥ 3pp,
+# primary source, no value-tier, no derived) gets surfaced. Per product
+# direction 2026-04-28: the per-pick gates are the safety bar; any
+# legitimate recommendation should reach the user, even if 10 or 20
+# clear in a single slate.
 MAX_ELITE_PER_SLATE = 2
-MAX_RECOMMENDED_PER_SLATE = 5  # 2026-04-27: cap total recommendations
-                                 # so a noisy slate can't flood Bet All
 
 # 2026-04-27 strict correction: HARD safety rules — a pick can NEVER be
 # Recommended unless ALL of these clear.
@@ -365,11 +370,13 @@ def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendatio
       - If more than MAX_ELITE_PER_SLATE qualify as elite, only the top N by
         (model_edge desc, confidence_score desc) keep elite; the rest drop to
         strong.
-      - 2026-04-27 strict correction: cap RECOMMENDED status at
-        MAX_RECOMMENDED_PER_SLATE per slate. If more picks clear the gates,
-        keep the top N (by edge, then probability) and demote the rest to
-        not_recommended with reason='marginal'. Prevents a noisy slate
-        from flooding Bet All with marginal-edge plays.
+      - Total Recommended count is INTENTIONALLY uncapped — per product
+        direction (2026-04-28), every bet that clears the per-pick gates
+        gets surfaced. The slate cap that briefly existed earlier was
+        removed because the per-pick gates (probability ≥ 55%, |odds| ≤ 300,
+        edge ≥ 3pp, primary source, no value-tier, no derived) are
+        themselves the safety bar — there is no need for an additional
+        ceiling on count.
     """
     # Preserve special-tier markers set upstream (blocked / value) — only
     # re-classify the standard / strong / elite tiers from edge math.
@@ -386,23 +393,6 @@ def assign_tiers(recommendations: List['Recommendation']) -> List['Recommendatio
         )
         for demoted in elites[MAX_ELITE_PER_SLATE:]:
             demoted.tier = 'strong'
-
-    # 2026-04-27 correction: hard cap on Recommended count per slate.
-    # Counts only picks that currently have status='recommended' — leaves
-    # value / blocked / not_recommended alone. Demotion mode: flip
-    # status to 'not_recommended' with reason='marginal' so the UI can
-    # render them in the dimmed not-recommended section.
-    recommendeds = [r for r in recommendations if r.status == STATUS_RECOMMENDED]
-    if len(recommendeds) > MAX_RECOMMENDED_PER_SLATE:
-        # Rank by edge, then by probability (confidence_score is %), so
-        # the demotion order is deterministic.
-        recommendeds.sort(
-            key=lambda r: (r.model_edge or 0, r.confidence_score or 0),
-            reverse=True,
-        )
-        for demoted in recommendeds[MAX_RECOMMENDED_PER_SLATE:]:
-            demoted.status = STATUS_NOT_RECOMMENDED
-            demoted.status_reason = 'marginal'
 
     return recommendations
 
