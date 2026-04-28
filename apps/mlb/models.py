@@ -361,6 +361,18 @@ class SpreadOpportunity(models.Model):
     historical_win_rate = models.FloatField(null=True, blank=True)  # 0.0..1.0
     sample_size = models.IntegerField(null=True, blank=True)
 
+    # ---- Phase 3: Promoted recommendation ----
+    # Stricter bar than is_lean. When True, this signal is treated as a
+    # full recommendation (rendered in its own section, eligible for
+    # bulk-bet placement). Source safety: ESPN-source rows and
+    # is_derived rows are NEVER promoted, regardless of stats — the
+    # promotion classifier short-circuits on those.
+    is_recommended = models.BooleanField(default=False, db_index=True)
+    # ROI estimate (decimal, 0..1) at -110 standard pricing, snapshotted
+    # at create time. Stored separately from historical_win_rate because
+    # the UI renders both ("57.2% vs 52.4%, +3.1% ROI").
+    roi = models.FloatField(null=True, blank=True)
+
     # ---- Phase 2: Settlement ----
     outcome = models.CharField(
         max_length=10, choices=OPPORTUNITY_OUTCOME_CHOICES, blank=True, default='',
@@ -381,6 +393,7 @@ class SpreadOpportunity(models.Model):
             models.Index(fields=['signal_type', '-created_at']),
             models.Index(fields=['outcome']),
             models.Index(fields=['is_lean']),
+            models.Index(fields=['is_recommended']),
         ]
 
     def __str__(self):
@@ -424,6 +437,10 @@ class TotalOpportunity(models.Model):
     historical_win_rate = models.FloatField(null=True, blank=True)
     sample_size = models.IntegerField(null=True, blank=True)
 
+    # ---- Phase 3: Promoted recommendation (see SpreadOpportunity) ----
+    is_recommended = models.BooleanField(default=False, db_index=True)
+    roi = models.FloatField(null=True, blank=True)
+
     # ---- Phase 2: Settlement ----
     outcome = models.CharField(
         max_length=10, choices=OPPORTUNITY_OUTCOME_CHOICES, blank=True, default='',
@@ -444,6 +461,7 @@ class TotalOpportunity(models.Model):
             models.Index(fields=['signal_type', '-created_at']),
             models.Index(fields=['outcome']),
             models.Index(fields=['is_lean']),
+            models.Index(fields=['is_recommended']),
         ]
 
     def __str__(self):

@@ -67,10 +67,29 @@ TOTAL_LEAN_WIN_RATE_THRESHOLD = 0.54
 TOTAL_LEAN_MIN_ROI = 0.02
 TOTAL_LEAN_MIN_SAMPLE = 30  # Same minimum so a single hot week can't promote.
 
+# ----- Phase 3: Promotion thresholds ----------------------------------- #
+# Stricter than the Lean bar — a Lean is "the data leans toward this side".
+# A promoted Recommendation is "the data has *proven* an edge". The
+# stricter sample minimum (50 vs 30) is the load-bearing protection
+# against early-season false positives. ROI floors guarantee the edge
+# survives standard -110 vig with margin.
+#
+# Spread:  >= 50 sample  AND >= 54.5% win rate  AND >= 2.0% ROI
+# Total :  >= 50 sample  AND >= 55.0% win rate  AND >= 2.5% ROI
+#
+# Use >= (not >) per spec — boundary cases promote.
+SPREAD_REC_WIN_RATE_THRESHOLD = 0.545
+SPREAD_REC_MIN_SAMPLE = 50
+SPREAD_REC_MIN_ROI = 0.020
+TOTAL_REC_WIN_RATE_THRESHOLD = 0.550
+TOTAL_REC_MIN_SAMPLE = 50
+TOTAL_REC_MIN_ROI = 0.025
+
 # Standard sportsbook -110 vig — used for ROI math. 100 staked at -110
 # returns 90.91 in profit on a win. ROI per unit at win_rate w:
 #     ROI = w * (100/110) - (1 - w)  =  1.91 * w - 1
 _AMERICAN_MINUS_110_PROFIT_FACTOR = 100.0 / 110.0
+DEFAULT_SPREAD_TOTAL_ODDS = -110  # default price for break-even calc
 
 
 def _approx_roi_at_minus_110(win_rate: float | None) -> float | None:
@@ -80,6 +99,25 @@ def _approx_roi_at_minus_110(win_rate: float | None) -> float | None:
     if win_rate is None:
         return None
     return win_rate * _AMERICAN_MINUS_110_PROFIT_FACTOR - (1.0 - win_rate)
+
+
+def calculate_break_even(odds: int) -> float:
+    """Break-even win rate at given American odds.
+
+    Standard implied-probability formula (no vig adjustment — this is
+    the bar the bettor's true win rate must clear to be EV-positive at
+    that price). At -110 the break-even is 110/210 ≈ 0.5238 (52.38%).
+    At +150 the break-even is 100/250 = 0.4000 (40%).
+
+    The Phase 3 UI uses this to render "X% vs Y% break-even" so users
+    see the gap between observed win rate and the bar the price sets.
+    """
+    if odds == 0:
+        # Sentinel — caller passed a default. Treat as -110 standard.
+        odds = DEFAULT_SPREAD_TOTAL_ODDS
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100.0)
+    return 100.0 / (odds + 100.0)
 
 
 def _classify_spread(spread: float | None) -> list[str]:
@@ -146,11 +184,16 @@ def generate_spread_opportunities(game, snapshot) -> list:
         underdog_name = ''
 
     created: list = []
+    snap_source = getattr(snapshot, 'odds_source', 'odds_api')
+    snap_is_derived = bool(getattr(snapshot, 'is_derived', False))
     for signal_type in signal_types:
-        # Snapshot the lean status from current historical performance
-        # at create-time. Computing here (not in defaults={...}) so a
-        # cold start with zero history doesn't double-query.
-        is_lean, win_rate, sample = _spread_lean_status(signal_type)
+        # Snapshot lean + promotion status from current historical
+        # performance + this row's source. Computing here (not in
+        # defaults={...}) so a cold start with zero history doesn't
+        # double-query.
+        is_lean, is_rec, win_rate, sample, roi = _spread_classify(
+            signal_type, snap_source, snap_is_derived,
+        )
         obj, was_created = SpreadOpportunity.objects.get_or_create(
             game=game,
             odds_snapshot=snapshot,
@@ -159,11 +202,13 @@ def generate_spread_opportunities(game, snapshot) -> list:
                 'spread': snapshot.spread,
                 'favorite_team_name': favorite_name,
                 'underdog_team_name': underdog_name,
-                'source': getattr(snapshot, 'odds_source', 'odds_api'),
+                'source': snap_source,
                 'source_quality': getattr(snapshot, 'source_quality', 'primary'),
                 'is_lean': is_lean,
+                'is_recommended': is_rec,
                 'historical_win_rate': win_rate,
                 'sample_size': sample,
+                'roi': roi,
             },
         )
         if was_created:
@@ -186,19 +231,25 @@ def generate_total_opportunities(game, snapshot) -> list:
         return []
 
     created: list = []
+    snap_source = getattr(snapshot, 'odds_source', 'odds_api')
+    snap_is_derived = bool(getattr(snapshot, 'is_derived', False))
     for signal_type in signal_types:
-        is_lean, win_rate, sample = _total_lean_status(signal_type)
+        is_lean, is_rec, win_rate, sample, roi = _total_classify(
+            signal_type, snap_source, snap_is_derived,
+        )
         obj, was_created = TotalOpportunity.objects.get_or_create(
             game=game,
             odds_snapshot=snapshot,
             signal_type=signal_type,
             defaults={
                 'total': snapshot.total,
-                'source': getattr(snapshot, 'odds_source', 'odds_api'),
+                'source': snap_source,
                 'source_quality': getattr(snapshot, 'source_quality', 'primary'),
                 'is_lean': is_lean,
+                'is_recommended': is_rec,
                 'historical_win_rate': win_rate,
                 'sample_size': sample,
+                'roi': roi,
             },
         )
         if was_created:
@@ -472,30 +523,70 @@ def compute_total_performance() -> dict:
 # ===================================================================== #
 
 
-def _spread_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
-    """Returns (is_lean, historical_win_rate, sample_size) for the
-    NEW signal we're about to create. Reads the current historical
-    performance for this signal_type and applies the spread thresholds."""
+def _is_promotable_source(odds_source: str | None, is_derived: bool) -> bool:
+    """Phase 3 source-safety guard. ESPN-source rows and synthesized
+    (is_derived=True) rows are NEVER promoted to recommendations,
+    regardless of win-rate / ROI. The bar for "Recommended" requires
+    authoritative pricing; ESPN pricing isn't trustworthy enough to
+    earn green-tier trust.
+
+    NOTE: this gate applies to PROMOTION only. ESPN rows can still
+    be Leans — the Lean classification reads aggregate per-signal-type
+    performance, not per-source. So the lean stats include all
+    sources, but only the row's own source is checked at promotion.
+    The asymmetry is intentional: Leans are "the signal works"; a
+    Recommendation is "the signal works AND we trust THIS row".
+    """
+    if is_derived:
+        return False
+    if odds_source == 'espn':
+        return False
+    return True
+
+
+def _spread_classify(signal_type: str, odds_source: str, is_derived: bool):
+    """Returns (is_lean, is_recommended, historical_win_rate,
+    sample_size, roi) for a new spread signal. Reads current
+    historical performance for the signal_type and applies BOTH the
+    Phase 2 lean bar AND the Phase 3 promotion bar.
+
+    is_recommended implies is_lean (the promotion thresholds are
+    strictly stricter than the lean ones), so we don't need to set
+    is_lean independently when is_recommended=True. We always set
+    both fields so a future threshold change can't desync them.
+    """
     perf = compute_spread_performance().get(signal_type) or {}
     win_rate = perf.get('win_rate')
     sample = perf.get('sample_size') or 0
+    roi = perf.get('roi_estimate')
+
     is_lean = (
         sample > SPREAD_LEAN_MIN_SAMPLE
         and win_rate is not None
         and win_rate > SPREAD_LEAN_WIN_RATE_THRESHOLD
     )
-    return is_lean, win_rate, sample if sample else None
+    # Promotion: stricter bar + source safety.
+    is_recommended = (
+        is_lean  # must clear lean bar first
+        and _is_promotable_source(odds_source, is_derived)
+        and sample >= SPREAD_REC_MIN_SAMPLE
+        and win_rate is not None
+        and win_rate >= SPREAD_REC_WIN_RATE_THRESHOLD
+        and roi is not None
+        and roi >= SPREAD_REC_MIN_ROI
+    )
+    return is_lean, is_recommended, win_rate, sample if sample else None, roi
 
 
-def _total_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
-    """Returns (is_lean, historical_win_rate, sample_size) for a new
-    total signal. Total leans require BOTH a win-rate clear AND a
-    minimum estimated ROI (per the spec) — protects against a high
-    win rate that only barely covers the vig."""
+def _total_classify(signal_type: str, odds_source: str, is_derived: bool):
+    """Returns (is_lean, is_recommended, win_rate, sample, roi) for a
+    new total signal. Total uses a stricter Phase 3 bar than spread
+    because total markets are noisier."""
     perf = compute_total_performance().get(signal_type) or {}
     win_rate = perf.get('win_rate')
     sample = perf.get('sample_size') or 0
     roi = perf.get('roi_estimate')
+
     is_lean = (
         sample > TOTAL_LEAN_MIN_SAMPLE
         and win_rate is not None
@@ -503,4 +594,27 @@ def _total_lean_status(signal_type: str) -> tuple[bool, float | None, int | None
         and roi is not None
         and roi > TOTAL_LEAN_MIN_ROI
     )
-    return is_lean, win_rate, sample if sample else None
+    is_recommended = (
+        is_lean
+        and _is_promotable_source(odds_source, is_derived)
+        and sample >= TOTAL_REC_MIN_SAMPLE
+        and win_rate is not None
+        and win_rate >= TOTAL_REC_WIN_RATE_THRESHOLD
+        and roi is not None
+        and roi >= TOTAL_REC_MIN_ROI
+    )
+    return is_lean, is_recommended, win_rate, sample if sample else None, roi
+
+
+# Backwards-compatible adapters — kept so the existing signature
+# `_spread_lean_status(signal_type) -> (is_lean, wr, sample)` still
+# works for any external caller. These thinly wrap the new classify
+# functions and discard the recommendation flag + roi.
+def _spread_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
+    is_lean, _is_rec, wr, sample, _roi = _spread_classify(signal_type, 'odds_api', False)
+    return is_lean, wr, sample
+
+
+def _total_lean_status(signal_type: str) -> tuple[bool, float | None, int | None]:
+    is_lean, _is_rec, wr, sample, _roi = _total_classify(signal_type, 'odds_api', False)
+    return is_lean, wr, sample

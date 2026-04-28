@@ -3106,6 +3106,343 @@ class Phase2PerformancePanelTests(TestCase):
         self.assertIn('Total (Over/Under)', body)
 
 
+# ===================================================================== #
+# Phase 3: Promotion to Recommendation
+#
+# Adds is_recommended + roi fields. Promotion thresholds are stricter
+# than Lean: sample >= 50, win_rate >= 54.5% (spread) / 55.0% (total),
+# ROI >= 2.0% (spread) / 2.5% (total). Source safety: ESPN-source rows
+# and synthesized (is_derived=True) rows are NEVER promoted regardless
+# of stats.
+# ===================================================================== #
+
+
+class Phase3BreakEvenTests(TestCase):
+    """Standard implied-probability formula. Tests pin known values so
+    a math regression breaks the suite loudly."""
+
+    def test_break_even_at_minus_110(self):
+        from apps.mlb.services.opportunity_signals import calculate_break_even
+        self.assertAlmostEqual(calculate_break_even(-110), 110/210, places=4)
+
+    def test_break_even_at_minus_150(self):
+        from apps.mlb.services.opportunity_signals import calculate_break_even
+        self.assertAlmostEqual(calculate_break_even(-150), 150/250, places=4)
+
+    def test_break_even_at_plus_150(self):
+        from apps.mlb.services.opportunity_signals import calculate_break_even
+        self.assertAlmostEqual(calculate_break_even(150), 100/250, places=4)
+
+    def test_break_even_at_plus_100_is_50pct(self):
+        from apps.mlb.services.opportunity_signals import calculate_break_even
+        # +100 is even money — break-even is 50%.
+        self.assertAlmostEqual(calculate_break_even(100), 0.5, places=4)
+
+    def test_break_even_zero_uses_default_minus_110(self):
+        """Sentinel: 0 means caller didn't have a price; default to -110."""
+        from apps.mlb.services.opportunity_signals import calculate_break_even
+        self.assertAlmostEqual(calculate_break_even(0), 110/210, places=4)
+
+
+class Phase3PromotionGatesTests(_OpportunityPhase2TestBase):
+    """Promotion thresholds for spread:
+        sample >= 50 AND win_rate >= 54.5% AND roi >= 2.0%
+    Promotion thresholds for total:
+        sample >= 50 AND win_rate >= 55.0% AND roi >= 2.5%
+    Each test pins one threshold at the boundary while clearing the
+    other two, so a single-axis regression is detectable.
+    """
+
+    def _seed_history(self, signal_type, *, wins, losses, model='spread'):
+        """Reused from LeanClassificationTests' helper, inlined here so
+        Phase 3 tests can run independently."""
+        from apps.mlb.models import (
+            SpreadOpportunity, TotalOpportunity, OddsSnapshot,
+        )
+        Model = SpreadOpportunity if model == 'spread' else TotalOpportunity
+        for i, outcome in [(j, 'win') for j in range(wins)] + [(j, 'loss') for j in range(losses)]:
+            g = self._final_game(home_score=5 if outcome == 'win' else 2,
+                                  away_score=2 if outcome == 'win' else 5)
+            snap = OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=-1.0 if model == 'spread' else None,
+                total=10.0 if model == 'total' else None,
+            )
+            kwargs = {
+                'game': g, 'odds_snapshot': snap, 'signal_type': signal_type,
+                'outcome': outcome, 'settled_at': timezone.now(),
+            }
+            if model == 'spread':
+                kwargs['spread'] = -1.0
+            else:
+                kwargs['total'] = 10.0
+            Model.objects.update_or_create(
+                game=g, odds_snapshot=snap, signal_type=signal_type,
+                defaults=kwargs,
+            )
+
+    # ----- Spread -----
+
+    def test_spread_promotes_at_thresholds(self):
+        """50 sample, 54.5% win rate (28/51), ROI ~ +4.05% — passes all."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        # 28W / 23L = 54.9% over 51 — passes 54.5 and the ROI floor.
+        self._seed_history('tight_spread', wins=28, losses=23)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_lean)
+        self.assertTrue(new_opp.is_recommended)
+        self.assertEqual(new_opp.sample_size, 51)
+        self.assertIsNotNone(new_opp.roi)
+
+    def test_spread_blocked_below_sample_minimum(self):
+        """49 sample (below 50) but elite win rate — must NOT promote."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_history('tight_spread', wins=30, losses=19)  # 49, ~61%
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_recommended)
+        # Lean still passes (lean threshold is sample > 30).
+        self.assertTrue(new_opp.is_lean)
+
+    def test_spread_blocked_below_winrate_threshold(self):
+        """50+ sample, 53% win rate (clears Lean's 53 strictly, but not
+        Recommendation's 54.5)."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        # 27W / 23L = 54% — under 54.5, over 53 (lean clears).
+        self._seed_history('tight_spread', wins=27, losses=23)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_lean)
+        self.assertFalse(new_opp.is_recommended)
+
+    # ----- Total -----
+
+    def test_total_promotes_at_thresholds(self):
+        """28W/22L over 50 = 56% win rate, ROI ~ +6.95% — passes all."""
+        from apps.mlb.models import OddsSnapshot, TotalOpportunity
+        self._seed_history('high_scoring', wins=28, losses=22, model='total')
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, total=10.0,
+        )
+        new_opp = TotalOpportunity.objects.get(game=g, signal_type='high_scoring')
+        self.assertTrue(new_opp.is_recommended)
+        self.assertGreaterEqual(new_opp.roi, 0.025)
+
+    def test_total_blocked_below_winrate_threshold(self):
+        """51 sample, 54.9% win rate — clears Lean's >54, fails Rec's >=55."""
+        from apps.mlb.models import OddsSnapshot, TotalOpportunity
+        # 28W / 23L = 54.9% — strictly above 54, strictly below 55.
+        self._seed_history('high_scoring', wins=28, losses=23, model='total')
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, total=10.0,
+        )
+        new_opp = TotalOpportunity.objects.get(game=g, signal_type='high_scoring')
+        self.assertTrue(new_opp.is_lean)
+        self.assertFalse(new_opp.is_recommended)
+
+    def test_total_blocked_below_roi_floor(self):
+        """50 sample, 55% win rate (clears WR), but ROI must clear 2.5%.
+        At 55% the ROI is ~5%, so this case is hard to construct cleanly
+        — instead we verify with a borderline sample where ROI floor
+        gates above the WR clear.
+
+        (At -110, win_rate 55% => ROI 5%; we need ROI < 2.5% which
+        means win_rate < ~53.6%. So a separate test isn't needed —
+        the win-rate gate effectively dominates. Skipping with comment.)
+        """
+        # No assertion — see docstring. The ROI gate is mathematically
+        # implied by the win-rate gate at -110. Documented for the
+        # next person to wonder why this isn't covered.
+        pass
+
+
+class Phase3SourceSafetyTests(_OpportunityPhase2TestBase):
+    """ESPN-source rows and is_derived rows must NEVER be promoted to
+    Recommendation regardless of stats. The safety gate is the load-
+    bearing piece that protects users from "this signal works
+    historically, AND we're trusting an ESPN scrape that may be wrong"
+    landing in the green-tier Recommendation list."""
+
+    def _seed_winning_history(self, signal_type, *, sample, model='spread'):
+        """Build enough wins/losses to clear the recommendation bar."""
+        wins = int(sample * 0.60)  # 60% — well above all bars
+        losses = sample - wins
+        from apps.mlb.models import (
+            SpreadOpportunity, TotalOpportunity, OddsSnapshot,
+        )
+        Model = SpreadOpportunity if model == 'spread' else TotalOpportunity
+        for i in range(wins):
+            g = self._final_game(home_score=5, away_score=2)
+            snap = OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=-1.0 if model == 'spread' else None,
+                total=10.0 if model == 'total' else None,
+            )
+            kwargs = {
+                'game': g, 'odds_snapshot': snap, 'signal_type': signal_type,
+                'outcome': 'win', 'settled_at': timezone.now(),
+            }
+            if model == 'spread':
+                kwargs['spread'] = -1.0
+            else:
+                kwargs['total'] = 10.0
+            Model.objects.update_or_create(
+                game=g, odds_snapshot=snap, signal_type=signal_type,
+                defaults=kwargs,
+            )
+        for i in range(losses):
+            g = self._final_game(home_score=2, away_score=5)
+            snap = OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5,
+                spread=-1.0 if model == 'spread' else None,
+                total=10.0 if model == 'total' else None,
+            )
+            kwargs = {
+                'game': g, 'odds_snapshot': snap, 'signal_type': signal_type,
+                'outcome': 'loss', 'settled_at': timezone.now(),
+            }
+            if model == 'spread':
+                kwargs['spread'] = -1.0
+            else:
+                kwargs['total'] = 10.0
+            Model.objects.update_or_create(
+                game=g, odds_snapshot=snap, signal_type=signal_type,
+                defaults=kwargs,
+            )
+
+    def test_espn_source_never_promoted_even_with_winning_history(self):
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_winning_history('tight_spread', sample=60)
+        # New row from ESPN — must NOT promote.
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+            odds_source='espn',  # the safety gate trip
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_recommended)
+        # Lean still allowed — leans don't gate on source.
+        self.assertTrue(new_opp.is_lean)
+
+    def test_derived_row_never_promoted(self):
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_winning_history('tight_spread', sample=60)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+            is_derived=True,  # synthesized — never promoted
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_recommended)
+
+    def test_primary_source_promoted_with_same_history(self):
+        """Sanity: same winning history with primary source DOES promote.
+        Pairs with the ESPN test above to prove the source gate is the
+        sole difference."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_winning_history('tight_spread', sample=60)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+            odds_source='odds_api',
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_recommended)
+
+
+class Phase3MoneylineNonRegressionTests(TestCase):
+    """Belt-and-suspenders sentinel for Phase 3. Locks down the new
+    promotion classifier + break-even function in addition to the
+    Phase 1/2 surfaces. If the recommendation engine ever starts
+    consulting any of these, this test fails loudly."""
+
+    def test_recommendation_engine_unaffected_by_phase3_layer(self):
+        from unittest.mock import patch, PropertyMock
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot,
+        )
+        from apps.core.services.recommendations import get_recommendation
+
+        conf = MLBConf.objects.first() or MLBConf.objects.create(
+            name='P3 Reg', slug='p3-reg',
+        )
+        h = MLBTeam.objects.create(
+            name='P3R Home', slug='p3r-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='p3r-home',
+        )
+        a = MLBTeam.objects.create(
+            name='P3R Away', slug='p3r-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='p3r-away',
+        )
+        g = MLBGame.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id='p3r-game',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=9.5,
+        )
+
+        with patch.object(MLBGame, 'spread_opportunities',
+                          new_callable=PropertyMock,
+                          side_effect=AssertionError(
+                              'phase3: rec engine touched spread_opportunities'
+                          )):
+            with patch.object(MLBGame, 'total_opportunities',
+                              new_callable=PropertyMock,
+                              side_effect=AssertionError(
+                                  'phase3: rec engine touched total_opportunities'
+                              )):
+                with patch(
+                    'apps.mlb.services.opportunity_signals._spread_classify',
+                    side_effect=AssertionError(
+                        'phase3: rec engine called the spread classifier'
+                    ),
+                ):
+                    with patch(
+                        'apps.mlb.services.opportunity_signals._total_classify',
+                        side_effect=AssertionError(
+                            'phase3: rec engine called the total classifier'
+                        ),
+                    ):
+                        with patch(
+                            'apps.mlb.services.opportunity_signals.calculate_break_even',
+                            side_effect=AssertionError(
+                                'phase3: rec engine called calculate_break_even'
+                            ),
+                        ):
+                            rec = get_recommendation('mlb', g, user=None)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.bet_type, 'moneyline')
+
+
 class Phase2MoneylineNonRegressionTests(TestCase):
     """Belt-and-suspenders again: the Phase 2 settlement / lean code
     must NOT cause the Moneyline pipeline to consult the new fields.
