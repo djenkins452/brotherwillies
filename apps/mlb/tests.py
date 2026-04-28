@@ -3672,6 +3672,350 @@ class Phase3BulkBetServiceTests(TestCase):
         ).count(), 1)
 
 
+# ===================================================================== #
+# Phase 4: Promotion-quality guards
+#
+# All four guards are additive on top of the Phase 3 thresholds:
+#     1. Margin over break-even (>=2pp)
+#     2. Recency window (60-day default)
+#     3. Distribution guard (min wins/losses >=15)
+#     4. CLV confirmation (active when sample >=20, else insufficient)
+#
+# Hard rule: Moneyline pipeline still untouched (sentinel below).
+# ===================================================================== #
+
+
+class Phase4MarginGuardTests(_OpportunityPhase2TestBase):
+    """The margin guard requires win_rate - break_even >= 2pp.
+    At -110 break-even is ~52.4%, so any promoted spread/total must
+    clear ~54.4% to satisfy the 2pp margin. Pairs naturally with the
+    Phase 3 win-rate floor (54.5% for spread / 55% for total) — the
+    margin guard is a defensive backstop that catches an edge case
+    where the price/threshold relationship gets re-tuned."""
+
+    def _seed_spread_history(self, *, wins, losses):
+        from apps.mlb.models import (
+            SpreadOpportunity, OddsSnapshot,
+        )
+        for outcome, count in [('win', wins), ('loss', losses)]:
+            for i in range(count):
+                g = self._final_game(home_score=5 if outcome == 'win' else 2,
+                                      away_score=2 if outcome == 'win' else 5)
+                snap = OddsSnapshot.objects.create(
+                    game=g, captured_at=timezone.now(),
+                    market_home_win_prob=0.5, spread=-1.0,
+                )
+                SpreadOpportunity.objects.update_or_create(
+                    game=g, odds_snapshot=snap, signal_type='tight_spread',
+                    defaults={
+                        'spread': -1.0, 'outcome': outcome,
+                        'settled_at': timezone.now(),
+                    },
+                )
+
+    def test_high_winrate_with_thin_margin_does_not_promote(self):
+        """A pathological case: imagine break_even drifts up (alt
+        pricing) so 53.8% only beats break-even by 1.4pp — Phase 4
+        should block. We construct this by overriding the break-even
+        function locally."""
+        from unittest.mock import patch
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        # 30W / 25L over 55 = 54.5% — sits exactly on the Phase 3 bar.
+        self._seed_spread_history(wins=30, losses=25)
+        g = self._scheduled_game()
+        # Patch break-even to 53% so margin = 54.5 - 53 = 1.5pp < 2pp guard.
+        with patch(
+            'apps.mlb.services.opportunity_signals.calculate_break_even',
+            return_value=0.53,
+        ):
+            OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5, spread=-1.0,
+            )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        # Phase 3 bars cleared but Phase 4 margin guard blocked promotion.
+        self.assertTrue(new_opp.is_lean)
+        self.assertFalse(new_opp.is_recommended)
+
+    def test_strong_margin_with_phase3_clears_promotes(self):
+        """Sanity: with default -110 break-even (~52.4%), a 56% win
+        rate beats break-even by ~3.6pp — well clear of the 2pp guard.
+        Combined with Phase 3 thresholds, must promote."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_spread_history(wins=33, losses=27)  # 55% over 60
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        # 55% beats break-even (52.4%) by 2.6pp ≥ 2pp guard.
+        self.assertTrue(new_opp.is_recommended)
+
+
+class Phase4RecencyWindowTests(_OpportunityPhase2TestBase):
+    """Performance aggregators apply the rolling
+    SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS window by default. Old
+    rows are excluded from win-rate calculations but remain in the DB
+    (no deletion). lookback_days=0 bypasses the filter entirely."""
+
+    def _seed_with_age(self, *, signal_type, outcome, days_old):
+        """Create a settled SpreadOpportunity with settled_at set
+        days_old in the past. Uses update_or_create because the
+        OddsSnapshot post_save hook auto-creates an opportunity row
+        on insert; we then re-stamp it with the desired outcome and
+        settlement age."""
+        from datetime import timedelta
+        from apps.mlb.models import SpreadOpportunity, OddsSnapshot
+        g = self._final_game(home_score=5 if outcome == 'win' else 2,
+                              away_score=2 if outcome == 'win' else 5)
+        snap = OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now() - timedelta(days=days_old),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        opp, _ = SpreadOpportunity.objects.update_or_create(
+            game=g, odds_snapshot=snap, signal_type=signal_type,
+            defaults={
+                'spread': -1.0, 'outcome': outcome,
+                'settled_at': timezone.now() - timedelta(days=days_old),
+            },
+        )
+        return opp
+
+    def test_old_outcomes_excluded_by_default(self):
+        from apps.mlb.services.opportunity_signals import compute_spread_performance
+        # Recent rows: 5 wins
+        for _ in range(5):
+            self._seed_with_age(signal_type='tight_spread', outcome='win', days_old=10)
+        # Old rows beyond default 60-day window: 5 losses
+        for _ in range(5):
+            self._seed_with_age(signal_type='tight_spread', outcome='loss', days_old=120)
+        perf = compute_spread_performance()['tight_spread']
+        # Default lookback excludes the old losses.
+        self.assertEqual(perf['wins'], 5)
+        self.assertEqual(perf['losses'], 0)
+        self.assertAlmostEqual(perf['win_rate'], 1.0, places=3)
+
+    def test_lookback_zero_includes_all_history(self):
+        from apps.mlb.services.opportunity_signals import compute_spread_performance
+        for _ in range(5):
+            self._seed_with_age(signal_type='tight_spread', outcome='win', days_old=10)
+        for _ in range(5):
+            self._seed_with_age(signal_type='tight_spread', outcome='loss', days_old=120)
+        # lookback_days=0 → no recency filter, all-time performance.
+        perf = compute_spread_performance(lookback_days=0)['tight_spread']
+        self.assertEqual(perf['wins'], 5)
+        self.assertEqual(perf['losses'], 5)
+
+    def test_empty_recent_window_does_not_crash(self):
+        """Edge case: zero recent rows with old rows still in DB.
+        Should return win_rate=None, sample=0 — not raise."""
+        from apps.mlb.services.opportunity_signals import compute_spread_performance
+        # Only old rows
+        for _ in range(3):
+            self._seed_with_age(signal_type='tight_spread', outcome='win', days_old=120)
+        perf = compute_spread_performance()['tight_spread']
+        self.assertIsNone(perf['win_rate'])
+        self.assertEqual(perf['sample_size'], 0)
+
+
+class Phase4DistributionGuardTests(_OpportunityPhase2TestBase):
+    """Distribution guard: promotion requires min(wins, losses) >= 15
+    so a 50-0 hot streak doesn't promote. Pairs naturally with the
+    sample minimum — 50 sample with all wins gives high win rate but
+    leaves us with no loss data to verify the signal."""
+
+    def _seed_spread_history(self, *, wins, losses):
+        from apps.mlb.models import SpreadOpportunity, OddsSnapshot
+        for outcome, count in [('win', wins), ('loss', losses)]:
+            for i in range(count):
+                g = self._final_game(home_score=5 if outcome == 'win' else 2,
+                                      away_score=2 if outcome == 'win' else 5)
+                snap = OddsSnapshot.objects.create(
+                    game=g, captured_at=timezone.now(),
+                    market_home_win_prob=0.5, spread=-1.0,
+                )
+                SpreadOpportunity.objects.update_or_create(
+                    game=g, odds_snapshot=snap, signal_type='tight_spread',
+                    defaults={
+                        'spread': -1.0, 'outcome': outcome,
+                        'settled_at': timezone.now(),
+                    },
+                )
+
+    def test_lopsided_streak_does_not_promote(self):
+        """50 wins, 5 losses: total sample 55, win_rate ~91%, ROI
+        positive — every Phase 3 threshold clears spectacularly. But
+        only 5 losses fails the distribution guard, so promotion is
+        blocked."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_spread_history(wins=50, losses=5)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_recommended)
+
+    def test_balanced_distribution_promotes(self):
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        # 30 / 22 = 57.7% over 52, both buckets > 15. All bars clear.
+        self._seed_spread_history(wins=30, losses=22)
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_recommended)
+
+
+class Phase4CLVGuardTests(_OpportunityPhase2TestBase):
+    """CLV guard: gated by sample size. When clv_sample_size >= 20,
+    require positive_clv_rate >= 52%. Below the minimum, the guard is
+    inactive and reports status='insufficient_sample' so the system
+    doesn't block recommendations during the cold-start period."""
+
+    def _seed_strong_history(self):
+        """50 wins / 30 losses: 62.5% win rate, all Phase 3 + Phase 4
+        non-CLV guards clear. Lets us isolate the CLV guard's effect."""
+        from apps.mlb.models import SpreadOpportunity, OddsSnapshot
+        for outcome, count in [('win', 50), ('loss', 30)]:
+            for i in range(count):
+                g = self._final_game(home_score=5 if outcome == 'win' else 2,
+                                      away_score=2 if outcome == 'win' else 5)
+                snap = OddsSnapshot.objects.create(
+                    game=g, captured_at=timezone.now(),
+                    market_home_win_prob=0.5, spread=-1.0,
+                )
+                SpreadOpportunity.objects.update_or_create(
+                    game=g, odds_snapshot=snap, signal_type='tight_spread',
+                    defaults={
+                        'spread': -1.0, 'outcome': outcome,
+                        'settled_at': timezone.now(),
+                    },
+                )
+
+    def test_insufficient_clv_sample_does_not_block(self):
+        """Default state: CLV stub returns insufficient_sample, so the
+        guard is inactive and a strong-stats signal still promotes."""
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_strong_history()
+        g = self._scheduled_game()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5, spread=-1.0,
+        )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_recommended)
+
+    def test_active_clv_below_threshold_blocks(self):
+        from unittest.mock import patch
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_strong_history()
+        g = self._scheduled_game()
+        # Mock CLV stats to active (sample ≥ 20) but sub-threshold
+        # (positive_clv_rate < 52%).
+        with patch(
+            'apps.mlb.services.opportunity_signals.compute_clv_stats',
+            return_value={
+                'positive_clv_rate': 0.45,
+                'clv_sample_size': 40,
+                'status': 'negative',
+            },
+        ):
+            OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5, spread=-1.0,
+            )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertFalse(new_opp.is_recommended)
+
+    def test_active_clv_above_threshold_promotes(self):
+        from unittest.mock import patch
+        from apps.mlb.models import OddsSnapshot, SpreadOpportunity
+        self._seed_strong_history()
+        g = self._scheduled_game()
+        with patch(
+            'apps.mlb.services.opportunity_signals.compute_clv_stats',
+            return_value={
+                'positive_clv_rate': 0.55,
+                'clv_sample_size': 40,
+                'status': 'positive',
+            },
+        ):
+            OddsSnapshot.objects.create(
+                game=g, captured_at=timezone.now(),
+                market_home_win_prob=0.5, spread=-1.0,
+            )
+        new_opp = SpreadOpportunity.objects.get(game=g, signal_type='tight_spread')
+        self.assertTrue(new_opp.is_recommended)
+
+
+class Phase4MoneylineNonRegressionTests(TestCase):
+    """The promotion-hardening guards must not leak into the
+    recommendation engine. Locks down the new functions in addition
+    to the existing Phase 1/2/3 sentinels."""
+
+    def test_recommendation_engine_unaffected_by_phase4_layer(self):
+        from unittest.mock import patch, PropertyMock
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot,
+        )
+        from apps.core.services.recommendations import get_recommendation
+
+        conf = MLBConf.objects.first() or MLBConf.objects.create(
+            name='P4 Reg', slug='p4-reg',
+        )
+        h = MLBTeam.objects.create(
+            name='P4 Home', slug='p4-home', conference=conf,
+            rating=80, source='mlb_stats_api', external_id='p4-home',
+        )
+        a = MLBTeam.objects.create(
+            name='P4 Away', slug='p4-away', conference=conf,
+            rating=40, source='mlb_stats_api', external_id='p4-away',
+        )
+        g = MLBGame.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id='p4r-game',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-150, moneyline_away=130,
+            spread=-1.5, total=9.5,
+        )
+
+        with patch.object(MLBGame, 'spread_opportunities',
+                          new_callable=PropertyMock,
+                          side_effect=AssertionError(
+                              'phase4: rec engine touched spread_opportunities'
+                          )):
+            with patch.object(MLBGame, 'total_opportunities',
+                              new_callable=PropertyMock,
+                              side_effect=AssertionError(
+                                  'phase4: rec engine touched total_opportunities'
+                              )):
+                with patch(
+                    'apps.mlb.services.opportunity_signals.compute_clv_stats',
+                    side_effect=AssertionError(
+                        'phase4: rec engine called compute_clv_stats'
+                    ),
+                ):
+                    with patch(
+                        'apps.mlb.services.opportunity_signals._phase4_promotion_guards_pass',
+                        side_effect=AssertionError(
+                            'phase4: rec engine called the guards function'
+                        ),
+                    ):
+                        rec = get_recommendation('mlb', g, user=None)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.bet_type, 'moneyline')
+
+
 class Phase3MoneylineNonRegressionTests(TestCase):
     """Belt-and-suspenders sentinel for Phase 3. Locks down the new
     promotion classifier + break-even function in addition to the

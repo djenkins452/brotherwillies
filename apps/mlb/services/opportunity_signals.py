@@ -85,6 +85,23 @@ TOTAL_REC_WIN_RATE_THRESHOLD = 0.550
 TOTAL_REC_MIN_SAMPLE = 50
 TOTAL_REC_MIN_ROI = 0.025
 
+# ----- Phase 4: Promotion-quality guards ------------------------------ #
+# Margin guard — observed win rate must beat break-even by at least 2pp.
+# Belt-and-suspenders alongside the ROI floor: ROI captures profitability
+# at the assumed price, but a small win-rate edge near break-even is too
+# fragile to promote. 2pp is the spec value.
+EDGE_MARGIN_MIN = 0.02
+# Distribution guard — both outcome buckets (wins, losses) must clear
+# this minimum independently. A 50-0 streak doesn't promote; we want
+# at least 15 of each outcome before trusting the win rate.
+SPREAD_TOTAL_MIN_SIDE_SAMPLE_DEFAULT = 15
+# CLV guard — when settled CLV coverage clears this, promotion
+# additionally requires positive_clv_rate >= 52%. Below it, the guard
+# is INACTIVE (status='insufficient_sample') so the system doesn't
+# block recommendations during the cold-start CLV period.
+MIN_CLV_SAMPLE_SIZE_DEFAULT = 20
+CLV_POSITIVE_RATE_THRESHOLD = 0.52
+
 # Standard sportsbook -110 vig — used for ROI math. 100 staked at -110
 # returns 90.91 in profit on a win. ROI per unit at win_rate w:
 #     ROI = w * (100/110) - (1 - w)  =  1.91 * w - 1
@@ -471,12 +488,35 @@ def settle_all_unsettled() -> dict:
 # ===================================================================== #
 
 
+def _resolve_lookback_days(lookback_days):
+    """Phase 4: a lookback_days arg of None falls through to the
+    settings default (`SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS`).
+    Pass 0 to bypass the recency filter entirely (used by ops + tests)."""
+    if lookback_days is not None:
+        return lookback_days
+    from django.conf import settings
+    return getattr(settings, 'SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS', 60)
+
+
+def _apply_recency_filter(qs, lookback_days):
+    """Filter a settled-opportunity queryset to rows settled within the
+    last `lookback_days`. lookback_days=0 → no filter applied."""
+    if not lookback_days:
+        return qs
+    from datetime import timedelta
+    from django.utils import timezone as _tz
+    cutoff = _tz.now() - timedelta(days=lookback_days)
+    return qs.filter(settled_at__gte=cutoff)
+
+
 def _aggregate(qs, signal_choices) -> dict:
     """Shared aggregation for both spread and total. Returns a dict
     keyed by signal_type with {win_rate, wins, losses, pushes,
-    sample_size, roi_estimate}."""
-    from django.db.models import Count, Q
+    sample_size, roi_estimate}.
 
+    Phase 4 note: caller is expected to apply the recency filter
+    before passing `qs` here. This function knows nothing about time
+    windows — it just aggregates whatever rows it gets."""
     result = {}
     for signal_type, _label in signal_choices:
         sig_qs = qs.filter(signal_type=signal_type)
@@ -496,18 +536,67 @@ def _aggregate(qs, signal_choices) -> dict:
     return result
 
 
-def compute_spread_performance() -> dict:
-    """Win rate, sample size, ROI estimate per spread signal_type."""
+def compute_spread_performance(lookback_days=None) -> dict:
+    """Win rate, sample size, ROI estimate per spread signal_type.
+
+    Phase 4: by default applies the rolling
+    SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS window so old data can't
+    prop up a current edge that has gone cold. Pass `lookback_days=0`
+    to bypass the filter (full history).
+    """
     from apps.mlb.models import SpreadOpportunity
     qs = SpreadOpportunity.objects.exclude(outcome='')
+    qs = _apply_recency_filter(qs, _resolve_lookback_days(lookback_days))
     return _aggregate(qs, SpreadOpportunity.SIGNAL_CHOICES)
 
 
-def compute_total_performance() -> dict:
-    """Win rate, sample size, ROI estimate per total signal_type."""
+def compute_total_performance(lookback_days=None) -> dict:
+    """Win rate, sample size, ROI estimate per total signal_type.
+    Phase 4: defaults to the rolling SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS
+    window. See compute_spread_performance for details."""
     from apps.mlb.models import TotalOpportunity
     qs = TotalOpportunity.objects.exclude(outcome='')
+    qs = _apply_recency_filter(qs, _resolve_lookback_days(lookback_days))
     return _aggregate(qs, TotalOpportunity.SIGNAL_CHOICES)
+
+
+def compute_clv_stats(signal_type: str, model: str = 'spread',
+                      lookback_days: int | None = None) -> dict:
+    """Phase 4 stub for the CLV guard.
+
+    Returns the shape every caller expects:
+        {'positive_clv_rate': float|None,
+         'clv_sample_size': int,
+         'status': 'insufficient_sample'|'positive'|'negative'}
+
+    CLV is not yet captured on opportunity rows (the closing line
+    snapshot would need to be tagged at settlement time — out of
+    scope for Phase 4). For now this returns insufficient_sample
+    universally so the CLV guard reports as inactive without
+    blocking promotion. When CLV tracking lands, this function
+    starts returning real numbers and the guard activates
+    automatically — no caller changes needed.
+    """
+    return {
+        'positive_clv_rate': None,
+        'clv_sample_size': 0,
+        'status': 'insufficient_sample',
+    }
+
+
+def _clv_guard_passes(stats: dict) -> bool:
+    """Promotion CLV gate: when sample is below the minimum, do NOT
+    block (status='insufficient_sample' returns True). When sample
+    clears the minimum, require positive_clv_rate >= threshold."""
+    from django.conf import settings
+    min_sample = getattr(settings, 'MIN_CLV_SAMPLE_SIZE', MIN_CLV_SAMPLE_SIZE_DEFAULT)
+    if stats.get('clv_sample_size', 0) < min_sample:
+        return True  # insufficient sample — don't block
+    rate = stats.get('positive_clv_rate')
+    if rate is None:
+        return True  # defensive — caller should not return None when
+                     # sample >= min, but if it does, don't block
+    return rate >= CLV_POSITIVE_RATE_THRESHOLD
 
 
 # ===================================================================== #
@@ -544,11 +633,58 @@ def _is_promotable_source(odds_source: str | None, is_derived: bool) -> bool:
     return True
 
 
+def _min_side_sample(perf: dict) -> int:
+    """Phase 4 distribution guard input — return the smaller of wins
+    and losses. A 50-0 streak returns 0 here regardless of the raw
+    sample size, so the distribution guard correctly blocks promotion
+    when one outcome dominates entirely."""
+    return min(perf.get('wins') or 0, perf.get('losses') or 0)
+
+
+def _phase4_promotion_guards_pass(perf: dict, win_rate: float, signal_type: str,
+                                    market: str) -> bool:
+    """Phase 4 hardening: every guard the spec requires beyond the
+    Phase 3 thresholds. Returns True iff EVERY guard clears.
+
+    Guards (all required):
+        margin       win_rate - break_even >= EDGE_MARGIN_MIN (2pp)
+        distribution min(wins, losses) >= SPREAD_TOTAL_MIN_SIDE_SAMPLE
+        clv          when sample >= MIN_CLV_SAMPLE_SIZE,
+                         positive_clv_rate >= 0.52
+                     when sample <  MIN_CLV_SAMPLE_SIZE,
+                         insufficient_sample → guard inactive
+
+    The classifier short-circuits on these AFTER the Phase 3 thresholds
+    so the existing tests still pin behavior at the tier boundaries
+    independently. A win_rate / sample / ROI failure is reported as
+    a Phase 3 block; the Phase 4 guards only fire when Phase 3 passed.
+    """
+    from django.conf import settings
+    # Margin guard — observed win rate vs break-even at -110.
+    break_even = calculate_break_even(DEFAULT_SPREAD_TOTAL_ODDS)
+    if win_rate - break_even < EDGE_MARGIN_MIN:
+        return False
+    # Distribution guard
+    min_side = getattr(settings, 'SPREAD_TOTAL_MIN_SIDE_SAMPLE',
+                       SPREAD_TOTAL_MIN_SIDE_SAMPLE_DEFAULT)
+    if _min_side_sample(perf) < min_side:
+        return False
+    # CLV guard — gates on signal_type so each signal's CLV history
+    # is tracked independently. When CLV tracking lands the function
+    # will return real numbers; until then it's universally
+    # insufficient_sample which means the guard short-circuits to True.
+    clv_stats = compute_clv_stats(signal_type, model=market)
+    if not _clv_guard_passes(clv_stats):
+        return False
+    return True
+
+
 def _spread_classify(signal_type: str, odds_source: str, is_derived: bool):
     """Returns (is_lean, is_recommended, historical_win_rate,
     sample_size, roi) for a new spread signal. Reads current
-    historical performance for the signal_type and applies BOTH the
-    Phase 2 lean bar AND the Phase 3 promotion bar.
+    historical performance for the signal_type and applies the
+    Phase 2 lean bar, the Phase 3 promotion bar, AND the Phase 4
+    quality guards (margin, distribution, CLV).
 
     is_recommended implies is_lean (the promotion thresholds are
     strictly stricter than the lean ones), so we don't need to set
@@ -565,8 +701,8 @@ def _spread_classify(signal_type: str, odds_source: str, is_derived: bool):
         and win_rate is not None
         and win_rate > SPREAD_LEAN_WIN_RATE_THRESHOLD
     )
-    # Promotion: stricter bar + source safety.
-    is_recommended = (
+    # Phase 3 thresholds — same as before.
+    phase3_clears = (
         is_lean  # must clear lean bar first
         and _is_promotable_source(odds_source, is_derived)
         and sample >= SPREAD_REC_MIN_SAMPLE
@@ -575,13 +711,18 @@ def _spread_classify(signal_type: str, odds_source: str, is_derived: bool):
         and roi is not None
         and roi >= SPREAD_REC_MIN_ROI
     )
+    # Phase 4 quality guards — only checked if Phase 3 already cleared.
+    is_recommended = phase3_clears and _phase4_promotion_guards_pass(
+        perf, win_rate, signal_type, 'spread',
+    )
     return is_lean, is_recommended, win_rate, sample if sample else None, roi
 
 
 def _total_classify(signal_type: str, odds_source: str, is_derived: bool):
     """Returns (is_lean, is_recommended, win_rate, sample, roi) for a
     new total signal. Total uses a stricter Phase 3 bar than spread
-    because total markets are noisier."""
+    because total markets are noisier. Phase 4 guards apply identically
+    to both markets — they're already calibrated for thin edges."""
     perf = compute_total_performance().get(signal_type) or {}
     win_rate = perf.get('win_rate')
     sample = perf.get('sample_size') or 0
@@ -594,7 +735,7 @@ def _total_classify(signal_type: str, odds_source: str, is_derived: bool):
         and roi is not None
         and roi > TOTAL_LEAN_MIN_ROI
     )
-    is_recommended = (
+    phase3_clears = (
         is_lean
         and _is_promotable_source(odds_source, is_derived)
         and sample >= TOTAL_REC_MIN_SAMPLE
@@ -602,6 +743,9 @@ def _total_classify(signal_type: str, odds_source: str, is_derived: bool):
         and win_rate >= TOTAL_REC_WIN_RATE_THRESHOLD
         and roi is not None
         and roi >= TOTAL_REC_MIN_ROI
+    )
+    is_recommended = phase3_clears and _phase4_promotion_guards_pass(
+        perf, win_rate, signal_type, 'total',
     )
     return is_lean, is_recommended, win_rate, sample if sample else None, roi
 

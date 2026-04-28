@@ -197,6 +197,34 @@ SPREAD_TOTAL_RECOMMENDATIONS_ENABLED = (
     os.environ.get('SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', 'false').lower() == 'true'
 )
 
+# --- Phase 4: Promotion-quality guards ---
+# Performance aggregators consider only settled outcomes within this
+# rolling window. Default 60 days — captures recent form without
+# letting an old hot streak prop up a current edge that's gone cold.
+SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS = int(
+    os.environ.get('SPREAD_TOTAL_PERFORMANCE_LOOKBACK_DAYS', '60')
+)
+# Tighter window for the "last N days" display chip on green cards.
+SPREAD_TOTAL_RECENT_DISPLAY_DAYS = int(
+    os.environ.get('SPREAD_TOTAL_RECENT_DISPLAY_DAYS', '30')
+)
+# Distribution guard — promotion requires both win and loss buckets
+# to clear this minimum so a 50-0 hot streak can't promote.
+SPREAD_TOTAL_MIN_SIDE_SAMPLE = int(
+    os.environ.get('SPREAD_TOTAL_MIN_SIDE_SAMPLE', '15')
+)
+# CLV guard — when CLV coverage clears MIN_CLV_SAMPLE_SIZE, promotion
+# additionally requires positive_clv_rate >= 0.52. Below the
+# minimum, CLV is reported but not enforced (status='insufficient_sample')
+# so the system doesn't block recommendations during the cold-start
+# period when CLV history hasn't accumulated.
+MIN_CLV_SAMPLE_SIZE = int(os.environ.get('MIN_CLV_SAMPLE_SIZE', '20'))
+# Bulk-bet cooldown — server-side throttle on the spread/total bulk
+# endpoint to defend against double-click / replay attacks. Per-user.
+SPREAD_TOTAL_BULK_COOLDOWN_SECONDS = int(
+    os.environ.get('SPREAD_TOTAL_BULK_COOLDOWN_SECONDS', '10')
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')
