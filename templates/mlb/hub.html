@@ -23,7 +23,7 @@
       {% if verified_bulk_count %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet"
               onclick="bulkPlaceRecommended('verified', this, {{ verified_bulk_count }})">
-        🟢 Bet All Verified Plays ({{ verified_bulk_count }})
+        🟢 Bet All Moneyline Plays ({{ verified_bulk_count }})
       </button>
       {% endif %}
       {% if espn_bulk_count %}
@@ -33,40 +33,51 @@
       </button>
       {% endif %}
       {% comment %}
-        Tiered Intelligence Phase 1 — Spread + Total bulk buttons render
-        as DISABLED "Coming Soon" controls. The server-side endpoint
-        does NOT yet accept spread/total bet types; if any of the
-        existing moneyline endpoints were called with the wrong
-        bet_type the bulk_actions service would skip the games (status
-        != 'recommended' for spread/total). But we don't even let the
-        click reach the JS — the buttons are disabled at the HTML
-        level + carry aria-disabled + a tooltip explaining the state.
+        Tiered Intelligence — Spread + Total bulk buttons.
 
-        Why render them at all: visibility. Surfacing the buttons (in
-        their disabled state) telegraphs the architectural direction
-        to the user — these markets exist as informational signals
-        today, and bulk action is on the roadmap once we have a
-        modeled edge for them. Rendering them only when there's at
-        least one signal of that type prevents an empty disabled
-        button when nothing's eligible anyway.
+        Phase 3: when SPREAD_TOTAL_RECOMMENDATIONS_ENABLED is on AND
+        promoted recommendations exist for that bet type, the button
+        ACTIVATES — green-tinted, opens a confirm modal, places mock
+        bets on the promoted set via the spread/total bulk endpoint.
+
+        Otherwise: button stays in its Phase 1 "Coming Soon" disabled
+        state with the original tooltip. Rendered only when at least
+        one signal of that type exists (no point showing a disabled
+        empty-cohort button).
       {% endcomment %}
       {% if spread_total_signals_enabled and spread_tiles %}
-      <button type="button"
-              class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
-              disabled
-              aria-disabled="true"
-              title="Spread bulk-bet is coming in Phase 2 once we have a model edge for the run line. Until then, place individual bets on opportunities you like.">
-        📊 Bet All Spread &middot; <em>Coming Soon</em>
-      </button>
+        {% if spread_total_recommendations_enabled and spread_rec_bulk_count %}
+        <button type="button"
+                class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet-rec"
+                onclick="bulkPlaceProven('spread', this, {{ spread_rec_bulk_count }})">
+          🟢 Bet All Spread ({{ spread_rec_bulk_count }})
+        </button>
+        {% else %}
+        <button type="button"
+                class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
+                disabled
+                aria-disabled="true"
+                title="Spread bulk-bet activates once a signal type is statistically promoted (50+ games, ≥54.5% win rate, ≥2% ROI). Until then, place individual bets on opportunities you like.">
+          📊 Bet All Spread &middot; <em>Coming Soon</em>
+        </button>
+        {% endif %}
       {% endif %}
       {% if spread_total_signals_enabled and total_tiles %}
-      <button type="button"
-              class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
-              disabled
-              aria-disabled="true"
-              title="Total bulk-bet is coming in Phase 2 once we have a model edge for over/under. Until then, place individual bets on opportunities you like.">
-        🌡️ Bet All Total &middot; <em>Coming Soon</em>
-      </button>
+        {% if spread_total_recommendations_enabled and total_rec_bulk_count %}
+        <button type="button"
+                class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet-rec"
+                onclick="bulkPlaceProven('total', this, {{ total_rec_bulk_count }})">
+          🟢 Bet All Total ({{ total_rec_bulk_count }})
+        </button>
+        {% else %}
+        <button type="button"
+                class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--coming-soon"
+                disabled
+                aria-disabled="true"
+                title="Total bulk-bet activates once a signal type is statistically promoted (50+ games, ≥55% win rate, ≥2.5% ROI). Until then, place individual bets on opportunities you like.">
+          🌡️ Bet All Total &middot; <em>Coming Soon</em>
+        </button>
+        {% endif %}
       {% endif %}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--cancel"
               onclick="bulkCancelOpen()">
@@ -110,10 +121,10 @@
           msgPrefix = 'ESPN: ';
       } else {
           confirmMsg = 'You are about to place a $100 mock bet on each of '
-              + nLbl + ' (verified primary-source odds). Games where you '
-              + 'already have a pending bet will be skipped automatically. '
-              + 'Proceed?';
-          msgPrefix = 'Verified: ';
+              + nLbl + ' (moneyline plays from the verified primary-source '
+              + 'cohort). Games where you already have a pending bet will '
+              + 'be skipped automatically. Proceed?';
+          msgPrefix = 'Moneyline: ';
       }
       if (!window.confirm(confirmMsg)) return;
       btn.disabled = true; btn.textContent = 'Placing…';
@@ -130,6 +141,39 @@
           var msg = msgPrefix + 'placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
           if (d.skipped_existing) msg += ' · ' + d.skipped_existing + ' already had pending bets';
           if (d.skipped_no_odds) msg += ' · ' + d.skipped_no_odds + ' had no odds yet';
+          _showBulkMsg(msg, false);
+          setTimeout(function(){ window.location.reload(); }, 1200);
+      })
+      .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent=originalText; });
+  }
+  function bulkPlaceProven(betType, btn, gameCount) {
+      // Phase 3: bulk-place mock bets on PROMOTED spread or total
+      // recommendations only. Server-side guard: the spread/total
+      // bulk endpoint refuses any rec that isn't is_recommended=True
+      // OR whose source is ESPN/derived. The button is only rendered
+      // when promoted recs exist, so the count is the visible cohort.
+      var n = (typeof gameCount === 'number' && gameCount > 0) ? gameCount : 0;
+      var nLbl = n + ' proven ' + betType + ' recommendation' + (n === 1 ? '' : 's');
+      var confirmMsg = 'You are about to place a $100 mock bet on each of '
+          + nLbl + '. These cleared a 50+ game sample at ≥54.5% win rate '
+          + '(spread) or ≥55% with ≥2.5% ROI (total). Games where you '
+          + 'already have a pending bet of this type will be skipped. '
+          + 'Proceed?';
+      if (!window.confirm(confirmMsg)) return;
+      var originalText = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Placing…';
+      var url = '{% url "mockbets:bulk_place_recommended" %}?source_filter=verified&bet_type=' + encodeURIComponent(betType);
+      fetch(url, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': _csrfToken() },
+          credentials: 'same-origin',
+      })
+      .then(function(r){ return r.json().then(function(d){ return [r,d]; }); })
+      .then(function(arr) {
+          var r = arr[0], d = arr[1];
+          if (!r.ok) { _showBulkMsg(d.error || 'Bulk placement failed.', true); btn.disabled=false; btn.textContent=originalText; return; }
+          var msg = (betType === 'spread' ? 'Spread' : 'Total') + ': placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
+          if (d.skipped_existing) msg += ' · ' + d.skipped_existing + ' already had pending bets';
           _showBulkMsg(msg, false);
           setTimeout(function(){ window.location.reload(); }, 1200);
       })
@@ -193,6 +237,15 @@
       <a href="?bet_type=leans{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
          class="mlb-bet-type-chip mlb-bet-type-chip--leans {% if bet_type_filter == 'leans' %}is-active{% endif %}"
          aria-pressed="{% if bet_type_filter == 'leans' %}true{% else %}false{% endif %}">🟡 Leans Only</a>
+      {% endif %}
+      {# Phase 3: Recommended chip — green rim. Filters to ONLY proven  #}
+      {# recommendations (green tier). Renders only when the Phase 3   #}
+      {# flag is on; isolates spread/total promoted recs (Moneyline     #}
+      {# Recommended Plays render via the Recommended Plays group box). #}
+      {% if spread_total_recommendations_enabled %}
+      <a href="?bet_type=recommended{% if request.GET.diag %}&amp;diag={{ request.GET.diag }}{% endif %}"
+         class="mlb-bet-type-chip mlb-bet-type-chip--recommended {% if bet_type_filter == 'recommended' %}is-active{% endif %}"
+         aria-pressed="{% if bet_type_filter == 'recommended' %}true{% else %}false{% endif %}">🟢 Recommended</a>
       {% endif %}
     </div>
   {% endif %}{% endif %}
@@ -390,14 +443,124 @@
     </div>{# /mlb-decision-group--fade #}
 
     {% comment %}
+      Tiered Intelligence Phase 3 — Promoted Recommendations.
+      Above the Phase 1 Opportunity sections, below the Moneyline
+      groups. Green-bordered to match the Recommended trust tier.
+      Renders only when the leans flag's stricter sibling
+      SPREAD_TOTAL_RECOMMENDATIONS_ENABLED is on AND at least one
+      promoted recommendation exists for that bet type. ESPN-source
+      and is_derived rows are guaranteed-not-promoted at the data
+      layer (see _is_promotable_source) so they can never reach here.
+    {% endcomment %}
+    {% if spread_total_recommendations_enabled and spread_recommended_tiles %}
+    <div class="mlb-decision-group mlb-decision-group--proven mlb-decision-group--proven-spread {% if bet_type_filter != 'all' and bet_type_filter != 'spread' and bet_type_filter != 'recommended' %}is-hidden{% endif %}">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F7E2;</span>
+        <span class="mlb-decision-group__title">Spread Recommendations <span class="mlb-decision-group__title-suffix">(Proven Edge)</span></span>
+        <span class="mlb-decision-group__hint">Statistically proven over 50+ games &mdash; verified-source only</span>
+      </div>
+      <section class="mlb-section mlb-section--spread-rec">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Run-line proven edges</h2>
+          <span class="mlb-section__count">{{ spread_recommended_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for entry in spread_recommended_tiles %}
+            <div role="listitem" class="mlb-opportunity-card mlb-opportunity-card--proven">
+              <div class="mlb-opportunity-card__signal">
+                <span class="mlb-rec-badge"
+                      title="Recommended = the signal type has cleared the strict promotion bar (50+ games, ≥54.5% win rate, ≥2% ROI). Source-safe: ESPN/derived rows can never reach this section.">
+                  🟢 Recommended
+                  <span class="mlb-rec-badge__data">
+                    ({{ entry.historical_win_rate_pct }}% vs {{ entry.break_even_pct }}%, +{{ entry.roi_pct }}% ROI, {{ entry.signal.sample_size }} games)
+                  </span>
+                </span>
+                <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
+                  {% if entry.signal.signal_type == 'tight_spread' %}Tight Spread
+                  {% else %}Large Favorite
+                  {% endif %}
+                </span>
+                <span class="mlb-opportunity-card__value">
+                  {% if entry.signal.spread > 0 %}+{{ entry.signal.spread|floatformat:1 }}
+                  {% else %}{{ entry.signal.spread|floatformat:1 }}
+                  {% endif %}
+                </span>
+                {% if entry.signal.favorite_team_name %}
+                <span class="mlb-opportunity-card__detail">
+                  Favorite: <strong>{{ entry.signal.favorite_team_name }}</strong>
+                </span>
+                {% endif %}
+              </div>
+              {% if entry.tile.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=entry.tile %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=entry.tile %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    {% endif %}
+
+    {% if spread_total_recommendations_enabled and total_recommended_tiles %}
+    <div class="mlb-decision-group mlb-decision-group--proven mlb-decision-group--proven-total {% if bet_type_filter != 'all' and bet_type_filter != 'total' and bet_type_filter != 'recommended' %}is-hidden{% endif %}">
+      <div class="mlb-decision-group__head">
+        <span class="mlb-decision-group__icon">&#x1F7E2;</span>
+        <span class="mlb-decision-group__title">Total Recommendations <span class="mlb-decision-group__title-suffix">(Proven Edge)</span></span>
+        <span class="mlb-decision-group__hint">Statistically proven over 50+ games &mdash; verified-source only</span>
+      </div>
+      <section class="mlb-section mlb-section--total-rec">
+        <div class="mlb-section__head">
+          <h2 class="mlb-section__title">Over/Under proven edges</h2>
+          <span class="mlb-section__count">{{ total_recommended_tiles|length }}</span>
+        </div>
+        <div class="mlb-rail tiles-container" role="list">
+          {% for entry in total_recommended_tiles %}
+            <div role="listitem" class="mlb-opportunity-card mlb-opportunity-card--proven">
+              <div class="mlb-opportunity-card__signal">
+                <span class="mlb-rec-badge"
+                      title="Recommended = the signal type has cleared the strict promotion bar (50+ games, ≥55% win rate, ≥2.5% ROI). Source-safe: ESPN/derived rows can never reach this section.">
+                  🟢 Recommended
+                  <span class="mlb-rec-badge__data">
+                    ({{ entry.historical_win_rate_pct }}% vs {{ entry.break_even_pct }}%, +{{ entry.roi_pct }}% ROI, {{ entry.signal.sample_size }} games)
+                  </span>
+                </span>
+                <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
+                  {% if entry.signal.signal_type == 'high_scoring' %}High Scoring
+                  {% else %}Low Scoring
+                  {% endif %}
+                </span>
+                <span class="mlb-opportunity-card__value">
+                  O/U {{ entry.signal.total|floatformat:1 }}
+                </span>
+              </div>
+              {% if entry.tile.game.status == 'live' %}
+                {% include "mlb/_tile_live.html" with s=entry.tile %}
+              {% else %}
+                {% include "mlb/_tile_upcoming.html" with s=entry.tile %}
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    {% endif %}
+
+    {% comment %}
       Tiered Intelligence Phase 1 — Spread Opportunities.
       RULE-BASED, NOT MODEL-BACKED. Render only when the feature flag is
       ON and there is at least one spread signal. Hides when the user
       filters to moneyline-only or total-only. The disclaimer line is
       mandatory by spec — these signals must NEVER be confused with
       Recommended Plays.
+
+      Phase 3: when SPREAD_TOTAL_RECOMMENDATIONS_ENABLED is on, this
+      section iterates `spread_signal_tiles` (non-recommended subset)
+      so promoted rows render only in the Proven Edge section above.
+      When Phase 3 is off, the variable equals the full `spread_tiles`.
     {% endcomment %}
-    {% if spread_total_signals_enabled and spread_tiles %}
+    {% if spread_total_signals_enabled and spread_signal_tiles %}
     {# Phase 2: when the Leans Only filter is active, hide individual    #}
     {# group containers if NONE of their cards are leans. The simpler    #}
     {# approach (always show, mark non-leans is-hidden at card level)    #}
@@ -419,10 +582,10 @@
       <section class="mlb-section mlb-section--spread">
         <div class="mlb-section__head">
           <h2 class="mlb-section__title">Run-line signals</h2>
-          <span class="mlb-section__count">{{ spread_tiles|length }}</span>
+          <span class="mlb-section__count">{{ spread_signal_tiles|length }}</span>
         </div>
         <div class="mlb-rail tiles-container" role="list">
-          {% for entry in spread_tiles %}
+          {% for entry in spread_signal_tiles %}
             <div role="listitem" class="mlb-opportunity-card {% if bet_type_filter == 'leans' and not entry.signal.is_lean %}is-hidden{% endif %}">
               <div class="mlb-opportunity-card__signal">
                 <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
@@ -440,15 +603,19 @@
                   Favorite: <strong>{{ entry.signal.favorite_team_name }}</strong>
                 </span>
                 {% endif %}
-                {# Phase 2: yellow Lean badge — only when the row is     #}
-                {# is_lean=True AND the flag is on. Carries the data    #}
-                {# inline so users understand WHY it's a lean.          #}
+                {# Phase 2: yellow Lean badge. Phase 3: when feature flag #}
+                {# on, badge format adds break-even ("X% vs Y% break-    #}
+                {# even") so users see the gap to profitability.         #}
                 {% if spread_total_leans_enabled and entry.signal.is_lean %}
                 <span class="mlb-lean-badge"
                       title="Lean = data-supported signal. Win rate over a 30+ game sample exceeds the threshold. NOT a model recommendation.">
                   🟡 Lean
                   <span class="mlb-lean-badge__data">
+                    {% if spread_total_recommendations_enabled %}
+                    ({{ entry.historical_win_rate_pct }}% vs {{ entry.break_even_pct }}% break-even, {{ entry.signal.sample_size }} games)
+                    {% else %}
                     ({{ entry.historical_win_rate_pct }}% win rate, {{ entry.signal.sample_size }} games)
+                    {% endif %}
                   </span>
                 </span>
                 {% endif %}
@@ -472,7 +639,7 @@
       Tiered Intelligence Phase 1 — Total Opportunities. Same shape as
       Spread; same disclaimer. Hides under spread or moneyline filter.
     {% endcomment %}
-    {% if spread_total_signals_enabled and total_tiles %}
+    {% if spread_total_signals_enabled and total_signal_tiles %}
     <div class="mlb-decision-group mlb-decision-group--opportunity mlb-decision-group--total {% if bet_type_filter != 'all' and bet_type_filter != 'total' and bet_type_filter != 'leans' %}is-hidden{% endif %}">
       <div class="mlb-decision-group__head">
         <span class="mlb-decision-group__icon">&#x1F321;&#xFE0F;</span>
@@ -487,10 +654,10 @@
       <section class="mlb-section mlb-section--total">
         <div class="mlb-section__head">
           <h2 class="mlb-section__title">Over/Under signals</h2>
-          <span class="mlb-section__count">{{ total_tiles|length }}</span>
+          <span class="mlb-section__count">{{ total_signal_tiles|length }}</span>
         </div>
         <div class="mlb-rail tiles-container" role="list">
-          {% for entry in total_tiles %}
+          {% for entry in total_signal_tiles %}
             <div role="listitem" class="mlb-opportunity-card {% if bet_type_filter == 'leans' and not entry.signal.is_lean %}is-hidden{% endif %}">
               <div class="mlb-opportunity-card__signal">
                 <span class="mlb-opportunity-card__signal-type mlb-opportunity-signal--{{ entry.signal.signal_type }}">
@@ -506,7 +673,11 @@
                       title="Lean = data-supported signal. Win rate over a 30+ game sample exceeds the threshold AND clears a 2% ROI floor. NOT a model recommendation.">
                   🟡 Lean
                   <span class="mlb-lean-badge__data">
+                    {% if spread_total_recommendations_enabled %}
+                    ({{ entry.historical_win_rate_pct }}% vs {{ entry.break_even_pct }}% break-even, {{ entry.signal.sample_size }} games)
+                    {% else %}
                     ({{ entry.historical_win_rate_pct }}% win rate, {{ entry.signal.sample_size }} games)
+                    {% endif %}
                   </span>
                 </span>
                 {% endif %}

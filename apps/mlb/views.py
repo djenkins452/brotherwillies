@@ -109,39 +109,48 @@ def mlb_hub(request):
         getattr(settings, 'SPREAD_TOTAL_SIGNALS_ENABLED', False)
     )
     if spread_total_signals_enabled:
+        # Phase 3: also pre-compute break-even rate (% format) for the
+        # "X% vs Y% break-even" badge format. -110 standard pricing —
+        # MLB run-line / total juice is rarely far enough from -110
+        # for the precision of "Y%" to mislead a user.
+        from apps.mlb.services.opportunity_signals import (
+            calculate_break_even, DEFAULT_SPREAD_TOTAL_ODDS,
+        )
+        break_even_pct = round(
+            calculate_break_even(DEFAULT_SPREAD_TOTAL_ODDS) * 100, 1,
+        )
+
+        def _shape_entry(sig, tile):
+            wr_pct = (
+                round(sig.historical_win_rate * 100, 1)
+                if sig.historical_win_rate is not None
+                else None
+            )
+            roi_pct = (
+                round(sig.roi * 100, 1)
+                if getattr(sig, 'roi', None) is not None
+                else None
+            )
+            return {
+                'signal': sig, 'tile': tile,
+                'historical_win_rate_pct': wr_pct,
+                'roi_pct': roi_pct,
+                'break_even_pct': break_even_pct,
+            }
+
         for tile in all_tiles:
             sig = latest_spread_opportunity_for_game(tile.game)
             if sig is not None:
-                # Pre-compute the percentage for the Lean badge — the
-                # template can't easily multiply a float by 100 without
-                # custom filter gymnastics. Doing it in Python is one
-                # line and keeps the template stupid.
-                wr_pct = (
-                    round(sig.historical_win_rate * 100, 1)
-                    if sig.historical_win_rate is not None
-                    else None
-                )
-                spread_tiles.append({
-                    'signal': sig, 'tile': tile,
-                    'historical_win_rate_pct': wr_pct,
-                })
+                spread_tiles.append(_shape_entry(sig, tile))
             sig = latest_total_opportunity_for_game(tile.game)
             if sig is not None:
-                wr_pct = (
-                    round(sig.historical_win_rate * 100, 1)
-                    if sig.historical_win_rate is not None
-                    else None
-                )
-                total_tiles.append({
-                    'signal': sig, 'tile': tile,
-                    'historical_win_rate_pct': wr_pct,
-                })
+                total_tiles.append(_shape_entry(sig, tile))
 
-    # Filter param — `?bet_type=moneyline|spread|total|leans|all`. Default 'all'.
-    # Any other value (typo, stale link, malicious param) collapses to 'all'
-    # so the page is robust to garbage input.
+    # Filter param — `?bet_type=moneyline|spread|total|leans|recommended|all`.
+    # Default 'all'. Any other value (typo, stale link, malicious param)
+    # collapses to 'all' so the page is robust to garbage input.
     bet_type_filter = request.GET.get('bet_type', 'all')
-    if bet_type_filter not in ('all', 'moneyline', 'spread', 'total', 'leans'):
+    if bet_type_filter not in ('all', 'moneyline', 'spread', 'total', 'leans', 'recommended'):
         bet_type_filter = 'all'
 
     # Phase 2 — Leans intelligence layer. Separate flag from Phase 1 so
@@ -149,11 +158,40 @@ def mlb_hub(request):
     spread_total_leans_enabled = bool(
         getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
     )
+    # Phase 3 — Promoted Recommendations. Independent flag from leans;
+    # recommendations require both flags + Phase 3 historical data.
+    spread_total_recommendations_enabled = bool(
+        getattr(settings, 'SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', False)
+    )
     # The Leans Only filter only makes sense when the Leans layer is on.
     # If a stale URL has bet_type=leans but the flag is off, fall back
     # to 'all' so the page still renders normally.
     if bet_type_filter == 'leans' and not spread_total_leans_enabled:
         bet_type_filter = 'all'
+    if bet_type_filter == 'recommended' and not spread_total_recommendations_enabled:
+        bet_type_filter = 'all'
+
+    # Phase 3 — partition spread/total tiles into "recommended" and
+    # "non-recommended" buckets for separate rendering. The recommended
+    # bucket gets its own green-bordered section ABOVE the existing
+    # opportunity sections (which become the Lean + Signal collection).
+    spread_recommended_tiles = [
+        e for e in spread_tiles if e['signal'].is_recommended
+    ]
+    total_recommended_tiles = [
+        e for e in total_tiles if e['signal'].is_recommended
+    ]
+    # The existing Phase 1 opportunity sections render `spread_tiles` /
+    # `total_tiles` directly. When Phase 3 is on, we want the recommended
+    # rows to render ONCE — in their own new section — not twice. So we
+    # pass a "non-recommended" view of the same list to the Phase 1
+    # template branch when Phase 3 is on, full list otherwise.
+    if spread_total_recommendations_enabled:
+        spread_signal_tiles = [e for e in spread_tiles if not e['signal'].is_recommended]
+        total_signal_tiles = [e for e in total_tiles if not e['signal'].is_recommended]
+    else:
+        spread_signal_tiles = spread_tiles
+        total_signal_tiles = total_tiles
 
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,
@@ -182,8 +220,21 @@ def mlb_hub(request):
         # alone would render an empty section header.)
         'spread_total_signals_enabled': spread_total_signals_enabled,
         'spread_total_leans_enabled': spread_total_leans_enabled,
+        'spread_total_recommendations_enabled': spread_total_recommendations_enabled,
         'spread_tiles': spread_tiles,
         'total_tiles': total_tiles,
+        # Phase 3 partition: recommended (green Proven-Edge section)
+        # vs the rest. The existing Phase 1 opportunity sections now
+        # iterate `*_signal_tiles` (non-recommended) when Phase 3 is on
+        # so the same row doesn't render twice. When Phase 3 is off,
+        # `*_signal_tiles` == `*_tiles` (current behavior preserved).
+        'spread_recommended_tiles': spread_recommended_tiles,
+        'total_recommended_tiles': total_recommended_tiles,
+        'spread_signal_tiles': spread_signal_tiles,
+        'total_signal_tiles': total_signal_tiles,
+        # Counts for the bulk-bet button labels.
+        'spread_rec_bulk_count': len(spread_recommended_tiles),
+        'total_rec_bulk_count': len(total_recommended_tiles),
         'bet_type_filter': bet_type_filter,
         'nav_active': 'mlb',
         'help_key': 'mlb_hub',

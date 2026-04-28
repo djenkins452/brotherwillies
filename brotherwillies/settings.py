@@ -187,6 +187,15 @@ SPREAD_TOTAL_SIGNALS_ENABLED = (
 SPREAD_TOTAL_LEANS_ENABLED = (
     os.environ.get('SPREAD_TOTAL_LEANS_ENABLED', 'false').lower() == 'true'
 )
+# Phase 3 — Promoted Recommendations (Proven Edge). When ON, signals
+# whose stats clear the stricter Phase 3 thresholds render in their
+# own green-bordered "Recommendations (Proven Edge)" sections AND
+# their bulk-bet buttons activate. Independent flag so we can ship
+# Phase 1+2 surfaces without exposing recommendations until the data
+# layer has accumulated enough settled history to actually fire.
+SPREAD_TOTAL_RECOMMENDATIONS_ENABLED = (
+    os.environ.get('SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', 'false').lower() == 'true'
+)
 
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')

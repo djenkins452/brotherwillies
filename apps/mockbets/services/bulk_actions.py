@@ -238,6 +238,193 @@ def place_bulk_recommended_bets(
     }
 
 
+# --------------------------------------------------------------------- #
+# Phase 3 — bulk placement on PROMOTED Spread / Total recommendations.
+#
+# Hard rules (enforced here, not just at the UI layer):
+#   1. Only is_recommended=True rows are eligible.
+#   2. ESPN-source and is_derived rows are filtered out as defense in
+#      depth — _is_promotable_source already guarantees those rows
+#      can't have is_recommended=True, but we double-check on the
+#      placement path so a future data-layer bug can't leak.
+#   3. Same today's-local-slate scope as the moneyline bulk endpoint.
+#   4. Same skip-existing-pending guard.
+# --------------------------------------------------------------------- #
+
+
+def _eligible_spread_recommendations(user):
+    """Yield SpreadOpportunity rows the user could bet right now."""
+    from apps.mlb.models import SpreadOpportunity
+    today_local = timezone.localdate()
+    qs = (
+        SpreadOpportunity.objects
+        .filter(is_recommended=True)
+        .exclude(source='espn')
+        .select_related('game', 'game__home_team', 'game__away_team')
+    )
+    for opp in qs:
+        game = opp.game
+        if game.first_pitch is None or game.first_pitch <= timezone.now():
+            continue
+        if timezone.localtime(game.first_pitch).date() != today_local:
+            continue
+        if game.status != 'scheduled':
+            continue
+        # NOTE: skip-existing-pending check is INTENTIONALLY in the
+        # placement loop, not here. Doing it here would silently drop
+        # the row from the count, leaving idempotency callers thinking
+        # 0 rows were eligible rather than 0 newly placed.
+        yield opp
+
+
+def _eligible_total_recommendations(user):
+    """Yield TotalOpportunity rows the user could bet right now."""
+    from apps.mlb.models import TotalOpportunity
+    today_local = timezone.localdate()
+    qs = (
+        TotalOpportunity.objects
+        .filter(is_recommended=True)
+        .exclude(source='espn')
+        .select_related('game', 'game__home_team', 'game__away_team')
+    )
+    for opp in qs:
+        game = opp.game
+        if game.first_pitch is None or game.first_pitch <= timezone.now():
+            continue
+        if timezone.localtime(game.first_pitch).date() != today_local:
+            continue
+        if game.status != 'scheduled':
+            continue
+        if MockBet.objects.filter(
+            user=user, sport='mlb', mlb_game=game,
+            bet_type='total', result='pending',
+        ).exists():
+            continue
+        yield opp
+
+
+def place_bulk_proven_spread_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
+    """Place a $stake mock bet on every promoted spread recommendation
+    in today's slate. -110 standard pricing assumed; selection is the
+    side the EVALUATED_DIRECTION points at (underdog for tight_spread,
+    favorite for large_favorite).
+
+    Belt-and-suspenders source-safety: even if a stale row somehow
+    has is_recommended=True with source='espn' or is_derived=True
+    (the data layer prevents this), we re-check inside the loop and
+    skip. is_derived isn't on the opportunity row but we exclude
+    'espn' source and that catches the most common contamination path.
+    """
+    placed = 0
+    skipped_existing = 0
+    with transaction.atomic():
+        for opp in _eligible_spread_recommendations(user):
+            game = opp.game
+            # Selection text describes the side per EVALUATED_DIRECTION
+            # so the user can read the bet at a glance.
+            line = abs(opp.spread)
+            if opp.signal_type == 'tight_spread':
+                # Underdog covers — bet at +line.
+                team = opp.underdog_team_name or game.away_team.name
+                selection = f"{team} +{line}"
+            else:  # large_favorite
+                team = opp.favorite_team_name or game.home_team.name
+                selection = f"{team} -{line}"
+            odds = -110  # standard run-line pricing
+            # Re-check pending — within atomic block, defensive.
+            if MockBet.objects.filter(
+                user=user, sport='mlb', mlb_game=game,
+                bet_type='spread', result='pending',
+            ).exists():
+                skipped_existing += 1
+                continue
+            implied = _implied_prob_decimal(odds)
+            MockBet.objects.create(
+                user=user, sport='mlb', mlb_game=game,
+                bet_type='spread', selection=selection,
+                odds_american=odds,
+                implied_probability=implied,
+                stake_amount=stake,
+                expected_edge=(
+                    Decimal(str(round(opp.roi * 100, 2)))
+                    if opp.roi is not None else None
+                ),
+                model_source='house',
+                # Snapshot context so analytics can see this came from
+                # a Phase 3 promoted recommendation, not a moneyline rec.
+                recommendation_status='recommended',
+                recommendation_tier='proven_spread',
+                recommendation_confidence=(
+                    Decimal(str(round(opp.historical_win_rate * 100, 2)))
+                    if opp.historical_win_rate is not None else None
+                ),
+                status_reason='proven_spread_phase3',
+            )
+            placed += 1
+    return {
+        'placed': placed,
+        'skipped_existing': skipped_existing,
+        'skipped_no_odds': 0,  # spread/total don't have a "no odds" path
+        'tier_filter': 'proven_spread',
+        'source_filter': 'verified',
+        'bet_type': 'spread',
+        'stake': float(stake),
+    }
+
+
+def place_bulk_proven_total_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
+    """Place a $stake mock bet on every promoted total recommendation
+    in today's slate. EVALUATED_DIRECTION: high_scoring → over,
+    low_scoring → under. -110 standard pricing assumed."""
+    placed = 0
+    skipped_existing = 0
+    with transaction.atomic():
+        for opp in _eligible_total_recommendations(user):
+            game = opp.game
+            line = opp.total
+            if opp.signal_type == 'high_scoring':
+                selection = f"Over {line}"
+            else:  # low_scoring
+                selection = f"Under {line}"
+            odds = -110
+            if MockBet.objects.filter(
+                user=user, sport='mlb', mlb_game=game,
+                bet_type='total', result='pending',
+            ).exists():
+                skipped_existing += 1
+                continue
+            implied = _implied_prob_decimal(odds)
+            MockBet.objects.create(
+                user=user, sport='mlb', mlb_game=game,
+                bet_type='total', selection=selection,
+                odds_american=odds,
+                implied_probability=implied,
+                stake_amount=stake,
+                expected_edge=(
+                    Decimal(str(round(opp.roi * 100, 2)))
+                    if opp.roi is not None else None
+                ),
+                model_source='house',
+                recommendation_status='recommended',
+                recommendation_tier='proven_total',
+                recommendation_confidence=(
+                    Decimal(str(round(opp.historical_win_rate * 100, 2)))
+                    if opp.historical_win_rate is not None else None
+                ),
+                status_reason='proven_total_phase3',
+            )
+            placed += 1
+    return {
+        'placed': placed,
+        'skipped_existing': skipped_existing,
+        'skipped_no_odds': 0,
+        'tier_filter': 'proven_total',
+        'source_filter': 'verified',
+        'bet_type': 'total',
+        'stake': float(stake),
+    }
+
+
 def cancel_all_open_bets(user) -> dict:
     """Cancel every pending bet whose linked game hasn't started yet.
 

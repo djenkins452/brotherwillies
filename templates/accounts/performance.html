@@ -242,10 +242,86 @@
     {% endif %}
     <p class="text-sm text-muted mt-1">
         These are <strong>opportunity signals</strong>, not model recommendations.
-        Past performance does not predict future outcomes. Bulk betting on
-        Spread/Total is intentionally disabled in Phase 2.
+        Past performance does not predict future outcomes.
+        {% if not spread_total_recommendations_enabled %}
+        Bulk betting on Spread/Total is intentionally disabled in Phase 2.
+        {% endif %}
     </p>
 </div>
+{% endif %}
+
+{% comment %}
+  Phase 3: Promoted Recommendations sub-section. Renders only when
+  the recommendations flag is on AND at least one signal type is
+  currently promoted. Hidden cleanly when nothing has graduated yet
+  so users don't see an empty "promoted" panel.
+{% endcomment %}
+{% if spread_total_recommendations_enabled and promoted_signal_summary %}
+{% if promoted_signal_summary.spread or promoted_signal_summary.total %}
+<p class="section-title mt-2">🟢 Promoted Recommendations (Proven Edge)</p>
+<div class="card">
+    <p class="text-sm" style="color:var(--text-secondary);line-height:1.6;margin-bottom:8px;">
+        Signal types that have <strong>cleared the strict promotion bar</strong>
+        (50+ games, ≥54.5% win rate / ≥2% ROI for spread; 50+ games, ≥55% win
+        rate / ≥2.5% ROI for total). New signals of these types are stamped
+        with the green Recommended badge and become eligible for bulk-bet placement.
+    </p>
+    {% if promoted_signal_summary.spread %}
+    <p class="text-sm mt-1" style="color:var(--text-primary);font-weight:600;">Spread (Run Line)</p>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Signal Type</th>
+                    <th class="num">Win Rate</th>
+                    <th class="num">ROI (est)</th>
+                    <th class="num">Sample</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in promoted_signal_summary.spread %}
+                <tr>
+                    <td><span class="lean-pill" style="background:rgba(34,197,94,0.22);color:#4ade80;border-color:rgba(34,197,94,0.65);">🟢 {{ row.label }}</span></td>
+                    <td class="num">{{ row.win_rate_pct }}%</td>
+                    <td class="num text-green">+{{ row.roi_pct }}%</td>
+                    <td class="num">{{ row.sample_size }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if promoted_signal_summary.total %}
+    <p class="text-sm mt-2" style="color:var(--text-primary);font-weight:600;">Total (Over/Under)</p>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Signal Type</th>
+                    <th class="num">Win Rate</th>
+                    <th class="num">ROI (est)</th>
+                    <th class="num">Sample</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in promoted_signal_summary.total %}
+                <tr>
+                    <td><span class="lean-pill" style="background:rgba(34,197,94,0.22);color:#4ade80;border-color:rgba(34,197,94,0.65);">🟢 {{ row.label }}</span></td>
+                    <td class="num">{{ row.win_rate_pct }}%</td>
+                    <td class="num text-green">+{{ row.roi_pct }}%</td>
+                    <td class="num">{{ row.sample_size }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    <p class="text-sm text-muted mt-1">
+        Source-safety: ESPN-source and synthesized rows are NEVER promoted,
+        regardless of stats. Past performance does not predict future outcomes.
+    </p>
+</div>
+{% endif %}
 {% endif %}
 
 <!-- Calibration -->

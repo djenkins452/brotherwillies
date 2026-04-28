@@ -348,8 +348,14 @@ def performance_view(request):
     spread_total_leans_enabled = bool(
         getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
     )
+    # Phase 3 — Promoted Recommendations sub-section. Independent
+    # flag so Phase 2 perf can ship without yet surfacing promotions.
+    spread_total_recommendations_enabled = bool(
+        getattr(settings, 'SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', False)
+    )
     opportunity_perf_spread = None
     opportunity_perf_total = None
+    promoted_signal_summary = None
     if spread_total_leans_enabled:
         from apps.mlb.services.opportunity_signals import (
             compute_spread_performance, compute_total_performance,
@@ -400,6 +406,56 @@ def performance_view(request):
         opportunity_perf_spread = _shape_perf(compute_spread_performance(), _spread_lean)
         opportunity_perf_total = _shape_perf(compute_total_performance(), _total_lean)
 
+    # Phase 3 — Promoted Recommendations sub-section. Reuses the
+    # Phase 2 performance numbers but applies the stricter Phase 3
+    # promotion thresholds to mark which signal types currently
+    # qualify as Recommendations. Computed only when the flag is on.
+    if spread_total_recommendations_enabled:
+        from apps.mlb.services.opportunity_signals import (
+            compute_spread_performance, compute_total_performance,
+            SPREAD_REC_WIN_RATE_THRESHOLD, SPREAD_REC_MIN_SAMPLE,
+            SPREAD_REC_MIN_ROI,
+            TOTAL_REC_WIN_RATE_THRESHOLD, TOTAL_REC_MIN_SAMPLE,
+            TOTAL_REC_MIN_ROI,
+        )
+
+        def _shape_promoted(perf_dict, threshold_check):
+            shaped = []
+            for signal_type, stats in perf_dict.items():
+                if not threshold_check(stats):
+                    continue
+                wr = stats['win_rate']
+                roi = stats['roi_estimate']
+                shaped.append({
+                    'signal_type': signal_type,
+                    'label': signal_type.replace('_', ' ').title(),
+                    'win_rate_pct': round(wr * 100, 1) if wr is not None else None,
+                    'sample_size': stats['sample_size'],
+                    'roi_pct': round(roi * 100, 1) if roi is not None else None,
+                })
+            return shaped
+
+        def _spread_proven(stats):
+            wr, roi, sample = stats['win_rate'], stats['roi_estimate'], stats['sample_size']
+            return (
+                sample >= SPREAD_REC_MIN_SAMPLE
+                and wr is not None and wr >= SPREAD_REC_WIN_RATE_THRESHOLD
+                and roi is not None and roi >= SPREAD_REC_MIN_ROI
+            )
+
+        def _total_proven(stats):
+            wr, roi, sample = stats['win_rate'], stats['roi_estimate'], stats['sample_size']
+            return (
+                sample >= TOTAL_REC_MIN_SAMPLE
+                and wr is not None and wr >= TOTAL_REC_WIN_RATE_THRESHOLD
+                and roi is not None and roi >= TOTAL_REC_MIN_ROI
+            )
+
+        promoted_signal_summary = {
+            'spread': _shape_promoted(compute_spread_performance(), _spread_proven),
+            'total': _shape_promoted(compute_total_performance(), _total_proven),
+        }
+
     return render(request, 'accounts/performance.html', {
         'overall': _compute_metrics(all_snaps),
         'cfb': _compute_metrics(cfb_snaps),
@@ -411,8 +467,10 @@ def performance_view(request):
         'market_movement': market_movement,
         'recent_snapshots': all_snaps[:50],
         'spread_total_leans_enabled': spread_total_leans_enabled,
+        'spread_total_recommendations_enabled': spread_total_recommendations_enabled,
         'opportunity_perf_spread': opportunity_perf_spread,
         'opportunity_perf_total': opportunity_perf_total,
+        'promoted_signal_summary': promoted_signal_summary,
         'help_key': 'performance',
         'nav_active': 'profile',
     })

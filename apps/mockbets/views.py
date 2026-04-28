@@ -287,7 +287,11 @@ def bulk_place_recommended(request):
       - tier_filter: 'all' (default) | 'elite' | 'elite_or_strong'
       - stake: defaults to 100
     """
-    from .services.bulk_actions import place_bulk_recommended_bets
+    from .services.bulk_actions import (
+        place_bulk_recommended_bets,
+        place_bulk_proven_spread_bets,
+        place_bulk_proven_total_bets,
+    )
     sport = request.GET.get('sport', 'mlb')
     tier_filter = request.GET.get('tier_filter', 'all')
     if tier_filter not in ('all', 'elite', 'elite_or_strong', 'strong'):
@@ -298,6 +302,14 @@ def bulk_place_recommended(request):
     source_filter = request.GET.get('source_filter', 'all')
     if source_filter not in ('all', 'verified', 'espn'):
         source_filter = 'all'
+    # Phase 3: bet_type param routes to the appropriate placement
+    # service. 'moneyline' (default) keeps the legacy moneyline path.
+    # 'spread' / 'total' route to the spread/total proven-rec services
+    # which only accept is_recommended=True rows. Any other value falls
+    # back to moneyline (defensive against stale clients).
+    bet_type = request.GET.get('bet_type', 'moneyline')
+    if bet_type not in ('moneyline', 'spread', 'total'):
+        bet_type = 'moneyline'
     try:
         raw_stake = request.GET.get('stake', '100')
         stake = Decimal(str(raw_stake))
@@ -306,10 +318,15 @@ def bulk_place_recommended(request):
     except (InvalidOperation, TypeError, ValueError):
         return JsonResponse({'error': 'Invalid stake'}, status=400)
 
-    summary = place_bulk_recommended_bets(
-        request.user, sport=sport, stake=stake,
-        tier_filter=tier_filter, source_filter=source_filter,
-    )
+    if bet_type == 'spread':
+        summary = place_bulk_proven_spread_bets(request.user, stake=stake)
+    elif bet_type == 'total':
+        summary = place_bulk_proven_total_bets(request.user, stake=stake)
+    else:
+        summary = place_bulk_recommended_bets(
+            request.user, sport=sport, stake=stake,
+            tier_filter=tier_filter, source_filter=source_filter,
+        )
     if summary.get('error'):
         return JsonResponse(summary, status=400)
     summary['success'] = True

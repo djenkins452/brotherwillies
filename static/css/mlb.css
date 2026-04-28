@@ -1268,3 +1268,74 @@
     color: #1c1917;
     box-shadow: 0 0 0 2px rgba(250,204,21,0.35);
 }
+
+/* ----- Phase 3: Promoted Recommendations (Proven Edge) -------------- */
+
+/* Green-bordered group for promoted spread/total recommendations.
+   Visual hierarchy: green Moneyline Recommended Plays → green Spread/
+   Total Recommendations (Proven Edge) → cyan Opportunity Signals →
+   gray Not Recommended. Same green family as the moneyline
+   Recommended group so trust tier is unmistakable across markets. */
+.mlb-decision-group--proven {
+    border-color: rgba(34,197,94,0.45);
+    background: rgba(34,197,94,0.04);
+}
+.mlb-decision-group--proven .mlb-decision-group__title {
+    color: #22c55e;
+}
+/* Per-card "proven edge" wrapper — solid green border, brighter than
+   the dashed cyan opportunity-card border. */
+.mlb-opportunity-card--proven {
+    border: 1px solid rgba(34,197,94,0.55);
+    background: rgba(34,197,94,0.03);
+}
+.mlb-opportunity-card--proven .mlb-opportunity-card__signal {
+    background: rgba(34,197,94,0.08);
+}
+/* Green Recommended badge — solid green pill, stronger than the
+   yellow Lean badge so the eye reads "highest tier" before reading. */
+.mlb-rec-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: rgba(34,197,94,0.22);
+    border: 1px solid rgba(34,197,94,0.65);
+    color: #4ade80;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.mlb-rec-badge__data {
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    color: rgba(74,222,128,0.90);
+    font-size: 10px;
+}
+/* Green Recommended filter chip — completes the trust-tier ladder
+   alongside the existing Leans Only chip. */
+.mlb-bet-type-chip--recommended {
+    border-color: rgba(34,197,94,0.55);
+}
+.mlb-bet-type-chip--recommended.is-active {
+    background: #22c55e;
+    border-color: #22c55e;
+    color: #052e16;
+    box-shadow: 0 0 0 2px rgba(34,197,94,0.35);
+}
+/* Activated spread/total bulk-bet button — replaces the
+   "Coming Soon" disabled state when promoted recs exist. Emerald
+   green to read as BET-tier action; matches the moneyline
+   --bet button family in feel without being identical. */
+.mlb-bulk-btn--bet-rec {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #fff;
+}
+.mlb-bulk-btn--bet-rec:hover {
+    background: #15803d;
+    border-color: #15803d;
+}
