@@ -29,6 +29,22 @@ def decimal_pct(value, places=2):
 
 
 @register.filter
+def dict_get(d, key):
+    """Look up a key in a dict from a template.
+
+    Django templates can't do `dict["literal-with-dashes"]` because the
+    parser treats `-` as a hyphen. This filter wraps the lookup so
+    callers can fetch buckets like `0.6-0.65` from the calibration_curve
+    JSON without a custom template tag per call site.
+
+    Returns None when the key is absent or the value isn't dict-like.
+    """
+    if not hasattr(d, 'get'):
+        return None
+    return d.get(key)
+
+
+@register.filter
 def decimal_signed(value, places=4):
     """Format a signed decimal-odds delta. None → '—'."""
     if value is None or value == '':

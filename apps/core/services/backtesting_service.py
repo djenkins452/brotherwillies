@@ -768,6 +768,13 @@ def run_backtest(
             "or missing moneyline prices."
         )
 
+    # Auto-tag the rating mode that was active during this run. Reads
+    # the elo_service single-source-of-truth (override-aware) so the row
+    # correctly reflects whether dynamic Elo or static ratings drove the
+    # predictions, regardless of how the call was triggered.
+    from apps.core.services.elo_service import is_dynamic_active
+    rating_mode = 'elo' if is_dynamic_active() else 'static'
+
     run = BacktestRun(
         sport=sport,
         start_date=start_date,
@@ -777,6 +784,13 @@ def run_backtest(
         is_approximate=is_approximate,
         summary=summary,
         notes='\n'.join(notes_lines),
+        # Lifecycle tagging — CLI runs go straight to 'completed' since
+        # they're synchronous. The analytics page's trigger endpoint
+        # creates a 'running' row up front and writes results into it
+        # via update (not via this function), so its status flow is
+        # handled in the views.
+        status='completed',
+        rating_mode=rating_mode,
     )
     if persist:
         run.save()

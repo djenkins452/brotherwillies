@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-04-28 - Backtest Analytics Control Page
+
+**Summary:** Upgrades the read-only `/backtest/` page into a proper control center at `/analytics/backtest/`. Staff can now run Static and Elo backtests directly from the UI (no CLI required), see live status while a run is in progress, and compare the two rating systems side-by-side. The legacy `/backtest/` URL redirects to the new page so any bookmarks keep working.
+
+### What's new
+- **Run from the UI** — two buttons (Static / Elo) POST to `/analytics/backtest/run/`, which creates a `BacktestRun(status='running')` row and kicks off a daemon thread. The page auto-refreshes every 5s while a run is active so the user sees the result without manually reloading.
+- **Status tracking** — `BacktestRun` gains `status` (pending/running/completed/failed), `rating_mode` (static/elo), `started_at`, `finished_at`, and `error_message`. Existing rows default to `status='completed'`, `rating_mode='static'` so historical analytics keep working.
+- **Static vs Elo side-by-side** — top of the page shows the most recent completed run for each rating mode with ROI, +CLV rate, and the 60-65% calibration bucket so you can compare at a glance.
+- **`force_use_dynamic` context manager** — new override in `elo_service` that toggles the rating source for nested calls without flipping the global env-driven `USE_DYNAMIC_RATINGS` setting. The trigger endpoint uses this to run Elo on demand even when the global flag is off (and vice versa).
+- **Auto-tagging** — `run_backtest` now stamps `rating_mode` on every BacktestRun based on `is_dynamic_active()` (the override-aware single source of truth). CLI runs are tagged correctly too.
+- **Concurrent-run guard** — the trigger endpoint refuses to start a new run while one is in `status='running'`. Prevents two threads racing on the override.
+- **Run history table** — last 10 runs with date, type (Static/Elo color-coded), sport, status (✓ completed / ⏳ running / ✗ failed), evaluated count.
+- **Navigation** — staff dropdown link updated from "Backtest Results" to "Backtest Analytics" pointing at `/analytics/backtest/`.
+
+### Constraints respected
+- ✅ No backtesting logic changed.
+- ✅ No recommendation logic changed.
+- ✅ Reuses existing `BacktestRun.summary` JSON shape end-to-end.
+- ✅ Reuses existing `_backtest_section.html` and `_backtest_table.html` partials for the detailed-results section.
+- ✅ Staff-only access (anonymous → 302 to login; non-staff → 403).
+- ✅ No charts, no styling overhaul, no new heavy frontend.
+
+### Files
+- New: `apps/analytics/views.py` (control page + trigger endpoint + background thread), `apps/analytics/urls.py`, `templates/analytics/backtest.html`, `templates/analytics/_summary_card.html`
+- Modified: `apps/analytics/models.py` (BacktestRun lifecycle fields), `apps/core/services/elo_service.py` (`force_use_dynamic` + `is_dynamic_active`), `apps/core/services/backtesting_service.py` (auto-tag rating_mode), `apps/core/views.py` (legacy `/backtest/` → 302 to `/analytics/backtest/`), `apps/core/templatetags/tz_extras.py` (`dict_get` filter for keys with dashes), `brotherwillies/urls.py` (analytics namespace), `templates/base.html` (nav link)
+- Migration: `analytics/0006_backtestrun_error_message_finished_at_and_more`
+
+### Tests
+17 new tests in `apps.analytics.tests`: auth gates (anonymous/regular/staff), page context (static + elo + running state + 10-row history cap), trigger endpoint (GET-not-allowed, non-staff blocked, running row creation, elo param, concurrent guard, invalid sport collapse), background execution (success → completed, failure → failed with error message), `force_use_dynamic` semantics (override true with setting off, override false with setting on), and the `/backtest/` → `/analytics/backtest/` redirect.
+
+### What this does NOT change
+- Run computation logic — every existing validation guarantee from Phase 1 holds (game-time data only, ROI = profit/stake, decimal edge, calibration shape, CLV source guard, incremental aggregation, stable JSON shape).
+- The Phase 2 Backtest Intelligence Layer (decision quality, where-is-my-edge, system verdict) — still shown alongside the new comparison.
+- The Two-Lane recommendation system, recommendation engine, decision rules, or odds ingestion.
+
+---
+
 ## 2026-04-28 - Two-Lane Recommendation System (Core / Qualified / Pass)
 
 **Summary:** Adds an orthogonal classifier on top of the existing status/tier axes that splits every moneyline recommendation into one of three lanes — `core` (safe for "Bet All" automation), `qualified` (visible but excluded from bulk), or `pass` (not actionable). The principle: *filter for automation, not visibility*. No bets are lost; previously-blocked picks are reclassified into Qualified instead of disappearing, surfacing more opportunities without lowering the safety bar on bulk placement.

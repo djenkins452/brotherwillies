@@ -218,21 +218,70 @@ def elo_to_legacy_scale(elo_rating: float) -> float:
     return (elo_rating - ELO_BASELINE) / ELO_TO_LEGACY_DIVISOR + LEGACY_BASELINE
 
 
+# Module-level override used by force_use_dynamic(). Set to None when no
+# override is active — at that point team_rating_for_model reads the
+# global Django setting. When set to True/False, the override wins.
+#
+# Concurrent-run safety: the analytics control page prevents two
+# BacktestRun rows from being in 'running' status at once, so the
+# override at most has one writer at a time. Tests that exercise both
+# branches use the override or override_settings to keep their state
+# isolated.
+_force_use_dynamic_override = None
+
+
+def force_use_dynamic(value: Optional[bool]):
+    """Context manager that forces USE_DYNAMIC_RATINGS for nested calls.
+
+    Used by the backtest analytics page to run Static vs Elo comparisons
+    without flipping the global env-driven setting. The override is
+    process-local and only safe under the analytics page's
+    no-concurrent-runs guard.
+
+    Pass `value=True` to force Elo, `value=False` to force static, or
+    `value=None` to clear the override (defer to settings).
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        global _force_use_dynamic_override
+        prev = _force_use_dynamic_override
+        _force_use_dynamic_override = value
+        try:
+            yield
+        finally:
+            _force_use_dynamic_override = prev
+
+    return _ctx()
+
+
+def is_dynamic_active() -> bool:
+    """Single source of truth for 'is dynamic Elo currently in effect?'.
+
+    Reads the override first (set by `force_use_dynamic`), then falls
+    back to the Django setting. Used by both `team_rating_for_model` and
+    `run_backtest` so the rating mode is consistent across the run.
+    """
+    if _force_use_dynamic_override is not None:
+        return bool(_force_use_dynamic_override)
+    return bool(getattr(settings, 'USE_DYNAMIC_RATINGS', False))
+
+
 def team_rating_for_model(team) -> float:
     """Return the rating that should flow into the win-prob formula for `team`.
 
-    Branches on the global `USE_DYNAMIC_RATINGS` feature flag and per-team
-    Elo availability. When the flag is on AND the team has an `elo_rating`
-    set, returns the Elo projected onto the legacy scale (so all the
-    existing HFA/injury/pitcher math keeps working unchanged). Otherwise
-    falls back to the legacy `team.rating` field.
+    Branches on the active rating mode (override or `USE_DYNAMIC_RATINGS`)
+    and per-team Elo availability. When dynamic AND the team has an
+    `elo_rating` set, returns the Elo projected onto the legacy scale (so
+    all the existing HFA/injury/pitcher math keeps working unchanged).
+    Otherwise falls back to the legacy `team.rating` field.
 
     This is the single point of integration. By keeping the conversion
     here (instead of branching inside each sport's model_service), the
     flag flip is centralized and easy to audit.
     """
-    use_dynamic = bool(getattr(settings, 'USE_DYNAMIC_RATINGS', False))
-    if not use_dynamic:
+    if not is_dynamic_active():
         return team.rating
     elo = getattr(team, 'elo_rating', None)
     if elo is None:

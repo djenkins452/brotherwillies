@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Backtest Analytics | Brother Willies{% endblock %}
+
+{% block extra_css %}
+{% if auto_refresh_seconds %}
+<meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <h1 style="margin-bottom: 0.4rem;">Backtest Analytics</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Control center for model performance. Run Static vs Elo backtests
+        and compare ROI, CLV, and calibration side-by-side.
+    </p>
+
+    {% comment %}
+    SECTION 1 — Controls. Two trigger buttons + current status. When a run
+    is in progress, both buttons are disabled and the page auto-refreshes
+    every 5s (via the meta refresh in extra_css) so the user sees the
+    result without manually reloading.
+    {% endcomment %}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Run a Backtest</h2>
+
+        {% if is_running %}
+            <div style="margin-bottom: 0.75rem; padding: 0.6rem 0.8rem; background: #0f1f17; border-left: 3px solid #22c55e; border-radius: 4px;">
+                <strong style="color: #22c55e;">⏳ Running…</strong>
+                {% if running_run %}
+                    <span style="color: #aaa; font-size: 0.85rem;">
+                        ({{ running_run.rating_mode }} backtest, sport={{ running_run.sport }},
+                        started {{ running_run.started_at|timesince }} ago)
+                    </span>
+                {% endif %}
+                <p style="color: #888; font-size: 0.8rem; margin: 0.4rem 0 0;">
+                    Page refreshes every {{ auto_refresh_seconds }}s until the run finishes.
+                </p>
+            </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'analytics:trigger_backtest' %}" style="display: inline-block; margin-right: 0.5rem;">
+            {% csrf_token %}
+            <input type="hidden" name="elo" value="false">
+            <input type="hidden" name="sport" value="all">
+            <button type="submit"
+                    {% if is_running %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}
+                    style="padding: 0.5rem 1rem; background: #1f4534; color: #fff; border: 1px solid #2d6147; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                Run Static Backtest
+            </button>
+        </form>
+
+        <form method="post" action="{% url 'analytics:trigger_backtest' %}" style="display: inline-block;">
+            {% csrf_token %}
+            <input type="hidden" name="elo" value="true">
+            <input type="hidden" name="sport" value="all">
+            <button type="submit"
+                    {% if is_running %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}
+                    style="padding: 0.5rem 1rem; background: #2a2a4a; color: #fff; border: 1px solid #3d3d6a; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                Run Elo Backtest
+            </button>
+        </form>
+
+        {% if static_run or elo_run %}
+            <p style="color: #888; font-size: 0.8rem; margin: 0.75rem 0 0;">
+                {% if static_run %}Last static: {{ static_run.created_at|timesince }} ago.{% endif %}
+                {% if elo_run %}Last Elo: {{ elo_run.created_at|timesince }} ago.{% endif %}
+            </p>
+        {% endif %}
+    </section>
+
+    {% comment %}
+    SECTION 2 — Static vs Elo summary cards. Pulls overall ROI, % positive
+    CLV, and one calibration bucket (60-65 — the inflection point where
+    a moderate favorite should hit ~62.5% of the time if calibrated).
+    Empty cards render as "No completed run yet" with a CTA to run one.
+    {% endcomment %}
+    <h2 style="margin-bottom: 0.6rem;">Static vs Elo Comparison</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+        {% include "analytics/_summary_card.html" with title="Static Ratings" run=static_run accent="#22c55e" %}
+        {% include "analytics/_summary_card.html" with title="Dynamic Elo Ratings" run=elo_run accent="#a78bfa" %}
+    </div>
+
+    {% comment %}
+    SECTION 3 — Detailed results from the most recent completed run
+    (Elo first since that's the comparison target; static second).
+    Reuses the existing _backtest_section.html and _backtest_table.html
+    partials so we get all the validation guarantees + decimal formatting
+    of the Phase 1 work for free.
+    {% endcomment %}
+    {% with detail_run=elo_run|default:static_run %}
+        {% if detail_run %}
+            <h2 style="margin-top: 1.5rem;">Detailed Results
+                <span style="color: #888; font-weight: 400; font-size: 0.85rem;">
+                    ({{ detail_run.rating_mode }}, run {{ detail_run.created_at|date:"Y-m-d H:i" }})
+                </span>
+            </h2>
+            {% with summary=detail_run.summary %}
+                {% include "core/_backtest_section.html" with title="Overall (every evaluated game)" data=summary.overall %}
+                {% include "core/_backtest_section.html" with title="Recommended only" data=summary.overall_recommended_only %}
+
+                <h3 style="margin-top: 1rem;">ROI by Edge Bucket</h3>
+                {% include "core/_backtest_table.html" with rows=summary.by_edge_bucket %}
+
+                <h3 style="margin-top: 1rem;">ROI by Sport</h3>
+                {% include "core/_backtest_table.html" with rows=summary.by_sport %}
+
+                <h3 style="margin-top: 1rem;">Calibration Curve</h3>
+                <p style="color: #888; font-size: 0.85rem;">
+                    Predicted probability bucket → mean predicted vs actual win rate. A well-calibrated model has predicted ≈ actual.
+                </p>
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                    <thead>
+                        <tr style="background: #1f1f1f; text-align: left;">
+                            <th style="padding: 0.4rem;">Bucket</th>
+                            <th style="padding: 0.4rem;">Count</th>
+                            <th style="padding: 0.4rem;">Predicted</th>
+                            <th style="padding: 0.4rem;">Actual</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for label, m in summary.calibration_curve.items %}
+                            <tr style="border-top: 1px solid #2a2a2a;">
+                                <td style="padding: 0.4rem;"><strong>{{ label }}</strong></td>
+                                <td style="padding: 0.4rem;">{{ m.count }}</td>
+                                <td style="padding: 0.4rem;">{{ m.predicted|decimal_pct }}</td>
+                                <td style="padding: 0.4rem;">{{ m.actual|decimal_pct }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endwith %}
+        {% else %}
+            <p style="color: #888;">No completed runs yet. Click one of the buttons above to start.</p>
+        {% endif %}
+    {% endwith %}
+
+    {% comment %}
+    SECTION 4 — Run history. Last 10 rows. Status column color-codes the
+    lifecycle so a glance reveals which runs finished cleanly.
+    {% endcomment %}
+    <h2 style="margin-top: 1.75rem;">Run History</h2>
+    {% if recent_runs %}
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+            <thead>
+                <tr style="background: #1f1f1f; text-align: left;">
+                    <th style="padding: 0.4rem;">Date</th>
+                    <th style="padding: 0.4rem;">Type</th>
+                    <th style="padding: 0.4rem;">Sport</th>
+                    <th style="padding: 0.4rem;">Status</th>
+                    <th style="padding: 0.4rem;">Evaluated</th>
+                    <th style="padding: 0.4rem;">Approx</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent_runs %}
+                    <tr style="border-top: 1px solid #2a2a2a;">
+                        <td style="padding: 0.4rem;">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                        <td style="padding: 0.4rem;">
+                            {% if r.rating_mode == 'elo' %}
+                                <span style="color: #a78bfa;">Elo</span>
+                            {% else %}
+                                <span style="color: #22c55e;">Static</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 0.4rem;">{{ r.sport }}</td>
+                        <td style="padding: 0.4rem;">
+                            {% if r.status == 'running' %}
+                                <span style="color: #d97706;">⏳ running</span>
+                            {% elif r.status == 'failed' %}
+                                <span style="color: #dc2626;" title="{{ r.error_message }}">✗ failed</span>
+                            {% elif r.status == 'completed' %}
+                                <span style="color: #22c55e;">✓ completed</span>
+                            {% else %}
+                                {{ r.status }}
+                            {% endif %}
+                        </td>
+                        <td style="padding: 0.4rem;">{{ r.games_evaluated }}</td>
+                        <td style="padding: 0.4rem;">{% if r.is_approximate %}yes{% else %}no{% endif %}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p style="color: #888; font-size: 0.85rem;">No runs yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

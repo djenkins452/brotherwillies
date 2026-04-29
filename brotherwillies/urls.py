@@ -21,6 +21,7 @@ urlpatterns = [
     path('feedback/', include('apps.feedback.urls')),
     path('mockbets/', include('apps.mockbets.urls')),
     path('ops/', include('apps.ops.urls')),
+    path('analytics/', include('apps.analytics.urls', namespace='analytics')),
 ]
 
 if settings.DEBUG:

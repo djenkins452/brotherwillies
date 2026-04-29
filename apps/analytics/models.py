@@ -73,6 +73,17 @@ class BacktestRun(models.Model):
         ('mlb', 'MLB'),
         ('college_baseball', 'College Baseball'),
     ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    RATING_MODE_CHOICES = [
+        ('static', 'Static (team.rating)'),
+        ('elo', 'Dynamic Elo'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     sport = models.CharField(max_length=20, choices=SPORT_CHOICES, default='all')
@@ -80,6 +91,21 @@ class BacktestRun(models.Model):
     end_date = models.DateField(null=True, blank=True)
     games_evaluated = models.IntegerField(default=0)
     games_skipped = models.IntegerField(default=0)
+    # Run lifecycle — drives the analytics control page (running →
+    # completed/failed). Default 'completed' so historical rows that
+    # predate the control page show up correctly without backfill.
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='completed', db_index=True,
+    )
+    # Which rating system the run used. Auto-populated by run_backtest from
+    # the active USE_DYNAMIC_RATINGS setting (or its forced override). Drives
+    # the Static vs Elo comparison cards on the analytics page.
+    rating_mode = models.CharField(
+        max_length=10, choices=RATING_MODE_CHOICES, default='static', db_index=True,
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True, default='')
     is_approximate = models.BooleanField(
         default=False,
         help_text='True when any games were reconstructed using current '

@@ -1,0 +1,66 @@
+{% load tz_extras %}
+{% comment %}
+Summary card for one rating mode (Static or Elo). Shows ROI, +CLV rate,
+and one calibration bucket so the user can compare both runs at a glance.
+The 60-65 calibration bucket is the chosen reference point — a 62.5%
+moderate-favorite call is the "is this model calibrated?" sweet spot.
+
+Inputs:
+    title  — display label
+    run    — BacktestRun instance (or None when no completed run yet)
+    accent — hex color for the title underline
+{% endcomment %}
+<div style="padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+    <h3 style="font-size: 0.95rem; color: {{ accent }}; border-bottom: 2px solid {{ accent }}; padding-bottom: 0.4rem; margin: 0 0 0.6rem;">
+        {{ title }}
+    </h3>
+    {% if not run %}
+        <p style="color: #888; font-size: 0.85rem; margin: 0;">
+            No completed run yet — click the button above to generate one.
+        </p>
+    {% else %}
+        {% with overall=run.summary.overall calibration=run.summary.calibration_curve %}
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; font-size: 0.9rem;">
+                <div><span style="color: #888;">ROI:</span> <strong>{{ overall.roi_pct|decimal_pct }}</strong></div>
+                <div><span style="color: #888;">Win rate:</span> <strong>{{ overall.win_rate|decimal_pct }}</strong></div>
+                <div><span style="color: #888;">Avg edge:</span> <strong>{{ overall.avg_edge|decimal_pct }}</strong></div>
+                <div><span style="color: #888;">Sample:</span> <strong>{{ overall.sample }}</strong></div>
+                <div><span style="color: #888;">+CLV rate:</span>
+                    {% if overall.positive_clv_rate is not None %}
+                        <strong>{{ overall.positive_clv_rate|decimal_pct }}</strong>
+                        <span style="color: #888; font-size: 0.78rem;">(n={{ overall.clv_sample }})</span>
+                    {% else %}
+                        <span style="color: #888;">—</span>
+                    {% endif %}
+                </div>
+                <div><span style="color: #888;">Avg CLV:</span>
+                    {% if overall.avg_clv is not None %}
+                        <strong>{{ overall.avg_clv|decimal_signed }}</strong>
+                    {% else %}
+                        <span style="color: #888;">—</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if calibration %}
+                {% with bucket=calibration|dict_get:"0.6-0.65" %}
+                    {% if bucket %}
+                        <div style="margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid #2a2a2a; font-size: 0.85rem;">
+                            <span style="color: #888;">60-65% bucket:</span>
+                            predicted <strong>{{ bucket.predicted|decimal_pct }}</strong>,
+                            actual <strong>{{ bucket.actual|decimal_pct }}</strong>
+                            <span style="color: #888;">(n={{ bucket.count }})</span>
+                        </div>
+                    {% endif %}
+                {% endwith %}
+            {% endif %}
+
+            <div style="margin-top: 0.5rem; font-size: 0.78rem; color: #888;">
+                {{ run.created_at|date:"Y-m-d H:i" }}
+                {% if run.is_approximate %}
+                    · <span style="color: #d97706;">approximate</span>
+                {% endif %}
+            </div>
+        {% endwith %}
+    {% endif %}
+</div>
