@@ -581,6 +581,74 @@ class MLBPrefillTests(TestCase):
         self.assertIn('Over 8.5', totals)
         self.assertIn('Under 8.5', totals)
 
+    # 2026-04-29 fix: odds auto-population in the modal. Each selection
+    # option must carry its own `odds` so the JS can sync the form's
+    # Odds field whenever the user picks a different side.
+
+    def test_moneyline_options_carry_per_side_odds(self):
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(ml_home=-150, ml_away=130)
+        data = prefill_from_signals(build_signals(g))
+        ml = data['selections_by_type']['moneyline']
+        # Each option carries an int odds matching its side.
+        by_label = {o['label']: o['odds'] for o in ml}
+        self.assertEqual(by_label['Yankees'], -150)
+        self.assertEqual(by_label['Royals'], 130)
+
+    def test_moneyline_options_carry_none_when_snapshot_missing_ml(self):
+        """Defensive: if a side's moneyline isn't populated on the
+        snapshot (rare but possible — e.g., a derived row), the option
+        still renders but with odds=None so the modal's missing-odds
+        warning can fire."""
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        g = self._setup(ml_home=-150, ml_away=None)
+        data = prefill_from_signals(build_signals(g))
+        ml = data['selections_by_type']['moneyline']
+        by_label = {o['label']: o['odds'] for o in ml}
+        self.assertEqual(by_label['Yankees'], -150)
+        self.assertIsNone(by_label['Royals'])
+
+    def test_spread_total_options_default_to_minus_110(self):
+        """Spread / total markets default to -110 standard pricing.
+        OddsSnapshot doesn't store per-side run-line / O-U prices yet;
+        the flat -110 default mirrors what bulk-bet placement uses."""
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        from apps.mlb.models import OddsSnapshot
+        g = self._setup()
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55, spread=-1.5, total=8.5,
+        )
+        data = prefill_from_signals(build_signals(g))
+        spreads = data['selections_by_type']['spread']
+        totals = data['selections_by_type']['total']
+        for opt in spreads:
+            self.assertEqual(
+                opt['odds'], -110,
+                f"spread option {opt['label']!r} expected -110, got {opt['odds']!r}",
+            )
+        for opt in totals:
+            self.assertEqual(opt['odds'], -110)
+
+    def test_options_shape_remains_json_serializable(self):
+        """Adding the odds field can't break JSON serialization for
+        the AJAX prefill payload."""
+        import json
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        from apps.mlb.models import OddsSnapshot
+        g = self._setup(ml_home=-140, ml_away=120)
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.55, spread=-1.5, total=8.5,
+            moneyline_home=-140, moneyline_away=120,
+        )
+        data = prefill_from_signals(build_signals(g))
+        json.dumps(data)  # raises if any value isn't JSON-safe
+
 
 class MLBStreakTests(TestCase):
     """compute_streaks — recent W/L streak computation across teams."""

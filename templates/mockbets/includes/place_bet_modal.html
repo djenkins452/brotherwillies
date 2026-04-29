@@ -40,7 +40,21 @@
 
                 <div class="form-group">
                     <label for="mb-odds">Odds (American)</label>
-                    <input type="number" id="mb-odds" class="form-control" placeholder="-110" value="">
+                    {# 2026-04-29 fix: removed the misleading "-110" placeholder. #}
+                    {# Before, the placeholder *looked* like a value but the      #}
+                    {# field was actually empty in form state, so submitting     #}
+                    {# without manually retyping the odds rejected with "Odds   #}
+                    {# must be non-zero". The new behavior: the field is        #}
+                    {# auto-populated from selections_by_type when available    #}
+                    {# (and locked readonly so visual = actual), and shows an  #}
+                    {# explicit "—" with a warning when the line isn't known.  #}
+                    <input type="number" id="mb-odds" class="form-control" value="">
+                    <div id="mb-odds-warn" class="text-sm text-red mt-1" style="display:none;">
+                        Odds not available from the latest snapshot &mdash; please enter manually.
+                    </div>
+                    <div id="mb-odds-locked-note" class="text-sm text-muted mt-1" style="display:none;">
+                        Odds auto-filled from the latest snapshot. Change the selection above to see different odds.
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -114,6 +128,12 @@ function applySelectionsForCurrentType() {
         select.style.display = 'none';
         select.innerHTML = '';
         input.style.display = '';
+        // Free-text mode: no authoritative odds to apply, leave the
+        // odds field editable for manual entry. Hide the locked note;
+        // warn only if the field is empty AND we don't have a value
+        // pre-supplied via opts.odds. The warning is reasserted on
+        // every render so it tracks visibility cleanly.
+        applyOddsForCurrentSelection();
         return;
     }
     select.innerHTML = '';
@@ -121,10 +141,66 @@ function applySelectionsForCurrentType() {
         var optEl = document.createElement('option');
         optEl.value = o.value;
         optEl.textContent = o.label;
+        // Stash the auto-fill odds on the option element so the change
+        // listener can read it directly without re-walking the lookup
+        // table. dataset is a string-only API; "" for missing.
+        optEl.dataset.odds = (o.odds === null || o.odds === undefined) ? '' : String(o.odds);
         select.appendChild(optEl);
     });
     select.style.display = '';
     input.style.display = 'none';
+    // After rebuilding the dropdown, pull odds for the now-active option
+    // (which is index 0 by default until the caller / user picks another).
+    applyOddsForCurrentSelection();
+}
+
+function applyOddsForCurrentSelection() {
+    // 2026-04-29 fix: keeps the Odds field's VALUE in sync with the
+    // active selection so visual matches form state. Called on every
+    // bet-type change AND every selection change.
+    //
+    // When MB_SELECTIONS_BY_TYPE is provided (the modern flow used by
+    // MLB tiles), the odds field becomes READONLY because we have an
+    // authoritative source — the user cannot accidentally type a value
+    // that contradicts the snapshot. When the modal is in free-text
+    // mode (golf, CFB/CBB without selections_by_type), the field stays
+    // editable so manual entry is possible.
+    var oddsField = document.getElementById('mb-odds');
+    var warnEl = document.getElementById('mb-odds-warn');
+    var lockedEl = document.getElementById('mb-odds-locked-note');
+    var select = document.getElementById('mb-selection-select');
+    var currentType = document.getElementById('mb-bet-type').value;
+    var opts = (MB_SELECTIONS_BY_TYPE && MB_SELECTIONS_BY_TYPE[currentType]) || null;
+
+    if (!opts || !opts.length) {
+        // Free-text mode — odds field stays editable and we don't warn
+        // by default (existing behavior preserves manual entry).
+        oddsField.readOnly = false;
+        warnEl.style.display = 'none';
+        lockedEl.style.display = 'none';
+        return;
+    }
+
+    // Find the currently selected option's stashed odds.
+    var activeOpt = select.options[select.selectedIndex];
+    var oddsStr = activeOpt ? activeOpt.dataset.odds : '';
+    if (oddsStr === '' || oddsStr === 'null' || oddsStr === 'undefined') {
+        // Authoritative source exists but THIS selection has no price
+        // (e.g., moneyline option whose snapshot didn't have that side).
+        // Field stays readonly (still authoritative) but we warn the
+        // user so they know the bet can't submit until they adjust the
+        // selection or — last resort — toggle to free-text and type.
+        oddsField.value = '';
+        oddsField.readOnly = true;
+        warnEl.style.display = '';
+        lockedEl.style.display = 'none';
+    } else {
+        oddsField.value = oddsStr;
+        oddsField.readOnly = true;
+        warnEl.style.display = 'none';
+        lockedEl.style.display = '';
+    }
+    updateImplied();
 }
 
 function openMockBetModal(opts) {
@@ -168,6 +244,9 @@ function openMockBetModal(opts) {
                 break;
             }
         }
+        // 2026-04-29 fix: re-apply odds AFTER the selectedIndex move so
+        // the field shows the picked side's price, not option[0]'s.
+        applyOddsForCurrentSelection();
     }
 
     // Golf golfer search: show when sport is golf, reset state
@@ -205,6 +284,11 @@ function closeMockBetModal() {
 
 document.getElementById('mb-odds').addEventListener('input', updateImplied);
 document.getElementById('mb-bet-type').addEventListener('change', applySelectionsForCurrentType);
+// 2026-04-29 fix: changing the selection in the dropdown must update
+// the auto-filled Odds value. Without this, the form could submit
+// with the previous selection's odds, putting a winning Yankees ML at
+// -150 on a Royals ML pick that should be +130.
+document.getElementById('mb-selection-select').addEventListener('change', applyOddsForCurrentSelection);
 
 function updateImplied() {
     var odds = parseInt(document.getElementById('mb-odds').value);

@@ -43,10 +43,34 @@ def _spread_selection(game, side: str, spread_home_pov: float) -> str:
     return f"{_team_label(game, side)} {sign}{abs(n):g}"
 
 
+# Default per-side juice for spread + total markets when the snapshot
+# doesn't expose individual prices. OddsSnapshot stores only the line
+# value (spread / total) — sportsbooks almost universally price both
+# sides of the run line / O-U at -110, so this is the right default.
+# If we later persist actual per-side prices, swap this for the row's
+# value where present and fall back to -110 only when missing.
+SPREAD_TOTAL_DEFAULT_ODDS = -110
+
+
 def _build_selections(game, odds) -> dict[str, list[dict]]:
     """Per-bet-type selection options for the modal dropdown.
 
-    Shape: {bet_type: [{'value': str, 'label': str}, ...]}.
+    Shape: {bet_type: [{'value': str, 'label': str, 'odds': int|None}, ...]}.
+
+    2026-04-29 fix: each option now carries its `odds` so the modal can
+    auto-populate the Odds field when the user picks a selection. Before
+    this, the form's Odds field could be visually pre-filled with one
+    side's odds while the user picked the other side, causing the bet
+    to submit with the wrong number — or, worse, with a stale
+    placeholder of "-110" that wasn't actually in form state, leading
+    to validation rejection.
+
+    Odds source per bet type:
+        moneyline   → snapshot.moneyline_home / moneyline_away
+        spread      → SPREAD_TOTAL_DEFAULT_ODDS (-110); we don't persist
+                      per-side run-line prices yet
+        total       → SPREAD_TOTAL_DEFAULT_ODDS (-110); same reason
+
     Only bet types with meaningful options are included — if the market
     doesn't expose a spread, the 'spread' key is omitted and the modal
     falls back to the free-text input for that bet type.
@@ -54,10 +78,21 @@ def _build_selections(game, odds) -> dict[str, list[dict]]:
     home_label = game.home_team.name
     away_label = game.away_team.name
 
+    home_ml = (
+        int(odds.moneyline_home)
+        if odds is not None and odds.moneyline_home is not None
+        else None
+    )
+    away_ml = (
+        int(odds.moneyline_away)
+        if odds is not None and odds.moneyline_away is not None
+        else None
+    )
+
     out: dict[str, list[dict]] = {
         'moneyline': [
-            {'value': away_label, 'label': away_label},
-            {'value': home_label, 'label': home_label},
+            {'value': away_label, 'label': away_label, 'odds': away_ml},
+            {'value': home_label, 'label': home_label, 'odds': home_ml},
         ],
     }
 
@@ -70,15 +105,17 @@ def _build_selections(game, odds) -> dict[str, list[dict]]:
         home_sel = f"{home_label} {home_sign}{abs(home_num):g}"
         away_sel = f"{away_label} {away_sign}{abs(away_num):g}"
         out['spread'] = [
-            {'value': away_sel, 'label': away_sel},
-            {'value': home_sel, 'label': home_sel},
+            {'value': away_sel, 'label': away_sel, 'odds': SPREAD_TOTAL_DEFAULT_ODDS},
+            {'value': home_sel, 'label': home_sel, 'odds': SPREAD_TOTAL_DEFAULT_ODDS},
         ]
 
     if odds is not None and odds.total is not None:
         total = odds.total
         out['total'] = [
-            {'value': f"Over {total:g}", 'label': f"Over {total:g}"},
-            {'value': f"Under {total:g}", 'label': f"Under {total:g}"},
+            {'value': f"Over {total:g}", 'label': f"Over {total:g}",
+             'odds': SPREAD_TOTAL_DEFAULT_ODDS},
+            {'value': f"Under {total:g}", 'label': f"Under {total:g}",
+             'odds': SPREAD_TOTAL_DEFAULT_ODDS},
         ]
 
     return out
