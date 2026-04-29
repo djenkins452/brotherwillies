@@ -180,9 +180,14 @@ class MLBPredictionModelTests(TestCase):
             home_pitcher=hp, away_pitcher=ap,
             source='mlb_stats_api', external_id='g1',
         )
-        # 0.65 * (95 - 15) = 52 -> sigmoid(52/15) = ~0.97
+        # 0.65 * (95 - 15) = 52 → sigmoid(52/25) ≈ 0.89, then the
+        # post-2026-04-28 calibration soft-clamps the picked side at
+        # 0.85 (PROB_MAX). Asserting equality to PROB_MAX is the
+        # right test post-tune — the model is "very confident" but
+        # the system caps overconfidence.
+        from apps.core.services.probability_calibration import PROB_MAX
         p = compute_house_win_prob(g)
-        self.assertGreater(p, 0.95)
+        self.assertAlmostEqual(p, PROB_MAX, places=3)
 
     def test_missing_pitcher_drops_confidence_to_low(self):
         home = _mk_team('Home', 90.0, '1')
@@ -196,10 +201,11 @@ class MLBPredictionModelTests(TestCase):
         # Confidence low regardless of other factors
         self.assertEqual(compute_data_confidence(g), 'low')
         # And pitcher_diff = 0, so only team rating + HFA drives prob.
-        # 0.35 * (90-10) = 28, +2.5 HFA = 30.5 -> sigmoid(30.5/15) ~= 0.88
+        # 0.35 * (90-10) = 28, +2.5 HFA = 30.5 → sigmoid(30.5/25) ≈ 0.77,
+        # below PROB_MAX so no clamp applies (post-2026-04-28 calibration).
         p = compute_house_win_prob(g)
-        self.assertGreater(p, 0.85)
-        self.assertLess(p, 0.95)
+        self.assertGreater(p, 0.70)
+        self.assertLess(p, 0.85)
 
     def test_compute_game_data_shape(self):
         home = _mk_team('Home', 60.0, '1')

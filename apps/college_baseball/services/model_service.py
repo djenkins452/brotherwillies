@@ -53,11 +53,20 @@ def _score(game, weights):
 
 
 def _sigmoid(x):
-    return 1.0 / (1.0 + math.exp(-x / 15.0))
+    # Divisor flattened 15 → 25 (2026-04-28 calibration tune) to reduce
+    # overconfidence — see apps/cfb/services/model_service.py for rationale.
+    return 1.0 / (1.0 + math.exp(-x / 25.0))
 
 
 def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None):
-    return max(0.01, min(0.99, _sigmoid(_score(game, HOUSE_WEIGHTS))))
+    """Final calibration step (blend + clamp) applied before returning.
+    See apps.core.services.probability_calibration."""
+    raw = max(0.01, min(0.99, _sigmoid(_score(game, HOUSE_WEIGHTS))))
+    if latest_odds is None:
+        latest_odds = _get_latest_odds(game)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_user_win_prob(game, user_config, injuries=None):
@@ -67,7 +76,11 @@ def compute_user_win_prob(game, user_config, injuries=None):
         'hfa': user_config.hfa_weight,
         'injury': user_config.injury_weight,
     }
-    return max(0.01, min(0.99, _sigmoid(_score(game, weights))))
+    raw = max(0.01, min(0.99, _sigmoid(_score(game, weights))))
+    latest_odds = _get_latest_odds(game)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_data_confidence(game, latest_odds=None, injuries=None):

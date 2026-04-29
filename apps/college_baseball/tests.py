@@ -117,9 +117,11 @@ class CollegeBaseballPredictionModelTests(TestCase):
         """CB HFA=2.0 is less aggressive than MLB HFA=2.5."""
         g = self._mk_game()  # equal teams, non-neutral
         p = compute_house_win_prob(g)
-        # score = 0 + 0 + 2.0 -> sigmoid(2/15) ~= 0.533
-        self.assertGreater(p, 0.52)
-        self.assertLess(p, 0.55)
+        # score = 0 + 0 + 2.0 → sigmoid(2/25) ≈ 0.520, then the
+        # post-2026-04-28 soft clamp pushes anything below PROB_MIN
+        # (0.52) up to PROB_MIN. Result lands at exactly PROB_MIN.
+        from apps.core.services.probability_calibration import PROB_MIN
+        self.assertAlmostEqual(p, PROB_MIN, places=3)
 
     def test_neutral_site_strips_hfa(self):
         g = self._mk_game(neutral=True)

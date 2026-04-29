@@ -40,14 +40,24 @@ def _compute_win_prob(game, injuries, weights):
     away_inj = _injury_adjustment(injuries, game.away_team, weights.get('injury', 1.0))
     injury_effect = (away_inj - home_inj) * 100
     score = rating_diff + hfa + injury_effect
-    prob = 1.0 / (1.0 + math.exp(-score / 15.0))
+    # Divisor flattened 15 → 25 (2026-04-28 calibration tune) to reduce
+    # overconfidence — see apps/cfb/services/model_service.py for the
+    # rationale.
+    prob = 1.0 / (1.0 + math.exp(-score / 25.0))
     return max(0.01, min(0.99, prob))
 
 
 def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None):
+    """Final calibration step (blend + clamp) applied before returning.
+    See apps.core.services.probability_calibration."""
     if injuries is None:
         injuries = _get_injuries(game)
-    return _compute_win_prob(game, injuries, HOUSE_WEIGHTS)
+    if latest_odds is None:
+        latest_odds = _get_latest_odds(game)
+    raw = _compute_win_prob(game, injuries, HOUSE_WEIGHTS)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_user_win_prob(game, user_config, injuries=None):
@@ -60,7 +70,11 @@ def compute_user_win_prob(game, user_config, injuries=None):
         'recent_form': user_config.recent_form_weight,
         'conference': user_config.conference_weight,
     }
-    return _compute_win_prob(game, injuries, weights)
+    raw = _compute_win_prob(game, injuries, weights)
+    latest_odds = _get_latest_odds(game)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_data_confidence(game, latest_odds=None, injuries=None):

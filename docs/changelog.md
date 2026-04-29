@@ -2,6 +2,54 @@
 
 ---
 
+## 2026-04-28 - Moneyline Probability Calibration Tune
+
+**Summary:** Four targeted changes to the probability calculation path to improve calibration (predicted ≈ actual), reduce overconfidence in the 65–80% range, and pull predictions closer to the de-vigged market — which historically correlates with better CLV. **No recommendation thresholds, edge math, lane logic, backtesting logic, or Elo update math were touched.** Validation is via the existing backtest harness (`/analytics/backtest/`): run static and Elo backtests before and after this commit and compare calibration buckets, +CLV rate, and ROI.
+
+### What changed
+1. **Flatten sigmoid (4 files):** All four sport model_services (`cfb`, `cbb`, `mlb`, `college_baseball`) bumped the sigmoid divisor from `15` to `25`. A 10-point legacy-rating gap that previously produced sigmoid(10/15)≈66.5% home prob now produces sigmoid(10/25)≈59.9%. Predictions move closer to 50%, which should pull the calibration buckets toward their bands' midpoints.
+2. **Increase Elo impact (1 constant):** `ELO_TO_LEGACY_DIVISOR` in `apps/core/services/elo_service.py` tightened from `25` to `13`. A 200-point Elo gap now projects to ~15.4 legacy points (was 8). Combined with the flatter sigmoid, the Elo path is `sigmoid(elo_diff / 325)` vs the previous `sigmoid(elo_diff / 375)` — Elo signal ~15% stronger; static signal ~40% weaker. Net: dynamic Elo predictions stay roughly where they were while static-rating predictions move toward 50%, which is the desired calibration shift.
+3. **Light-touch market anchor:** New `apps/core/services/probability_calibration.py::blend_with_market` mixes 15% of `OddsSnapshot.market_home_win_prob` into the model's home prob. Weight is **hard-capped at 20%** inside the helper regardless of caller. When no odds are available, the model probability passes through unchanged. Stabilizer, not a replacement.
+4. **Soft probability clamp:** New `clamp_probability` bounds the picked side's probability to `[0.52, 0.85]`. From the home-prob perspective: `home > 0.5` clamps to `[0.52, 0.85]`; `home < 0.5` clamps to `[0.15, 0.48]`. The clamp **never crosses 0.5** — a 0.51 input never becomes a 0.49. The old hard `[0.01, 0.99]` clamps inside `_compute_win_prob` stay in place as a defensive baseline.
+
+### How they compose
+A single `finalize_win_prob(model_home_prob, market_home_prob)` entry point performs blend → clamp in that order. Every sport's `compute_house_win_prob` and `compute_user_win_prob` call it before returning. Order matters: blending first means the clamp acts on the post-blend probability — a 0.92 model + 0.55 market blends to ~0.86, then clamps to 0.85.
+
+### Pairwise example (CFB, neutral site, no injuries)
+| Inputs | Pre-tune | Post-tune |
+|---|---|---|
+| 55 vs 45 (legacy ratings) | sigmoid(10/15) = **66.5%** | sigmoid(10/25) = **59.9%** |
+| 1700 vs 1500 (Elo, no static) | (1700-1500)/25 = +8 → sigmoid(8/15) = **63.0%** | (1700-1500)/13 = +15.4 → sigmoid(15.4/25) = **64.9%** |
+| 90 vs 10 (extreme legacy) | sigmoid(80/15) ≈ **99.5%** | sigmoid(80/25) = **96.2%** → clamp to **85%** |
+| 90 vs 10 + market 55% | (no blend) clamp 99.5% → 85% | blend(96.2, 55, 0.15) = 89.9% → clamp to **85%** |
+
+### Files
+- New: `apps/core/services/probability_calibration.py` (3 helpers + 4 constants), `apps/core/test_probability_calibration.py` (19 tests)
+- Modified: `apps/cfb/services/model_service.py`, `apps/cbb/services/model_service.py`, `apps/mlb/services/model_service.py`, `apps/college_baseball/services/model_service.py` (sigmoid divisor + finalize_win_prob wiring on house + user paths)
+- Modified: `apps/core/services/elo_service.py` (ELO_TO_LEGACY_DIVISOR 25 → 13)
+- Updated tests: `apps/core/test_elo_service.py` and `apps/analytics/tests.py` (Elo projection now 200/13 not 200/25); `apps/mlb/tests.py` and `apps/college_baseball/tests.py` (new prob bounds reflect flatter sigmoid + soft clamp)
+
+### Tests
+19 new tests in `apps.core.test_probability_calibration` covering `blend_with_market` (default 15% weight, weight cap at 20%, None-market passthrough, negative-weight defensive clamp), `clamp_probability` (boundaries from each side, side preservation across 0.5, custom bounds), `finalize_win_prob` (blend-then-clamp ordering, no-market path, in-range passthrough), and a sanity check that the published constants match the spec (0.15/0.20/0.52/0.85). Total suite: 853 tests, 0 new failures.
+
+### What this does NOT change
+- **Recommendation thresholds:** `MIN_EDGE` (3.0pp), `STRONG_EDGE` (6.0pp), `ELITE_EDGE` (8.0pp), `MIN_PROBABILITY_FOR_RECOMMENDED` (0.55), `MAX_ABS_ODDS_FOR_RECOMMENDED` (300), `HEAVY_FAVORITE_ODDS` (-150) — every gate is byte-for-byte unchanged.
+- **Edge math, de-vigging, status/tier/lane classification** — unchanged.
+- **Backtest service, Elo update math, lane system, decision quality classification** — unchanged.
+- **Hard `[0.01, 0.99]` defensive clamps** inside `_compute_win_prob` — unchanged.
+
+### Validation steps
+1. Open `/analytics/backtest/`, run a Static and an Elo backtest pre-deploy on the same dataset (or pull the most recent runs at HEAD~1).
+2. Deploy this change.
+3. Re-run both backtests.
+4. Compare:
+   - **Calibration buckets (60–70%)** — predicted column should be closer to the actual column.
+   - **+CLV rate** — should rise (market blend pulls predictions toward consensus, reducing the cases where we strongly disagree with the close).
+   - **Avg CLV** — should trend less negative.
+   - **ROI** — secondary; should not significantly degrade (within ~1pp of pre-tune is acceptable).
+
+---
+
 ## 2026-04-28 - Backtest Analytics Control Page
 
 **Summary:** Upgrades the read-only `/backtest/` page into a proper control center at `/analytics/backtest/`. Staff can now run Static and Elo backtests directly from the UI (no CLI required), see live status while a run is in progress, and compare the two rating systems side-by-side. The legacy `/backtest/` URL redirects to the new page so any bookmarks keep working.

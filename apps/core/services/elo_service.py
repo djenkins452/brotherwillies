@@ -197,12 +197,22 @@ def update_ratings(
 
 
 # Conversion factor between Elo (centered at 1500) and the legacy
-# Team.rating scale (centered at 50). Elo distance of 25 ≈ legacy-rating
-# distance of 1, so a 200-point Elo gap (strong vs weak team) maps to an
-# 8-point legacy gap — comparable to what the static-rating system
-# produced. Calibration is intentionally rough; the backtest harness will
-# tell us whether to refine.
-ELO_TO_LEGACY_DIVISOR = 25.0
+# Team.rating scale (centered at 50).
+#
+# 2026-04-28 calibration tune: tightened 25 → 13. The original 25 was
+# chosen to roughly match the static-rating spread, but it compressed
+# Elo deltas too much — a 200-point Elo gap mapped to only 8 legacy
+# points, then the sigmoid divisor (also flattened to 25 in this same
+# tune) further damped the signal. With divisor 13, a 200-point Elo
+# gap maps to ~15.4 legacy points — Elo changes now meaningfully
+# affect probability output, while the flatter sigmoid keeps overall
+# predictions less overconfident.
+#
+# Pairing: Elo path is now sigmoid(elo_diff / 13 / 25) = sigmoid(elo_diff / 325)
+# vs the previous sigmoid(elo_diff / 25 / 15) = sigmoid(elo_diff / 375).
+# Net: Elo signal is ~15% stronger; static signal is ~40% weaker —
+# the desired calibration shift.
+ELO_TO_LEGACY_DIVISOR = 13.0
 ELO_BASELINE = 1500.0
 LEGACY_BASELINE = 50.0
 

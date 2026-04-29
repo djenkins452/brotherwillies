@@ -64,23 +64,39 @@ def _compute_win_prob(game, injuries, weights):
     # Combined score
     score = rating_diff + hfa + injury_effect
 
-    # Convert to probability using logistic function
+    # Convert to probability using logistic function. Divisor flattened
+    # 15 → 25 (2026-04-28 calibration tune) to reduce overconfidence in
+    # the 65-80% range — predictions move closer to 50% for any given
+    # rating gap, which the backtest harness will validate against actual
+    # win rates per calibration bucket.
     import math
-    prob = 1.0 / (1.0 + math.exp(-score / 15.0))
+    prob = 1.0 / (1.0 + math.exp(-score / 25.0))
 
     # Clamp
     return max(0.01, min(0.99, prob))
 
 
 def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None):
-    """Compute house model probability for home team winning."""
+    """Compute house model probability for home team winning.
+
+    Final calibration step (market blend + soft clamp) is applied
+    before returning. See apps.core.services.probability_calibration.
+    """
     if injuries is None:
         injuries = _get_injuries(game)
-    return _compute_win_prob(game, injuries, HOUSE_WEIGHTS)
+    if latest_odds is None:
+        latest_odds = _get_latest_odds(game)
+    raw = _compute_win_prob(game, injuries, HOUSE_WEIGHTS)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_user_win_prob(game, user_config, injuries=None):
-    """Compute user model probability using their weight configuration."""
+    """Compute user model probability using their weight configuration.
+
+    Same calibration step as compute_house_win_prob.
+    """
     if injuries is None:
         injuries = _get_injuries(game)
     weights = {
@@ -90,7 +106,11 @@ def compute_user_win_prob(game, user_config, injuries=None):
         'recent_form': user_config.recent_form_weight,
         'conference': user_config.conference_weight,
     }
-    return _compute_win_prob(game, injuries, weights)
+    raw = _compute_win_prob(game, injuries, weights)
+    latest_odds = _get_latest_odds(game)
+    market = latest_odds.market_home_win_prob if latest_odds else None
+    from apps.core.services.probability_calibration import finalize_win_prob
+    return finalize_win_prob(raw, market)
 
 
 def compute_data_confidence(game, latest_odds=None, injuries=None):

@@ -169,10 +169,12 @@ class ScaleConversionTests(TestCase):
         self.assertAlmostEqual(elo_to_legacy_scale(1500), 50.0, places=4)
 
     def test_strong_team_maps_to_above_50(self):
-        self.assertAlmostEqual(elo_to_legacy_scale(1700), 58.0, places=4)
+        # Post-2026-04-28 calibration: divisor 25 → 13, so a 200-point Elo
+        # gap projects to 200/13 ≈ 15.38 legacy points (was 8 before).
+        self.assertAlmostEqual(elo_to_legacy_scale(1700), 50 + 200 / 13, places=3)
 
     def test_weak_team_maps_to_below_50(self):
-        self.assertAlmostEqual(elo_to_legacy_scale(1300), 42.0, places=4)
+        self.assertAlmostEqual(elo_to_legacy_scale(1300), 50 - 200 / 13, places=3)
 
 
 class FeatureFlagFallbackTests(TestCase):
@@ -209,8 +211,10 @@ class FeatureFlagFallbackTests(TestCase):
     def test_flag_on_with_elo_uses_projection(self):
         self.team.elo_rating = 1700.0
         self.team.save()
-        # 1700 → (1700 - 1500) / 25 + 50 = 58.0
-        self.assertAlmostEqual(team_rating_for_model(self.team), 58.0)
+        # Post-2026-04-28: 1700 → (1700 - 1500) / 13 + 50 ≈ 65.38.
+        self.assertAlmostEqual(
+            team_rating_for_model(self.team), 50 + 200 / 13, places=3,
+        )
 
     @override_settings(USE_DYNAMIC_RATINGS=True)
     def test_flag_on_with_elo_at_baseline_matches_legacy_default(self):

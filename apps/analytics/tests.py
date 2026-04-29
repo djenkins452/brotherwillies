@@ -221,8 +221,11 @@ class ForceUseDynamicTests(TestCase):
         self.team = Team.objects.create(
             name='T', slug=f't-{id(self)}', conference=conf, rating=55.0,
         )
-        self.team.elo_rating = 1700.0  # projects to legacy 58 when active
+        self.team.elo_rating = 1700.0  # projects to legacy ~65.38 (divisor 13)
         self.team.save()
+        # Centralize the expected projection so changes to the divisor
+        # only need updating once in the test file.
+        self.elo_legacy_expected = 50 + 200 / 13  # ≈ 65.38
 
     @override_settings(USE_DYNAMIC_RATINGS=False)
     def test_override_true_uses_elo_even_with_setting_off(self):
@@ -231,7 +234,9 @@ class ForceUseDynamicTests(TestCase):
         )
         self.assertAlmostEqual(team_rating_for_model(self.team), 55.0)
         with force_use_dynamic(True):
-            self.assertAlmostEqual(team_rating_for_model(self.team), 58.0)
+            self.assertAlmostEqual(
+                team_rating_for_model(self.team), self.elo_legacy_expected, places=3,
+            )
         # Override cleared on exit.
         self.assertAlmostEqual(team_rating_for_model(self.team), 55.0)
 
@@ -240,7 +245,9 @@ class ForceUseDynamicTests(TestCase):
         from apps.core.services.elo_service import (
             force_use_dynamic, team_rating_for_model,
         )
-        self.assertAlmostEqual(team_rating_for_model(self.team), 58.0)
+        self.assertAlmostEqual(
+            team_rating_for_model(self.team), self.elo_legacy_expected, places=3,
+        )
         with force_use_dynamic(False):
             self.assertAlmostEqual(team_rating_for_model(self.team), 55.0)
 
