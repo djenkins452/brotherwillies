@@ -811,6 +811,38 @@ select.form-control {
 }
 .cc-verdict-actions-list li { padding: 2px 0; }
 
+/* 2026-04-30: ROI by Sport — single-sport stat tile.
+   Renders instead of a single-bar Chart.js when only one sport has
+   settled bets. A bar chart with one bar fills the whole y-axis,
+   reading as "GIANT VALUE!" regardless of the actual number — the
+   stat tile is the honest treatment for n=1 sport. */
+.cc-roi-by-sport-single {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    text-align: center;
+}
+.cc-roi-by-sport-single-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+.cc-roi-by-sport-single-value {
+    font-size: 2.4rem;
+    font-weight: 800;
+    line-height: 1;
+}
+.cc-roi-by-sport-single-sub {
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
 /* ===== Decision Quality pills ===== */
 .dq-pill {
     display: inline-block;

@@ -588,12 +588,40 @@
     </div>
 </div>
 
-{# ===== ROI BY SPORT ===== #}
+{# ===== ROI BY SPORT =====
+   2026-04-30: chart now color-codes bars by SIGN of ROI (green for
+   positive, red for negative). Previously, the per-sport color map
+   hard-coded MLB to red — so the chart rendered a positive +7% ROI
+   in alarming red regardless of value. The bar also filled the
+   entire y-axis when there was only one sport, which made a single-
+   sport user think the bar was huge.
+
+   When only ONE sport has settled bets we replace the chart with a
+   simple stat tile — a single bar in a bar chart isn't a chart, and
+   the canvas auto-fitting one bar to fill the y-range is misleading. #}
 <div class="card mb-1">
     <h3 class="card-title">ROI by Sport</h3>
-    <div style="position:relative;height:250px;">
-        <canvas id="roiBySportChart"></canvas>
-    </div>
+    {% if chart_data_json and chart_data_sport_count == 1 %}
+        <div class="cc-roi-by-sport-single">
+            <div class="cc-roi-by-sport-single-label">{{ chart_data_single_sport_label }}</div>
+            <div class="cc-roi-by-sport-single-value
+                        {% if chart_data_single_sport_roi > 0 %}text-green
+                        {% elif chart_data_single_sport_roi < 0 %}text-red
+                        {% endif %}">
+                {% if chart_data_single_sport_roi > 0 %}+{% endif %}{{ chart_data_single_sport_roi }}%
+            </div>
+            <div class="cc-roi-by-sport-single-sub">
+                {{ chart_data_single_sport_count }} settled
+                {% if chart_data_single_sport_net > 0 %}· +${{ chart_data_single_sport_net|floatformat:2 }}
+                {% elif chart_data_single_sport_net < 0 %}· -${{ chart_data_single_sport_net_abs|floatformat:2 }}
+                {% endif %}
+            </div>
+        </div>
+    {% else %}
+        <div style="position:relative;height:250px;">
+            <canvas id="roiBySportChart"></canvas>
+        </div>
+    {% endif %}
 </div>
 
 {# ===== CONFIDENCE PERFORMANCE ===== #}
@@ -879,17 +907,28 @@
     }
 
     // ===== ROI by Sport =====
-    if (chartData.roi_by_sport && Object.keys(chartData.roi_by_sport).length) {
+    // 2026-04-30: color now reflects SIGN of ROI, not the sport. The
+    // previous per-sport color map (mlb=red, cbb=green, etc.) lied —
+    // a positive MLB ROI rendered as alarming red regardless of value.
+    // Single-sport case is rendered as a stat tile in the template;
+    // this branch only fires when 2+ sports have settled bets.
+    const roiBySportEl = document.getElementById('roiBySportChart');
+    if (roiBySportEl && chartData.roi_by_sport && Object.keys(chartData.roi_by_sport).length >= 2) {
         const sports = Object.keys(chartData.roi_by_sport);
-        const sportColors = { cfb: COLORS.accent, cbb: COLORS.green, mlb: COLORS.red, college_baseball: COLORS.blue, golf: COLORS.yellow };
-        new Chart(document.getElementById('roiBySportChart'), {
+        const colorForRoi = (roi) => {
+            if (roi > 0.5) return COLORS.green;
+            if (roi < -0.5) return COLORS.red;
+            // Within ±0.5% of zero — call it neutral (close to breakeven).
+            return COLORS.accent;
+        };
+        new Chart(roiBySportEl, {
             type: 'bar',
             data: {
                 labels: sports.map(s => s.toUpperCase()),
                 datasets: [{
                     label: 'ROI %',
                     data: sports.map(s => chartData.roi_by_sport[s].roi),
-                    backgroundColor: sports.map(s => sportColors[s] || COLORS.accent),
+                    backgroundColor: sports.map(s => colorForRoi(chartData.roi_by_sport[s].roi)),
                     borderRadius: 6,
                 }],
             },

@@ -449,9 +449,32 @@ def analytics_dashboard(request):
     from .services.command_center import build_command_center
     cc = build_command_center(all_bets)
 
+    # 2026-04-30: detect single-sport case for ROI by Sport so the
+    # template can render a stat tile instead of a single-bar chart
+    # (which auto-fits to fill the entire y-axis and looks alarming).
+    sport_roi_data = chart_data.get('roi_by_sport') or {}
+    sport_count = len(sport_roi_data)
+    single_sport_label = ''
+    single_sport_roi = 0
+    single_sport_count = 0
+    single_sport_net = 0.0
+    if sport_count == 1:
+        only_sport = next(iter(sport_roi_data))
+        d = sport_roi_data[only_sport]
+        single_sport_label = only_sport.replace('_', ' ').upper()
+        single_sport_roi = d.get('roi', 0)
+        single_sport_count = d.get('count', 0)
+        single_sport_net = d.get('net', 0.0)
+
     return render(request, 'mockbets/analytics.html', {
         'kpis': kpis,
         'chart_data_json': json.dumps(chart_data),
+        'chart_data_sport_count': sport_count,
+        'chart_data_single_sport_label': single_sport_label,
+        'chart_data_single_sport_roi': single_sport_roi,
+        'chart_data_single_sport_count': single_sport_count,
+        'chart_data_single_sport_net': single_sport_net,
+        'chart_data_single_sport_net_abs': abs(single_sport_net),
         'comparison': comparison,
         'calibration': calibration,
         # 'edge' context dropped — see view body comment.
