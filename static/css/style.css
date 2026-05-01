@@ -771,6 +771,46 @@ select.form-control {
 }
 .cc-verdict-reasons .cc-verdict-warning { color: #ca8a04; }
 
+/* 2026-04-30: TLDR line + Action items block. Sit between the
+   verdict headline and the bullet evidence. The TLDR is the
+   plain-English answer to "wait, why is the verdict WEAK if I'm up
+   $430?" — it's what a friend would say to make sense of the
+   apparent contradiction. Actions translate that diagnosis into
+   1-3 next steps. */
+.cc-verdict-tldr {
+    margin: 10px 0 0 0;
+    padding: 10px 12px;
+    background: rgba(148, 163, 184, 0.08);
+    border-left: 3px solid var(--text-secondary);
+    border-radius: 0 6px 6px 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+.cc-verdict-actions {
+    margin: 10px 0 6px 0;
+    padding: 8px 12px;
+    background: rgba(201, 148, 58, 0.06);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+}
+.cc-verdict-actions-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+.cc-verdict-actions-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+.cc-verdict-actions-list li { padding: 2px 0; }
+
 /* ===== Decision Quality pills ===== */
 .dq-pill {
     display: inline-block;

@@ -131,6 +131,20 @@
             {% endif %}
         </div>
     </div>
+    {# 2026-04-30: tldr + actions sit BETWEEN the headline and the    #}
+    {# reasons list so the user sees the plain-English paradox       #}
+    {# explainer first, then the bullet evidence supporting it.      #}
+    {% if cc.system_verdict.tldr %}
+    <p class="cc-verdict-tldr">{{ cc.system_verdict.tldr }}</p>
+    {% endif %}
+    {% if cc.system_verdict.actions %}
+    <div class="cc-verdict-actions">
+        <div class="cc-verdict-actions-label">Action items</div>
+        <ul class="cc-verdict-actions-list">
+            {% for a in cc.system_verdict.actions %}<li>{{ a }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
     <ul class="cc-verdict-reasons">
         {% for r in cc.system_verdict.reasons %}<li>&check; {{ r }}</li>{% endfor %}
         {% for w in cc.system_verdict.warnings %}<li class="cc-verdict-warning">&#9888; {{ w }}</li>{% endfor %}

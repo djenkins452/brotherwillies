@@ -299,9 +299,64 @@ def compute_system_verdict(cc: dict) -> dict:
         if settled < _VERDICT_STRONG_SAMPLE:
             reasons.append(f"Sample under threshold ({settled} of {_VERDICT_STRONG_SAMPLE} needed for STRONG)")
 
+    # 2026-04-30: paradox-explainer + action items.
+    #
+    # The verdict can look contradictory to a casual reader: WEAK SIGNAL
+    # alongside +7% ROI and a green NET P/L tile. The CLV reasoning is
+    # correct (positive ROI + losing the closing line ⇒ recent profit is
+    # likely variance, not skill) — but a user not steeped in CLV math
+    # reads it as "the page disagrees with itself". The tldr resolves
+    # that by explicitly naming the paradox in plain English; the
+    # actions list gives 1-3 next-step recommendations so the verdict
+    # is actionable, not just diagnostic.
+    tldr = ''
+    actions = []
+
+    if verdict == 'WEAK' and roi > 0:
+        tldr = (
+            f"Profitable in this sample (+{roi:.1f}% ROI), but the lines moved "
+            "against most picks. Recent ROI may not repeat — long-term success "
+            "requires beating the closing line."
+        )
+    elif verdict == 'WEAK' and roi <= 0:
+        tldr = (
+            f"Both signals are pointing the wrong way: ROI is {roi:.1f}% AND "
+            "the closing line is moving against picks. The system is currently "
+            "selecting bets the market disagrees with."
+        )
+    elif verdict == 'STRONG':
+        tldr = (
+            f"All three signals agree: positive ROI (+{roi:.1f}%), beating the "
+            f"closing line ({clv_rate:.0f}% +CLV), across a sample large "
+            f"enough ({settled} settled) to lean on."
+        )
+    elif verdict == 'NEUTRAL':
+        tldr = (
+            "Mixed signals — the system isn't clearly winning or losing yet. "
+            "Keep tracking; the verdict will sharpen as more bets settle."
+        )
+
+    if verdict == 'WEAK' and clv_rate is not None and clv_rate < _VERDICT_WEAK_CLV:
+        actions.append(
+            f"Watch CLV trend over the next 20 bets — you need positive CLV >50% "
+            "to confirm the system is finding real value, not just lucky outcomes."
+        )
+    if verdict == 'WEAK' and roi < 0:
+        actions.append(
+            "Consider tightening the minimum edge threshold — see Where Is "
+            "My Edge? below for which buckets are actually profitable."
+        )
+    if confidence == 'LOW':
+        actions.append(
+            f"Sample is small ({settled} settled). Treat the verdict as "
+            "directional, not definitive."
+        )
+
     return {
         'verdict': verdict,
         'confidence_level': confidence,
+        'tldr': tldr,
+        'actions': actions,
         'reasons': reasons,
         'warnings': warnings,
         # Inputs surfaced for the UI so the panel can show its own math
