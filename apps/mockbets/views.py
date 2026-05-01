@@ -449,6 +449,32 @@ def analytics_dashboard(request):
     from .services.command_center import build_command_center
     cc = build_command_center(all_bets)
 
+    # 2026-04-30: build a query string carrying every filter EXCEPT
+    # `range` so the quick-range tabs at the top can preserve the
+    # user's other filter selections when they switch time windows.
+    # Without this, clicking "Last 7 days" wiped any active sport /
+    # bet-type / confidence filter back to defaults.
+    from urllib.parse import urlencode as _urlencode
+    cc_filter_pairs = []
+    if sport:
+        cc_filter_pairs.append(('sport', sport))
+    if bet_type:
+        cc_filter_pairs.append(('bet_type', bet_type))
+    if confidence:
+        cc_filter_pairs.append(('confidence', confidence))
+    if model_source:
+        cc_filter_pairs.append(('model_source', model_source))
+    if current_rules_only:
+        cc_filter_pairs.append(('current_rules_only', '1'))
+    # Manual date inputs only matter when no quick-range tab is active —
+    # quick-range overrides date_from/date_to in the view body above.
+    if not quick_range:
+        if date_from:
+            cc_filter_pairs.append(('date_from', date_from))
+        if date_to:
+            cc_filter_pairs.append(('date_to', date_to))
+    cc_filter_query_string = _urlencode(cc_filter_pairs)
+
     # 2026-04-30: detect single-sport case for ROI by Sport so the
     # template can render a stat tile instead of a single-bar chart
     # (which auto-fits to fill the entire y-axis and looks alarming).
@@ -475,6 +501,7 @@ def analytics_dashboard(request):
         'chart_data_single_sport_count': single_sport_count,
         'chart_data_single_sport_net': single_sport_net,
         'chart_data_single_sport_net_abs': abs(single_sport_net),
+        'cc_filter_query_string': cc_filter_query_string,
         'comparison': comparison,
         'calibration': calibration,
         # 'edge' context dropped — see view body comment.

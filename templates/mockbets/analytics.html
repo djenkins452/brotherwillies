@@ -12,18 +12,35 @@
     <div class="text-sm" style="color:var(--accent);">Simulated performance analytics. Past performance does not predict future outcomes.</div>
 </div>
 
-{# ===== QUICK TIME FILTERS ===== #}
+{% comment %}
+  ===== QUICK TIME FILTERS =====
+  2026-04-30: tabs now preserve every other filter (sport, bet_type,
+  confidence, model_source, current_rules_only). Previously they
+  rebuilt the URL with only `range` + current_rules_only — clicking
+  "Last 7 days" wiped a CFB+Moneyline filter the user had just
+  applied. The composed URL keeps the user's intent.
+{% endcomment %}
+{% with base_qs=cc_filter_query_string %}
 <div class="cc-quick-filters mb-1">
-    <a href="?range=today{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'today' %}active{% endif %}">Today</a>
-    <a href="?range=yesterday{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'yesterday' %}active{% endif %}">Yesterday</a>
-    <a href="?range=7d{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == '7d' %}active{% endif %}">Last 7 days</a>
-    <a href="?range=30d{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == '30d' %}active{% endif %}">Last 30 days</a>
-    <a href="?range=all{% if current_rules_only %}&current_rules_only=1{% endif %}" class="filter-chip {% if current_quick_range == 'all' %}active{% endif %}">All time</a>
+    <a href="?range=today{% if base_qs %}&{{ base_qs }}{% endif %}" class="filter-chip {% if current_quick_range == 'today' %}active{% endif %}">Today</a>
+    <a href="?range=yesterday{% if base_qs %}&{{ base_qs }}{% endif %}" class="filter-chip {% if current_quick_range == 'yesterday' %}active{% endif %}">Yesterday</a>
+    <a href="?range=7d{% if base_qs %}&{{ base_qs }}{% endif %}" class="filter-chip {% if current_quick_range == '7d' %}active{% endif %}">Last 7 days</a>
+    <a href="?range=30d{% if base_qs %}&{{ base_qs }}{% endif %}" class="filter-chip {% if current_quick_range == '30d' %}active{% endif %}">Last 30 days</a>
+    <a href="?range=all{% if base_qs %}&{{ base_qs }}{% endif %}" class="filter-chip {% if current_quick_range == 'all' %}active{% endif %}">All time</a>
 </div>
+{% endwith %}
 
 {# ===== FILTERS ===== #}
 <div class="card mb-1">
     <form method="get" id="analytics-filters">
+        {# 2026-04-30: preserve the active quick-range tab when the   #}
+        {# user submits dropdown changes. Without this, applying a    #}
+        {# Sport / Bet Type filter wiped the date tab back to "All    #}
+        {# time" — so the user couldn't combine "Last 7 days +        #}
+        {# Spread bets" into a single view.                            #}
+        {% if current_quick_range and current_quick_range != 'all' %}
+        <input type="hidden" name="range" value="{{ current_quick_range }}">
+        {% endif %}
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
             <div style="flex:1;min-width:80px;">
                 <label class="text-sm" style="color:var(--accent);">Sport</label>
@@ -68,14 +85,22 @@
                     <option value="user" {% if current_model_source == 'user' %}selected{% endif %}>User</option>
                 </select>
             </div>
+            {% with date_input_disabled=current_quick_range %}
             <div style="flex:1;min-width:120px;">
                 <label class="text-sm" style="color:var(--accent);">From</label>
-                <input type="date" name="date_from" value="{{ current_date_from }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                <input type="date" name="date_from" value="{{ current_date_from }}"
+                       class="input-field"
+                       style="padding:6px 8px;font-size:0.85rem;{% if date_input_disabled %}opacity:0.5;cursor:not-allowed;{% endif %}"
+                       {% if date_input_disabled %}disabled title="A quick-range tab is active. Click 'All time' to use a custom date range."{% endif %}>
             </div>
             <div style="flex:1;min-width:120px;">
                 <label class="text-sm" style="color:var(--accent);">To</label>
-                <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                <input type="date" name="date_to" value="{{ current_date_to }}"
+                       class="input-field"
+                       style="padding:6px 8px;font-size:0.85rem;{% if date_input_disabled %}opacity:0.5;cursor:not-allowed;{% endif %}"
+                       {% if date_input_disabled %}disabled{% endif %}>
             </div>
+            {% endwith %}
             <div style="flex-basis:100%;display:flex;align-items:center;gap:6px;">
                 <label class="text-sm" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                     <input type="checkbox" name="current_rules_only" value="1" {% if current_rules_only %}checked{% endif %}>

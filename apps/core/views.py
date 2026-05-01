@@ -74,6 +74,27 @@ def home(request):
     # the analytics.html change for the full rationale.
     variance = compute_variance_stats(all_bets)
 
+    # 2026-04-30: build the filter-preserving query string for the
+    # quick-range tabs. The home-page analytics view doesn't expose a
+    # `range` quick-range or current_rules_only checkbox in this form,
+    # but we still pass cc_filter_query_string so the template
+    # references work cleanly (empty string = no extra params).
+    from urllib.parse import urlencode as _urlencode
+    cc_filter_pairs = []
+    if sport:
+        cc_filter_pairs.append(('sport', sport))
+    if bet_type:
+        cc_filter_pairs.append(('bet_type', bet_type))
+    if confidence:
+        cc_filter_pairs.append(('confidence', confidence))
+    if model_source:
+        cc_filter_pairs.append(('model_source', model_source))
+    if date_from:
+        cc_filter_pairs.append(('date_from', date_from))
+    if date_to:
+        cc_filter_pairs.append(('date_to', date_to))
+    cc_filter_query_string = _urlencode(cc_filter_pairs)
+
     # 2026-04-30: single-sport detection for ROI by Sport — see the
     # mockbets analytics_dashboard view for the same computation.
     sport_roi_data = chart_data.get('roi_by_sport') or {}
@@ -99,6 +120,7 @@ def home(request):
         'chart_data_single_sport_count': single_sport_count,
         'chart_data_single_sport_net': single_sport_net,
         'chart_data_single_sport_net_abs': abs(single_sport_net),
+        'cc_filter_query_string': cc_filter_query_string,
         'comparison': comparison,
         'calibration': calibration,
         'variance': variance,
