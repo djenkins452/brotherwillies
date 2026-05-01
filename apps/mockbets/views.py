@@ -10,7 +10,7 @@ from django.views.decorators.http import require_POST
 from .models import MockBet
 from .services.analytics import (
     compute_kpis, compute_chart_data, compute_comparison,
-    compute_confidence_calibration, compute_edge_analysis,
+    compute_confidence_calibration,
     compute_flat_bet_simulation, compute_variance_stats,
 )
 
@@ -437,7 +437,8 @@ def analytics_dashboard(request):
     chart_data = compute_chart_data(all_bets)
     comparison = compute_comparison(all_bets)
     calibration = compute_confidence_calibration(all_bets)
-    edge = compute_edge_analysis(all_bets)
+    # 2026-04-30: legacy edge analysis dropped — see analytics.html
+    # rationale. cc.edge_buckets (built below) is the single source.
     variance = compute_variance_stats(all_bets)
     # Recommendation performance — proves the selection engine is actually
     # picking winners vs just making guesses.
@@ -453,7 +454,7 @@ def analytics_dashboard(request):
         'chart_data_json': json.dumps(chart_data),
         'comparison': comparison,
         'calibration': calibration,
-        'edge': edge,
+        # 'edge' context dropped — see view body comment.
         'variance': variance,
         'rec_performance': rec_performance,
         'cc': cc,
@@ -568,7 +569,11 @@ def ai_commentary(request):
     kpis = compute_kpis(bets)
     comparison = compute_comparison(bets)
     calibration = compute_confidence_calibration(bets)
-    edge = compute_edge_analysis(bets)
+    # 2026-04-30: switched from compute_edge_analysis to the canonical
+    # compute_edge_buckets so AI commentary reasons over the same edge
+    # data the user sees on screen.
+    from .services.command_center import compute_edge_buckets
+    edge = compute_edge_buckets(bets)
     variance = compute_variance_stats(bets)
 
     # Get user's persona preference

@@ -236,51 +236,15 @@ def compute_confidence_calibration(bets):
     return result
 
 
-def compute_edge_analysis(bets):
-    """Analyze expected edge vs actual outcomes."""
-    settled = [b for b in bets if b.result != 'pending' and b.expected_edge is not None]
-    if not settled:
-        return None
-
-    # Bucket by edge ranges
-    buckets = {
-        'negative': {'range': '< 0%', 'bets': []},
-        'small': {'range': '0-3%', 'bets': []},
-        'medium': {'range': '3-7%', 'bets': []},
-        'large': {'range': '7%+', 'bets': []},
-    }
-
-    for b in settled:
-        edge = float(b.expected_edge)
-        if edge < 0:
-            buckets['negative']['bets'].append(b)
-        elif edge < 3:
-            buckets['small']['bets'].append(b)
-        elif edge < 7:
-            buckets['medium']['bets'].append(b)
-        else:
-            buckets['large']['bets'].append(b)
-
-    result = {}
-    for key, bucket in buckets.items():
-        blist = bucket['bets']
-        if blist:
-            wins = sum(1 for b in blist if b.result == 'win')
-            stake = sum(b.stake_amount for b in blist)
-            ret = Decimal('0')
-            for b in blist:
-                if b.result == 'win':
-                    ret += b.stake_amount + (b.simulated_payout or Decimal('0'))
-                elif b.result == 'push':
-                    ret += b.stake_amount
-            net = ret - stake
-            result[key] = {
-                'range': bucket['range'],
-                'count': len(blist),
-                'win_pct': round(wins / len(blist) * 100, 1),
-                'roi': round(float(net) / float(stake) * 100, 1) if stake else 0,
-            }
-    return result
+# compute_edge_analysis — RETIRED 2026-04-30.
+# Replaced by command_center.compute_edge_buckets which uses pp-based
+# buckets (0-2pp / 2-4pp / 4-6pp / 6pp+), excludes pushes from win-rate
+# math, reads persisted net_result, and adds CLV %+. The previous
+# implementation here used decimal-percent buckets (<0%/0-3%/3-7%/7%+),
+# included pushes in the win-rate denominator (wrong), and ran with
+# different totals than the cc.edge_buckets surface — so the dashboard
+# was rendering two "edge analysis" cards on the same page that didn't
+# agree. Single source of truth now lives in command_center.
 
 
 def compute_flat_bet_simulation(bets, flat_stake):

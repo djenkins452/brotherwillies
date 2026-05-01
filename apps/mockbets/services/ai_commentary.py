@@ -110,10 +110,20 @@ def _build_user_prompt(kpis, comparison, calibration, edge, variance):
                 )
 
     if edge:
+        # 2026-04-30: edge is now a list of dicts (from compute_edge_buckets)
+        # rather than a dict-of-dicts (compute_edge_analysis was retired —
+        # it duplicated this layer with different bucket boundaries). Each
+        # entry: {range, count, win_rate, roi, clv_positive_rate, clv_sample}.
         parts.append("")
         parts.append("EDGE ANALYSIS:")
-        for key, d in edge.items():
-            parts.append(f"  {d['range']}: {d['count']} bets, {d['win_pct']}% win rate, {d['roi']}% ROI")
+        for d in edge:
+            if d.get('count', 0) == 0:
+                continue
+            parts.append(
+                f"  {d['range']}: {d['count']} bets, "
+                f"{d['win_rate']}% win rate, {d['roi']}% ROI, "
+                f"{d['clv_positive_rate']}% +CLV (n={d['clv_sample']})"
+            )
 
     if variance:
         parts.append("")

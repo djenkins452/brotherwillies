@@ -27,7 +27,7 @@ def home(request):
     from apps.mockbets.models import MockBet
     from apps.mockbets.services.analytics import (
         compute_kpis, compute_chart_data, compute_comparison,
-        compute_confidence_calibration, compute_edge_analysis,
+        compute_confidence_calibration,
         compute_variance_stats,
     )
 
@@ -68,7 +68,10 @@ def home(request):
     chart_data = compute_chart_data(all_bets)
     comparison = compute_comparison(all_bets)
     calibration = compute_confidence_calibration(all_bets)
-    edge = compute_edge_analysis(all_bets)
+    # 2026-04-30: dropped `edge = compute_edge_analysis(all_bets)` — the
+    # template's Edge Analysis card was a duplicate of "Where Is My Edge?"
+    # (cc.edge_buckets) showing different bucket schemes and totals. See
+    # the analytics.html change for the full rationale.
     variance = compute_variance_stats(all_bets)
 
     return render(request, 'mockbets/analytics.html', {
@@ -76,7 +79,6 @@ def home(request):
         'chart_data_json': json.dumps(chart_data),
         'comparison': comparison,
         'calibration': calibration,
-        'edge': edge,
         'variance': variance,
         'current_sport': sport or '',
         'current_bet_type': bet_type or '',

@@ -661,30 +661,13 @@
 </div>
 {% endif %}
 
-{# ===== EDGE ANALYSIS ===== #}
-{% if edge %}
-<div class="card mb-1">
-    <h3 class="card-title">Edge Analysis</h3>
-    <p class="text-sm text-muted mb-1">Performance by expected edge bucket</p>
-    <div class="table-wrap">
-        <table class="data-table" style="width:100%;">
-            <thead>
-                <tr><th>Edge Range</th><th>Bets</th><th>Win Rate</th><th>Sim. ROI</th></tr>
-            </thead>
-            <tbody>
-                {% for key, data in edge.items %}
-                <tr>
-                    <td>{{ data.range }}</td>
-                    <td>{{ data.count }}</td>
-                    <td>{{ data.win_pct }}%</td>
-                    <td class="{% if data.roi > 0 %}text-green{% elif data.roi < 0 %}text-red{% endif %}">{{ data.roi }}%</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
+{# ===== EDGE ANALYSIS — REMOVED 2026-04-30 ===== #}
+{# The "Edge Analysis" card here was a duplicate of the "Where Is My  #}
+{# Edge?" section above (driven by cc.edge_buckets). The two showed   #}
+{# different bucket schemes (0-3%/3-7%/7%+ vs 0-2pp/2-4pp/4-6pp/6pp+) #}
+{# AND different totals on the same page — confusing data integrity   #}
+{# fail. Standardized on cc.edge_buckets (richer: includes CLV %+,    #}
+{# excludes pushes from win rate, uses persisted net_result).         #}
 
 {# ===== VARIANCE & STRESS TESTING ===== #}
 {% if variance %}
