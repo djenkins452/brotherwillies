@@ -204,9 +204,43 @@ def compute_comparison(bets):
             'net_pl': float(net),
         }
 
+    house_stats = _stats(house_bets)
+    user_stats = _stats(user_bets)
+
+    # 2026-04-30: Surface a one-line callout near the TOP of the page
+    # when the user's custom model is meaningfully underperforming the
+    # house model. This is one of the most actionable insights on the
+    # page but it was buried 7 sections deep — easy to miss.
+    #
+    # Trigger conditions (all must hold for the callout to show):
+    #   1. Both house and user have at least MIN_GAP_SAMPLE settled bets
+    #      (avoid early-noise warnings).
+    #   2. ROI gap >= MIN_GAP_PP (one model is meaningfully ahead).
+    #   3. The user model is the laggard (this is the "you might want to
+    #      adjust your weights" path; if user is ahead, no callout —
+    #      the page already shows that win clearly enough).
+    MIN_GAP_SAMPLE = 10
+    MIN_GAP_PP = 5.0
+    gap_callout = None
+    if (
+        house_stats is not None and user_stats is not None
+        and house_stats['count'] >= MIN_GAP_SAMPLE
+        and user_stats['count'] >= MIN_GAP_SAMPLE
+    ):
+        roi_gap = house_stats['roi'] - user_stats['roi']
+        if roi_gap >= MIN_GAP_PP:
+            gap_callout = {
+                'roi_gap_pp': round(roi_gap, 1),
+                'house_roi': house_stats['roi'],
+                'user_roi': user_stats['roi'],
+                'user_count': user_stats['count'],
+                'house_count': house_stats['count'],
+            }
+
     return {
-        'house': _stats(house_bets),
-        'user': _stats(user_bets),
+        'house': house_stats,
+        'user': user_stats,
+        'gap_callout': gap_callout,
     }
 
 

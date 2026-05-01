@@ -356,6 +356,51 @@ class MockBetAnalyticsTests(TestCase):
         resp = self.client.get('/mockbets/analytics/?sport=cfb&confidence=high&model_source=house')
         self.assertEqual(resp.status_code, 200)
 
+    # 2026-04-30: model-gap callout tests — fires only when the user
+    # model is meaningfully behind the house over enough samples.
+
+    def _seed_for_gap(self, *, source, count, all_wins):
+        """Helper — seed `count` bets at -110 with all wins or all losses."""
+        for i in range(count):
+            MockBet.objects.create(
+                user=self.user, sport='mlb', bet_type='moneyline',
+                selection=f'Team{i}', odds_american=-110,
+                implied_probability=Decimal('0.5238'),
+                stake_amount=Decimal('100.00'),
+                result='win' if all_wins else 'loss',
+                simulated_payout=Decimal('90.91') if all_wins else Decimal('0.00'),
+                settled_at=timezone.now(),
+                model_source=source,
+            )
+
+    def test_gap_callout_fires_when_user_underperforms(self):
+        from apps.mockbets.services.analytics import compute_comparison
+        # House: 12 wins (high ROI). User: 12 losses (negative ROI).
+        # Both clear the 10-bet minimum; ROI gap >> 5pp threshold.
+        self._seed_for_gap(source='house', count=12, all_wins=True)
+        self._seed_for_gap(source='user', count=12, all_wins=False)
+        comp = compute_comparison(list(MockBet.objects.all()))
+        self.assertIsNotNone(comp['gap_callout'])
+        self.assertGreater(comp['gap_callout']['roi_gap_pp'], 5.0)
+
+    def test_gap_callout_silent_when_user_outperforms(self):
+        """When the user model is AHEAD, no callout — the page already
+        shows that win clearly via positive numbers, no need to flag."""
+        from apps.mockbets.services.analytics import compute_comparison
+        self._seed_for_gap(source='house', count=12, all_wins=False)
+        self._seed_for_gap(source='user', count=12, all_wins=True)
+        comp = compute_comparison(list(MockBet.objects.all()))
+        self.assertIsNone(comp['gap_callout'])
+
+    def test_gap_callout_silent_with_small_sample(self):
+        """Both sides need at least 10 settled bets — variance is too
+        loud below that threshold to warn the user."""
+        from apps.mockbets.services.analytics import compute_comparison
+        self._seed_for_gap(source='house', count=8, all_wins=True)
+        self._seed_for_gap(source='user', count=8, all_wins=False)
+        comp = compute_comparison(list(MockBet.objects.all()))
+        self.assertIsNone(comp['gap_callout'])
+
     def test_flat_bet_sim_requires_login(self):
         self.client.logout()
         resp = self.client.post('/mockbets/flat-bet-sim/', content_type='application/json', data='{}')

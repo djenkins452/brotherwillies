@@ -178,6 +178,38 @@
 {% endif %}
 
 {% comment %}
+  2026-04-30: House vs User model gap callout.
+
+  Surfaced near the top of the page when the user's custom model is
+  meaningfully underperforming the house model (ROI gap >= 5pp over
+  10+ settled bets each). This insight previously lived in the deep
+  "House vs User Model" comparison table seven sections down — easy
+  to miss. The callout is one line + a deep-link to the table so the
+  user can see the full breakdown.
+
+  Only fires when the user is the laggard. If the user model is
+  AHEAD, the page already shows that clearly via positive numbers.
+{% endcomment %}
+{% if comparison.gap_callout %}
+<div class="card cc-model-gap mb-2">
+    <div class="cc-model-gap-icon">&#9888;</div>
+    <div class="cc-model-gap-body">
+        <div class="cc-model-gap-headline">
+            Your custom model is underperforming the house model by
+            <strong>{{ comparison.gap_callout.roi_gap_pp|floatformat:1 }} pp ROI</strong>
+            ({{ comparison.gap_callout.user_roi|floatformat:1 }}% vs {{ comparison.gap_callout.house_roi|floatformat:1 }}%)
+            over {{ comparison.gap_callout.user_count }} settled user bet{{ comparison.gap_callout.user_count|pluralize }}.
+        </div>
+        <div class="cc-model-gap-action">
+            <a href="#cc-house-vs-user">See the full House vs User comparison &rarr;</a>
+            &middot;
+            <a href="/profile/my-model/">Adjust your model weights</a>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% comment %}
   ===== HERO KPIs =====
   2026-04-30: each tile is now a button that drill-downs to the Bet
   Ledger filtered to the bets that drove that metric. data-filter
@@ -720,7 +752,7 @@
 </div>
 
 {# ===== HOUSE VS USER COMPARISON ===== #}
-{% if comparison.house and comparison.user %}
+{% if comparison.house and comparison.user %}<span id="cc-house-vs-user" style="position:absolute;margin-top:-72px;"></span>
 <div class="card mb-1">
     <h3 class="card-title">House vs User Model</h3>
     <div class="table-wrap">
