@@ -843,6 +843,38 @@ select.form-control {
     color: var(--text-muted);
 }
 
+/* 2026-04-30: Small-sample badge.
+   Applied next to a row's bet count when n < cc-low-n threshold (10).
+   The whole row is also muted (~70% opacity) so the eye treats the
+   row as informational, not actionable. Tooltip lives on the badge.
+
+   Why a separate badge instead of just hiding low-n rows: the user
+   still wants to SEE the row exists ("Strong tier had 1 bet"), they
+   just need the framing that says "don't draw conclusions from this
+   point yet." Hiding would make the page feel like data is missing. */
+.cc-low-n-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(234, 179, 8, 0.16);
+    color: #ca8a04;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+    cursor: help;
+    vertical-align: middle;
+}
+.cc-low-n-row td {
+    opacity: 0.72;
+}
+.cc-low-n-row td:first-child {
+    /* Don't dim the label cell — keep the row identifiable. */
+    opacity: 1;
+}
+
 /* ===== Decision Quality pills ===== */
 .dq-pill {
     display: inline-block;

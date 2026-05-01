@@ -410,8 +410,14 @@
         </thead>
         <tbody>
             {% for row in cc.edge_buckets %}
-            <tr>
-                <td>{{ row.range }}</td>
+            <tr {% if row.count and row.count < 10 %}class="cc-low-n-row"{% endif %}>
+                <td>
+                    {{ row.range }}
+                    {% if row.count and row.count < 10 %}
+                    <span class="cc-low-n-badge"
+                          title="Only {{ row.count }} settled bet{{ row.count|pluralize }} in this bucket — win rate / ROI here is mostly noise.">small n</span>
+                    {% endif %}
+                </td>
                 <td>{% if row.count %}{{ row.count }}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
                 <td>{% if row.count %}{{ row.win_rate|floatformat:1 }}%{% else %}&mdash;{% endif %}</td>
                 <td class="{% if row.count and row.roi > 0 %}text-green{% elif row.count and row.roi < 0 %}text-red{% endif %}">
@@ -516,8 +522,14 @@
         </thead>
         <tbody>
             {% for key, stats in rec_performance.by_status.items %}
-            <tr>
-                <td><span class="rec-perf-chip rec-perf-chip-{{ key }}">{{ key|title|cut:"_" }}</span></td>
+            <tr {% if stats.total_bets < 10 %}class="cc-low-n-row"{% endif %}>
+                <td>
+                    <span class="rec-perf-chip rec-perf-chip-{{ key }}">{{ key|title|cut:"_" }}</span>
+                    {% if stats.total_bets < 10 %}
+                    <span class="cc-low-n-badge"
+                          title="Sample size of {{ stats.total_bets }} bet{{ stats.total_bets|pluralize }} is too small to draw conclusions. Aim for 30+ before treating this row as signal.">small n</span>
+                    {% endif %}
+                </td>
                 <td>{{ stats.total_bets }}</td>
                 <td>{{ stats.win_rate|floatformat:1 }}</td>
                 <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
@@ -535,8 +547,14 @@
         </thead>
         <tbody>
             {% for key, stats in rec_performance.by_tier.items %}
-            <tr>
-                <td><span class="rec-perf-chip rec-perf-chip-tier-{{ key }}">{{ key|title }}</span></td>
+            <tr {% if stats.total_bets < 10 %}class="cc-low-n-row"{% endif %}>
+                <td>
+                    <span class="rec-perf-chip rec-perf-chip-tier-{{ key }}">{{ key|title }}</span>
+                    {% if stats.total_bets < 10 %}
+                    <span class="cc-low-n-badge"
+                          title="Sample size of {{ stats.total_bets }} bet{{ stats.total_bets|pluralize }} is too small to draw conclusions. Aim for 30+ before treating this row as signal.">small n</span>
+                    {% endif %}
+                </td>
                 <td>{{ stats.total_bets }}</td>
                 <td>{{ stats.win_rate|floatformat:1 }}</td>
                 <td class="{% if stats.roi > 0 %}text-green{% elif stats.roi < 0 %}text-red{% endif %}">{{ stats.roi|floatformat:1 }}</td>
@@ -687,8 +705,14 @@
             </thead>
             <tbody>
                 {% for level, data in calibration.items %}
-                <tr>
-                    <td style="text-transform:capitalize;">{{ level }}</td>
+                <tr {% if data.count < 10 %}class="cc-low-n-row"{% endif %}>
+                    <td style="text-transform:capitalize;">
+                        {{ level }}
+                        {% if data.count < 10 %}
+                        <span class="cc-low-n-badge"
+                              title="Calibration over {{ data.count }} bet{{ data.count|pluralize }} is mostly noise. Wait for 30+ in a level before treating the diff as signal.">small n</span>
+                        {% endif %}
+                    </td>
                     <td>{{ data.count }}</td>
                     <td>{{ data.expected_win_pct }}%</td>
                     <td>{{ data.actual_win_pct }}%</td>
@@ -944,26 +968,53 @@
     }
 
     // ===== Performance by Confidence =====
+    // 2026-04-30: bars now show "(n=X)" in their label; small-sample
+    // levels (n < 10) get reduced opacity AND a tooltip footer warning
+    // so a single high-confidence bet at 100% WR doesn't visually
+    // outshout 50+ medium-confidence bets at 55% WR.
     if (chartData.performance_by_confidence && Object.keys(chartData.performance_by_confidence).length) {
         const levels = ['low', 'medium', 'high'].filter(l => chartData.performance_by_confidence[l]);
         const confColors = { low: COLORS.yellow, medium: COLORS.orange, high: COLORS.green };
+        const LOW_N = 10;
+        // Hex alpha. Full opacity for n>=10, ~45% for tiny samples so
+        // the bar reads as informational rather than authoritative.
+        const alphaForN = (n) => (n < LOW_N) ? '73' : 'ff';
         new Chart(document.getElementById('confidenceChart'), {
             type: 'bar',
             data: {
-                labels: levels.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
+                labels: levels.map(l => {
+                    const n = (chartData.performance_by_confidence[l].count || 0);
+                    const cap = l.charAt(0).toUpperCase() + l.slice(1);
+                    return n < LOW_N ? `${cap} (n=${n}, small sample)` : `${cap} (n=${n})`;
+                }),
                 datasets: [{
                     label: 'Win Rate %',
                     data: levels.map(l => chartData.performance_by_confidence[l].win_pct),
-                    backgroundColor: levels.map(l => confColors[l]),
+                    backgroundColor: levels.map(l => confColors[l] + alphaForN(chartData.performance_by_confidence[l].count || 0)),
                     borderRadius: 6,
                 }, {
                     label: 'ROI %',
                     data: levels.map(l => chartData.performance_by_confidence[l].roi),
-                    backgroundColor: levels.map(l => confColors[l] + '80'),
+                    backgroundColor: levels.map(l => confColors[l] + (alphaForN(chartData.performance_by_confidence[l].count || 0) === 'ff' ? '80' : '40')),
                     borderRadius: 6,
                 }],
             },
-            options: defaultOptions,
+            options: {
+                ...defaultOptions,
+                plugins: {
+                    ...defaultOptions.plugins,
+                    tooltip: {
+                        callbacks: {
+                            footer: (items) => {
+                                const lvl = levels[items[0].dataIndex];
+                                const n = chartData.performance_by_confidence[lvl].count || 0;
+                                if (n < LOW_N) return `Sample size of ${n} is too small to draw conclusions — aim for 30+.`;
+                                return '';
+                            }
+                        }
+                    }
+                }
+            },
         });
     }
 
