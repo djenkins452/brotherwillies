@@ -79,6 +79,20 @@ class Command(BaseCommand):
         except Exception as e:
             self.stdout.write(self.style.WARNING(f'backfill_mockbets on deploy failed: {e}'))
 
+        # 2026-04-30: re-classify settled losses whose loss_reason was
+        # 'unknown' or blank — analyze_loss gained a fallback path that
+        # uses always-present fields (implied_probability + confidence_
+        # level) instead of bailing to UNKNOWN whenever the snapshot
+        # fields were missing. The Loss Breakdown widget went from ~48%
+        # Unknown to a real distribution after this sweep.
+        try:
+            self.stdout.write('--- loss-reason backfill ---')
+            call_command('backfill_loss_reasons')
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(
+                f'backfill_loss_reasons on deploy failed: {e}'
+            ))
+
         # --- post-run diagnostic block ---------------------------------------
         # Prints a summary of odds coverage for each sport in the deploy log
         # so operators can see at a glance whether ingestion worked. Without

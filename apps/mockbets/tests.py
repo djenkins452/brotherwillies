@@ -550,20 +550,65 @@ class LossAnalysisRuleTests(TestCase):
         self.assertEqual(r['confidence_miss'], Decimal('30'))
         self.assertEqual(r['edge_miss'], Decimal('6'))
 
-    def test_unknown_when_snapshot_missing(self):
-        """Bets without snapshot fields (pre-migration) get 'unknown'."""
+    def test_fallback_classifies_when_snapshot_missing(self):
+        """2026-04-30 fallback path: bets without snapshot fields are
+        no longer dumped into 'unknown'. Now classified via the always-
+        present implied_probability + confidence_level. The Loss
+        Breakdown widget went from ~48% Unknown to a real distribution
+        after this change.
+
+        For this bet: implied 52.4% (a typical -110), confidence
+        'medium' → assumed model prob 58%. Approximate edge = 5.6pp,
+        which exceeds BAD_EDGE threshold (4) but fails the variance
+        path (which requires confidence='high') → model_error.
+        """
         from apps.mockbets.services.loss_analysis import analyze_loss
         bet = MockBet.objects.create(
             user=self.user, sport='cfb', bet_type='moneyline',
             selection='Alabama', odds_american=-110,
             implied_probability=Decimal('0.524'),
             stake_amount=Decimal('100'), result='loss',
-            # no recommendation_confidence, no expected_edge
+            confidence_level='medium',
+            # no recommendation_confidence, no expected_edge — fallback path
         )
         r = analyze_loss(bet)
-        self.assertEqual(r['primary_reason'], 'unknown')
-        self.assertIsNone(r['confidence_miss'])
-        self.assertIsNone(r['edge_miss'])
+        self.assertEqual(r['primary_reason'], 'model_error')
+        # Fallback returns approximate confidence_miss / edge_miss
+        # rather than None — the breakdown widget can show useful data.
+        self.assertIsNotNone(r['confidence_miss'])
+        self.assertIsNotNone(r['edge_miss'])
+        # Detail copy makes the approximation explicit.
+        self.assertIn('Approximate', r['details'])
+
+    def test_fallback_high_confidence_loss_is_variance(self):
+        """High-confidence loss with a meaningful approximate edge
+        (>=5pp gap between assumed-prob 65% and implied) is classified
+        as variance — same product semantics as the snapshot path."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-110,
+            implied_probability=Decimal('0.524'),  # ~52% (typical -110)
+            stake_amount=Decimal('100'), result='loss',
+            confidence_level='high',  # → assumed model 65%
+            # snapshot fields missing — fallback path
+        )
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'variance')
+
+    def test_fallback_low_confidence_thin_edge_is_bad_edge(self):
+        """Low-confidence loss with assumed-prob 50% on a -110 line
+        ⇒ approximate edge ~-2.4pp ⇒ bad_edge."""
+        from apps.mockbets.services.loss_analysis import analyze_loss
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=-110,
+            implied_probability=Decimal('0.524'),
+            stake_amount=Decimal('100'), result='loss',
+            confidence_level='low',
+        )
+        r = analyze_loss(bet)
+        self.assertEqual(r['primary_reason'], 'bad_edge')
 
     def test_non_loss_returns_unknown_without_raising(self):
         from apps.mockbets.services.loss_analysis import analyze_loss

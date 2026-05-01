@@ -68,6 +68,73 @@ _VARIANCE_MIN_EDGE = Decimal('5')
 _MODEL_ERROR_MIN_CONF = Decimal('65')
 _BAD_EDGE_MAX = Decimal('4')
 
+# 2026-04-30 fallback path — when the snapshot fields aren't populated
+# (pre-migration bets, or settlement that ran before the snapshot data
+# was wired), we still classify based on what IS persisted on every
+# MockBet: implied_probability + confidence_level. The classification
+# is approximate, but vastly better than dumping ~half of all losses
+# into "Unknown" just because the richer snapshot fields are missing.
+#
+# Confidence-level → assumed model probability map. Used to compute
+# an approximate edge against the bet's implied_probability.
+_FALLBACK_CONF_PROB = {
+    'low':    Decimal('0.50'),
+    'medium': Decimal('0.58'),
+    'high':   Decimal('0.65'),
+}
+
+
+def _analyze_loss_fallback(mock_bet) -> Optional[dict]:
+    """Best-effort classification when snapshot fields are missing.
+
+    Returns None if nothing usable is on the bet (no implied_probability
+    AND no confidence_level) — caller falls through to UNKNOWN.
+    """
+    implied = mock_bet.implied_probability  # Decimal 0..1, set at placement
+    conf_level = (mock_bet.confidence_level or '').lower()
+    if implied is None and conf_level not in _FALLBACK_CONF_PROB:
+        return None  # truly nothing — caller returns UNKNOWN
+
+    # Default the model-side probability to medium (~58%) if not
+    # specified. This biases the classifier toward neutral when we
+    # have minimal info.
+    assumed_conf = _FALLBACK_CONF_PROB.get(conf_level, _FALLBACK_CONF_PROB['medium'])
+
+    if implied is not None:
+        approx_edge_pp = (assumed_conf - implied) * Decimal('100')
+    else:
+        # Implied missing too (rare); call edge zero so we get bad_edge.
+        approx_edge_pp = Decimal('0')
+
+    if approx_edge_pp < _BAD_EDGE_MAX:
+        primary = REASON_BAD_EDGE
+    elif conf_level == 'high' and approx_edge_pp >= _VARIANCE_MIN_EDGE:
+        primary = REASON_VARIANCE
+    elif implied is not None and implied > assumed_conf:
+        primary = REASON_MARKET_MOVEMENT
+    elif conf_level == 'high':
+        primary = REASON_MODEL_ERROR
+    else:
+        primary = REASON_MODEL_ERROR
+
+    confidence_miss: Optional[Decimal] = None
+    if implied is not None:
+        confidence_miss = (assumed_conf - implied) * Decimal('100')
+        confidence_miss = Decimal(str(round(float(confidence_miss), 2)))
+
+    edge_miss = Decimal(str(round(float(approx_edge_pp), 2)))
+
+    return {
+        'primary_reason': primary,
+        'details': (
+            _REASON_DETAILS[primary]
+            + ' (Approximate — classified from confidence level + odds; '
+            'snapshot edge field was not captured for this bet.)'
+        ),
+        'confidence_miss': confidence_miss,
+        'edge_miss': edge_miss,
+    }
+
 
 def reason_label(reason: str) -> str:
     """Human-readable label for the loss reason badge."""
@@ -99,10 +166,17 @@ def analyze_loss(mock_bet) -> dict:
     edge = mock_bet.expected_edge                    # Decimal or None
     odds = mock_bet.odds_american
 
-    # No snapshot data → unknown. Bets placed before the snapshot fields
-    # migration landed fall here. We return a non-None confidence_miss /
-    # edge_miss only when we actually have data.
+    # No snapshot data — fall back to classifying with whatever WAS
+    # persisted on the MockBet at placement (implied_probability is
+    # always set; confidence_level low/medium/high too). The result
+    # is approximate but vastly better than the catch-all "unknown"
+    # that previously absorbed ~half of all losses just because the
+    # snapshot fields were missing.
     if confidence is None or edge is None:
+        fallback = _analyze_loss_fallback(mock_bet)
+        if fallback is not None:
+            return fallback
+        # Truly nothing usable (no implied prob either) — last resort.
         return {
             'primary_reason': REASON_UNKNOWN,
             'details': _REASON_DETAILS[REASON_UNKNOWN],
