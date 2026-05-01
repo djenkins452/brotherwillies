@@ -152,28 +152,42 @@
 </div>
 {% endif %}
 
-{# ===== HERO KPIs ===== #}
+{% comment %}
+  ===== HERO KPIs =====
+  2026-04-30: each tile is now a button that drill-downs to the Bet
+  Ledger filtered to the bets that drove that metric. data-filter
+  values are read by the cc-tile-filter JS at the bottom of the
+  page; URL hash persists the filter so a deep-link works.
+{% endcomment %}
 <div class="cc-hero mb-2">
-    <div class="cc-hero-tile cc-hero-tile-primary">
+    <a href="#tile=settled" class="cc-hero-tile cc-hero-tile-primary cc-tile-link"
+       data-filter="settled" data-tile="net_pl"
+       title="Click to filter the Bet Ledger to settled bets — the ones that contributed to Net P/L.">
         <div class="cc-hero-label">Net P/L</div>
         <div class="cc-hero-value {% if cc.hero.net_pl > 0 %}text-green{% elif cc.hero.net_pl < 0 %}text-red{% endif %}">
             {% if cc.hero.net_pl > 0 %}+{% endif %}${{ cc.hero.net_pl|floatformat:2 }}
         </div>
         <div class="cc-hero-sub">{{ cc.kpis.settled_count }} settled · {{ cc.kpis.pending_count }} pending</div>
-    </div>
-    <div class="cc-hero-tile">
+    </a>
+    <a href="#tile=settled" class="cc-hero-tile cc-tile-link"
+       data-filter="settled" data-tile="roi"
+       title="Click to filter the Bet Ledger to the settled bets driving this ROI.">
         <div class="cc-hero-label">ROI</div>
         <div class="cc-hero-value {% if cc.hero.roi > 0 %}text-green{% elif cc.hero.roi < 0 %}text-red{% endif %}">
             {% if cc.hero.roi > 0 %}+{% endif %}{{ cc.hero.roi|floatformat:1 }}%
         </div>
         <div class="cc-hero-sub">on ${{ cc.kpis.total_stake|floatformat:0 }} wagered</div>
-    </div>
-    <div class="cc-hero-tile">
+    </a>
+    <a href="#tile=wins" class="cc-hero-tile cc-tile-link"
+       data-filter="wins" data-tile="record"
+       title="Click to filter the Bet Ledger to wins.">
         <div class="cc-hero-label">Record</div>
         <div class="cc-hero-value">{{ cc.hero.record }}</div>
         <div class="cc-hero-sub">{{ cc.hero.win_rate|floatformat:1 }}% win rate</div>
-    </div>
-    <div class="cc-hero-tile" title="Closing Line Value: percent of bets where you got a better price than the market's final close. Leading indicator of edge.">
+    </a>
+    <a href="#tile=clv" class="cc-hero-tile cc-tile-link"
+       data-filter="has_clv" data-tile="clv"
+       title="Click to filter the Bet Ledger to bets with closing odds captured. Closing Line Value: percent of bets where you got a better price than the market's final close. Leading indicator of edge.">
         <div class="cc-hero-label">CLV %+</div>
         <div class="cc-hero-value {% if cc.hero.clv_sample and cc.hero.clv_positive_rate > 50 %}text-green{% elif cc.hero.clv_sample and cc.hero.clv_positive_rate < 50 %}text-red{% endif %}">
             {% if cc.hero.clv_sample %}{{ cc.hero.clv_positive_rate|floatformat:0 }}%{% else %}&mdash;{% endif %}
@@ -182,7 +196,7 @@
             {% if cc.hero.clv_sample %}{{ cc.hero.clv_sample }} bet{{ cc.hero.clv_sample|pluralize }} measured
             {% else %}no closing odds yet{% endif %}
         </div>
-    </div>
+    </a>
     <div class="cc-hero-tile" title="Weighted score: 50% win rate, 30% normalized ROI, 20% sample-size factor. Caps below 100 until enough bets accumulate.">
         <div class="cc-hero-label">System Confidence</div>
         <div class="cc-hero-value">{{ cc.hero.system_confidence_score|floatformat:1 }}</div>
@@ -433,12 +447,26 @@
 </div>
 {% endif %}
 
-{# ===== FULL BET LEDGER ===== #}
+{% comment %}
+  ===== FULL BET LEDGER =====
+  2026-04-30: rows carry data-result + data-has-clv so the click-
+  through filter from a hero tile can hide non-matching rows
+  client-side. A filter banner shows up above the table when any
+  filter is active — "Showing X of Y · Clear filter".
+{% endcomment %}
 {% if cc.ledger %}
-<div class="card mb-2">
-    <h3 class="card-title">Bet Ledger <span class="text-sm text-muted">({{ cc.ledger|length }} bet{{ cc.ledger|length|pluralize }})</span></h3>
+<div class="card mb-2" id="cc-ledger-card">
+    <h3 class="card-title">
+        Bet Ledger
+        <span class="text-sm text-muted">(<span id="cc-ledger-shown">{{ cc.ledger|length }}</span>
+        of {{ cc.ledger|length }} bet{{ cc.ledger|length|pluralize }})</span>
+    </h3>
+    <div id="cc-ledger-filter-banner" class="cc-ledger-filter-banner" style="display:none;">
+        <span id="cc-ledger-filter-label"></span>
+        <a href="#" id="cc-ledger-filter-clear">Clear filter</a>
+    </div>
     <div class="cc-ledger-wrap">
-        <table class="data-table cc-ledger-table">
+        <table class="data-table cc-ledger-table" id="cc-ledger-table">
             <thead>
                 <tr>
                     <th>When</th>
@@ -457,7 +485,7 @@
             </thead>
             <tbody>
                 {% for b in cc.ledger %}
-                <tr>
+                <tr data-result="{{ b.result|default:'pending' }}" data-has-clv="{% if b.clv_cents is not None %}1{% else %}0{% endif %}">
                     <td><a href="{% url 'mockbets:bet_detail' b.id %}">{{ b.placed_at|date:"M d g:i A" }}</a></td>
                     <td>{{ b.sport|upper }}</td>
                     <td>{{ b.selection|truncatechars:24 }}</td>
@@ -1186,6 +1214,82 @@
             if (c.startsWith('csrftoken=')) return c.substring(10);
         }
         return '';
+    }
+})();
+
+// 2026-04-30: KPI tile click-through to filtered Bet Ledger.
+// Read URL hash on load, toggle row visibility client-side, update
+// the filter banner and the ledger header count. Hash format:
+//   #tile=settled   — wins + losses + pushes
+//   #tile=wins      — wins only
+//   #tile=clv       — bets with closing odds captured
+// Tile anchors set the hash + scroll naturally (anchor href).
+(function () {
+    var FILTERS = {
+        settled: {
+            label: 'Showing settled bets only',
+            test: function (row) { return row.dataset.result !== 'pending'; },
+        },
+        wins: {
+            label: 'Showing wins only',
+            test: function (row) { return row.dataset.result === 'win'; },
+        },
+        clv: {
+            label: 'Showing bets with closing odds (CLV captured)',
+            test: function (row) { return row.dataset.hasClv === '1'; },
+        },
+    };
+
+    function parseHash() {
+        var m = (window.location.hash || '').match(/tile=([a-z_]+)/);
+        return m ? m[1] : null;
+    }
+
+    function applyFilter(key) {
+        var table = document.getElementById('cc-ledger-table');
+        if (!table) return;
+        var rows = table.querySelectorAll('tbody tr');
+        var banner = document.getElementById('cc-ledger-filter-banner');
+        var label = document.getElementById('cc-ledger-filter-label');
+        var counter = document.getElementById('cc-ledger-shown');
+        var spec = FILTERS[key] || null;
+        var shown = 0;
+        rows.forEach(function (r) {
+            var match = spec ? spec.test(r) : true;
+            r.style.display = match ? '' : 'none';
+            if (match) shown += 1;
+        });
+        if (counter) counter.textContent = shown;
+        if (banner && label) {
+            if (spec) {
+                label.textContent = spec.label;
+                banner.style.display = '';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+    }
+
+    function init() {
+        applyFilter(parseHash());
+        var clearLink = document.getElementById('cc-ledger-filter-clear');
+        if (clearLink) {
+            clearLink.addEventListener('click', function (e) {
+                e.preventDefault();
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+                applyFilter(null);
+            });
+        }
+        // Re-run when the hash changes (back button, repeated tile clicks).
+        window.addEventListener('hashchange', function () {
+            applyFilter(parseHash());
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
     }
 })();
 </script>

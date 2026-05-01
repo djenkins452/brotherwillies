@@ -875,6 +875,44 @@ select.form-control {
     opacity: 1;
 }
 
+/* 2026-04-30: clickable hero tiles. Anchored to the Bet Ledger and
+   set a URL hash that the filter JS reads. Visual cue: subtle hover
+   raise + cursor pointer so users know it's interactive. */
+.cc-tile-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 100ms ease-out, box-shadow 100ms ease-out;
+}
+.cc-tile-link:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+}
+.cc-tile-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Filter banner above the Bet Ledger when a tile-click filter is
+   active. Accent-colored so it reads as a state, not a warning. */
+.cc-ledger-filter-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 8px 0 12px;
+    padding: 8px 12px;
+    background: rgba(201, 148, 58, 0.10);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+}
+.cc-ledger-filter-banner a {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 /* ===== Decision Quality pills ===== */
 .dq-pill {
     display: inline-block;
