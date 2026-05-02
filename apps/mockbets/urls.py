@@ -7,6 +7,7 @@ app_name = 'mockbets'
 urlpatterns = [
     path('', views.my_bets, name='my_bets'),
     path('analytics/', views.analytics_dashboard, name='analytics'),
+    path('system-tuning/', views.system_tuning_view, name='system_tuning'),
     path('place/', views.place_bet, name='place_bet'),
     path('flat-bet-sim/', views.flat_bet_sim, name='flat_bet_sim'),
     path('ai-commentary/', views.ai_commentary, name='ai_commentary'),

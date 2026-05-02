@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-02 - System Tuning page (staff-only)
+
+**Summary:** New `/mockbets/system-tuning/` diagnostic that turns mock-bet history into deterministic, actionable signals about the recommendation engine. Advisory only — no engine changes are applied automatically.
+
+### What it shows
+- **System Verdict** — Strong / Needs Adjustment / Weak based on overall ROI + moneyline-only positive-CLV rate
+- **Data Confidence** — LOW / MEDIUM / HIGH (sample-size guardrail at 30/100 bet thresholds)
+- **Key Metrics** — ROI, win rate, net P/L, avg CLV, positive-CLV % across last 7 days / 30 days / all-time
+- **Segmentations** — by bet type (ML/spread/total), by edge bucket (existing thresholds), by odds range (underdog → heavy favorite); source-quality section is an explicit "not yet instrumented" placeholder
+- **Insights** — rule-based, no LLM (e.g. "Spread bets underperforming," "High-edge bets not outperforming low-edge bets," "Market moving against picks")
+- **Recommended Actions** — capped at 3, mapped 1:1 from triggered insights
+- **Engine Config Panel** — read-only snapshot of the actual constants from `apps/core/services/recommendations.py` (MIN_EDGE, STRONG_EDGE, ELITE_EDGE, HEAVY_FAVORITE_ODDS, MAX_ELITE_PER_SLATE)
+
+### Implementation
+- `apps/mockbets/services/system_tuning.py` — pure functions, all deterministic
+- `apps/mockbets/views.py::system_tuning_view` — `is_staff` gated, raises Http404 for non-staff
+- `templates/mockbets/system_tuning.html`
+- Profile dropdown link added (staff-only, next to MLB Diagnostic)
+- 26 new tests covering classifiers, stable output shape with empty data, time windows, insight rule triggers, verdict bands, action mapping, and access control
+
+### Reuse, not recompute
+The page wraps existing analytics services (`command_center.compute_edge_buckets`, `recommendation_performance._group_stats`) instead of forking the math. CLV remains moneyline-only in v1; the bet-type breakdown labels spread/total as "ROI-based (no CLV yet)" rather than implying we have signal we don't.
+
+---
+
 ## 2026-04-28 - Moneyline Probability Calibration Tune
 
 **Summary:** Four targeted changes to the probability calculation path to improve calibration (predicted ≈ actual), reduce overconfidence in the 65–80% range, and pull predictions closer to the de-vigged market — which historically correlates with better CLV. **No recommendation thresholds, edge math, lane logic, backtesting logic, or Elo update math were touched.** Validation is via the existing backtest harness (`/analytics/backtest/`): run static and Elo backtests before and after this commit and compare calibration buckets, +CLV rate, and ROI.

@@ -2108,3 +2108,272 @@ class CLVAnalyticsTests(TestCase):
         self.assertEqual(bundle['by_status']['recommended']['clv_sample'], 0)
         self.assertEqual(bundle['by_status']['recommended']['avg_clv'], 0.0)
         self.assertEqual(bundle['by_status']['recommended']['positive_clv_rate'], 0.0)
+
+
+# =============================================================================
+# System Tuning page — staff-only diagnostic + insights engine.
+# =============================================================================
+
+class SystemTuningClassifiersTests(TestCase):
+    """Pure-function tests for classifier helpers — no DB needed."""
+
+    def test_classify_odds_range_underdog(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertEqual(classify_odds_range(150), 'underdog')
+        self.assertEqual(classify_odds_range(300), 'underdog')
+
+    def test_classify_odds_range_mid_dog(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertEqual(classify_odds_range(100), 'mid_dog')
+        self.assertEqual(classify_odds_range(149), 'mid_dog')
+
+    def test_classify_odds_range_mid(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertEqual(classify_odds_range(-150), 'mid')
+        self.assertEqual(classify_odds_range(99), 'mid')
+        self.assertEqual(classify_odds_range(-110), 'mid')
+
+    def test_classify_odds_range_favorite(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertEqual(classify_odds_range(-200), 'favorite')
+        self.assertEqual(classify_odds_range(-300), 'favorite')
+
+    def test_classify_odds_range_heavy_favorite(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertEqual(classify_odds_range(-301), 'heavy_favorite')
+        self.assertEqual(classify_odds_range(-500), 'heavy_favorite')
+
+    def test_classify_odds_range_none(self):
+        from apps.mockbets.services.system_tuning import classify_odds_range
+        self.assertIsNone(classify_odds_range(None))
+
+    def test_data_confidence_low_band(self):
+        from apps.mockbets.services.system_tuning import compute_data_confidence
+        self.assertEqual(compute_data_confidence([])['level'], 'LOW')
+        self.assertEqual(compute_data_confidence([None] * 29)['level'], 'LOW')
+
+    def test_data_confidence_medium_band(self):
+        from apps.mockbets.services.system_tuning import compute_data_confidence
+        self.assertEqual(compute_data_confidence([None] * 30)['level'], 'MEDIUM')
+        self.assertEqual(compute_data_confidence([None] * 99)['level'], 'MEDIUM')
+
+    def test_data_confidence_high_band(self):
+        from apps.mockbets.services.system_tuning import compute_data_confidence
+        self.assertEqual(compute_data_confidence([None] * 100)['level'], 'HIGH')
+
+    def test_current_config_exposes_real_constants(self):
+        """Sanity-check: config panel reflects the actual engine, not made-up keys."""
+        from apps.mockbets.services.system_tuning import current_config
+        cfg = current_config()
+        for key in ('MIN_EDGE', 'STRONG_EDGE', 'ELITE_EDGE',
+                    'HEAVY_FAVORITE_ODDS', 'MAX_ELITE_PER_SLATE'):
+            self.assertIn(key, cfg)
+        # Must NOT invent fields the engine doesn't have.
+        self.assertNotIn('prob_threshold', cfg)
+        self.assertNotIn('allowed_sources', cfg)
+        self.assertEqual(cfg['engine_emits'], ['moneyline'])
+
+    def test_source_quality_placeholder_is_uninstrumented(self):
+        from apps.mockbets.services.system_tuning import segment_by_source_quality
+        result = segment_by_source_quality([])
+        self.assertFalse(result['instrumented'])
+        self.assertIn('odds provenance', result['message'].lower())
+
+
+class SystemTuningStableShapeTests(TestCase):
+    """Output shape stays identical when there are zero bets — the template
+    must never have to defensive-check for missing keys."""
+
+    def test_compute_all_returns_full_shape_with_no_bets(self):
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all([])
+        for key in ('overall', 'data_confidence', 'time_windows',
+                    'by_bet_type', 'by_odds_range', 'source_quality',
+                    'edge', 'config', 'insights', 'verdict', 'actions'):
+            self.assertIn(key, ctx, f'missing top-level key: {key}')
+
+    def test_time_windows_always_have_three_keys(self):
+        from apps.mockbets.services.system_tuning import compute_time_windows
+        windows = compute_time_windows([])
+        self.assertEqual(set(windows.keys()), {'7d', '30d', 'all_time'})
+        for w in windows.values():
+            for k in ('count', 'roi', 'win_rate', 'net_pl',
+                      'avg_clv', 'positive_clv_rate', 'clv_sample'):
+                self.assertIn(k, w)
+
+    def test_bet_type_segments_always_present(self):
+        from apps.mockbets.services.system_tuning import segment_by_bet_type
+        seg = segment_by_bet_type([])
+        self.assertEqual(set(seg.keys()), {'moneyline', 'spread', 'total'})
+
+    def test_odds_range_segments_always_present(self):
+        from apps.mockbets.services.system_tuning import segment_by_odds_range
+        seg = segment_by_odds_range([])
+        self.assertEqual(
+            set(seg.keys()),
+            {'underdog', 'mid_dog', 'mid', 'favorite', 'heavy_favorite'},
+        )
+
+    def test_verdict_with_zero_bets_is_needs_adjustment(self):
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all([])
+        self.assertEqual(ctx['verdict']['health'], 'needs_adjustment')
+        self.assertEqual(ctx['verdict']['strength'], [])
+        self.assertEqual(ctx['verdict']['weakness'], [])
+        self.assertEqual(ctx['verdict']['risk'], [])
+
+    def test_actions_capped_at_three(self):
+        from apps.mockbets.services.system_tuning import recommend_actions
+        # Synthetically pass in many insights — cap is 3 even with all matches.
+        insights = [
+            {'category': 'weakness', 'message': 'Spread bets underperforming', 'evidence': {}},
+            {'category': 'weakness', 'message': 'Total bets underperforming', 'evidence': {}},
+            {'category': 'weakness', 'message': 'High-edge bets not outperforming low-edge bets', 'evidence': {}},
+            {'category': 'weakness', 'message': 'Heavy-favorite bets losing money', 'evidence': {}},
+            {'category': 'risk', 'message': 'Market moving against picks', 'evidence': {}},
+        ]
+        actions = recommend_actions(insights)
+        self.assertLessEqual(len(actions), 3)
+        # Ordering preserved from input.
+        self.assertEqual(len(actions), 3)
+
+
+class SystemTuningWindowsTests(TestCase):
+    """Verify time windows actually filter by placed_at."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('twuser', password='x')
+
+    def _bet(self, days_ago, result='win', odds=-110):
+        bet = MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type='moneyline',
+            selection='Alabama', odds_american=odds,
+            implied_probability=Decimal('0.50'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('91') if result == 'win' else None,
+            result=result,
+        )
+        # Bypass auto_now / default by direct assignment then save.
+        bet.placed_at = timezone.now() - timedelta(days=days_ago)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    def test_seven_day_window_excludes_older(self):
+        from apps.mockbets.services.system_tuning import compute_time_windows
+        self._bet(days_ago=2)
+        self._bet(days_ago=10)  # outside 7d
+        self._bet(days_ago=40)  # outside 30d
+        windows = compute_time_windows(MockBet.objects.all())
+        self.assertEqual(windows['7d']['count'], 1)
+        self.assertEqual(windows['30d']['count'], 2)
+        self.assertEqual(windows['all_time']['count'], 3)
+
+
+class SystemTuningInsightsAndVerdictTests(TestCase):
+    """End-to-end: build a bet population that triggers known rules, assert
+    the rules fire and the verdict matches."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('insightuser', password='x')
+
+    def _bet(self, *, bet_type='moneyline', odds=-110, result='loss',
+             stake=Decimal('100'), payout=None, edge=None):
+        return MockBet.objects.create(
+            user=self.user, sport='cfb', bet_type=bet_type,
+            selection='Test', odds_american=odds,
+            implied_probability=Decimal('0.50'),
+            stake_amount=stake,
+            simulated_payout=payout,
+            result=result,
+            expected_edge=edge,
+        )
+
+    def test_spread_underperforming_triggers_weakness_insight(self):
+        # 12 spread losses → ROI = -100% → triggers weakness rule.
+        for _ in range(12):
+            self._bet(bet_type='spread', result='loss')
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all(MockBet.objects.all())
+        msgs = [i['message'] for i in ctx['insights']]
+        self.assertIn('Spread bets underperforming', msgs)
+        # And the corresponding action surfaces (worded for manual-only).
+        self.assertTrue(
+            any('manual-only' in a.lower() for a in ctx['actions']),
+            f'expected a manual-only spread action; got {ctx["actions"]}',
+        )
+
+    def test_below_sample_floor_does_not_trigger(self):
+        """5 spread losses < _MIN_SEGMENT_SAMPLE — should NOT trigger."""
+        for _ in range(5):
+            self._bet(bet_type='spread', result='loss')
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all(MockBet.objects.all())
+        msgs = [i['message'] for i in ctx['insights']]
+        self.assertNotIn('Spread bets underperforming', msgs)
+
+    def test_verdict_weak_when_overall_roi_below_minus_five(self):
+        # 12 ML losses → ROI = -100%, well past -5% threshold.
+        for _ in range(12):
+            self._bet(bet_type='moneyline', result='loss')
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all(MockBet.objects.all())
+        self.assertEqual(ctx['verdict']['health'], 'weak')
+
+    def test_verdict_strong_when_roi_positive_and_no_clv_signal(self):
+        """Spec: ROI > 0 AND (no CLV sample OR positive_clv_rate >= 52%) → strong.
+        With no CLV captured, the CLV gate is vacuously satisfied."""
+        # 12 wins at +100 → ROI = +100%. No CLV (no closing odds).
+        for _ in range(12):
+            self._bet(bet_type='moneyline', odds=100, result='win',
+                      payout=Decimal('100'))
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all(MockBet.objects.all())
+        self.assertEqual(ctx['verdict']['health'], 'strong')
+
+    def test_high_edge_not_outperforming_triggers(self):
+        # Edge buckets in command_center: 0-2pp / 2-4pp / 4-6pp / 6pp+.
+        # 10 top-bucket (6pp+) losses + 10 bottom-bucket (0-2pp) wins → top.roi <= bottom.roi
+        for _ in range(10):
+            self._bet(bet_type='moneyline', odds=-110, result='loss',
+                      edge=Decimal('8.0'))
+        for _ in range(10):
+            self._bet(bet_type='moneyline', odds=100, result='win',
+                      edge=Decimal('1.0'), payout=Decimal('100'))
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all(MockBet.objects.all())
+        msgs = [i['message'] for i in ctx['insights']]
+        self.assertIn('High-edge bets not outperforming low-edge bets', msgs)
+
+
+from django.test import override_settings
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class SystemTuningAccessTests(TestCase):
+    """The page is staff-only — non-staff get 404, anon redirect to login."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user('stafftuner', password='x', is_staff=True)
+        self.normal = User.objects.create_user('normaltuner', password='x')
+        self.client = Client()
+
+    def test_staff_can_load_page(self):
+        self.client.force_login(self.staff)
+        resp = self.client.get('/mockbets/system-tuning/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'System Tuning')
+        self.assertContains(resp, 'Data Confidence')
+
+    def test_non_staff_gets_404(self):
+        self.client.force_login(self.normal)
+        resp = self.client.get('/mockbets/system-tuning/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_anon_redirected_to_login(self):
+        resp = self.client.get('/mockbets/system-tuning/')
+        # login_required → 302 to login URL
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.url)

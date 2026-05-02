@@ -2,7 +2,7 @@ import json
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -517,6 +517,52 @@ def analytics_dashboard(request):
         'current_date_to': date_to or '',
         'current_rules_only': current_rules_only,
         'help_key': 'mock_analytics',
+        'nav_active': 'mockbets',
+    })
+
+
+@login_required
+def system_tuning_view(request):
+    """Staff-only diagnostic — turns mock-bet history into actionable signals.
+
+    Pulls from ALL users (not just request.user). The page is a system-wide
+    health view, not a personal one — same pattern as the MLB Diagnostic.
+    """
+    if not request.user.is_staff:
+        raise Http404
+    from .services.system_tuning import compute_all
+    bets = MockBet.objects.all().select_related(
+        'cfb_game', 'cbb_game', 'mlb_game', 'college_baseball_game',
+    )
+    ctx = compute_all(bets)
+
+    # Pre-flatten dict-of-dicts into ordered (label, row) pairs so the
+    # template can iterate without needing a custom dictkey filter.
+    time_window_rows = [
+        ('Last 7 Days', ctx['time_windows']['7d']),
+        ('Last 30 Days', ctx['time_windows']['30d']),
+        ('All Time', ctx['time_windows']['all_time']),
+    ]
+    bet_type_rows = [
+        ('Moneyline', ctx['by_bet_type']['moneyline']),
+        ('Spread', ctx['by_bet_type']['spread']),
+        ('Total', ctx['by_bet_type']['total']),
+    ]
+    odds_range_rows = [
+        ('Underdog (+150 and up)', ctx['by_odds_range']['underdog']),
+        ('Mid Dog (+100 to +149)', ctx['by_odds_range']['mid_dog']),
+        ('Mid (-150 to +99)', ctx['by_odds_range']['mid']),
+        ('Favorite (-300 to -151)', ctx['by_odds_range']['favorite']),
+        ('Heavy Favorite (-301 and below)', ctx['by_odds_range']['heavy_favorite']),
+    ]
+
+    return render(request, 'mockbets/system_tuning.html', {
+        **ctx,
+        'time_window_rows': time_window_rows,
+        'bet_type_rows': bet_type_rows,
+        'odds_range_rows': odds_range_rows,
+        'config_json': json.dumps(ctx['config'], indent=2),
+        'help_key': 'system_tuning',
         'nav_active': 'mockbets',
     })
 

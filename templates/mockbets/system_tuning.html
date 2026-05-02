@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}System Tuning - Brother Willies{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin:0;">System Tuning</h1>
+    <a href="{% url 'mockbets:analytics' %}" class="btn btn-sm" style="font-size:0.8rem;">Back to Analytics</a>
+</div>
+
+<div class="card mb-1" style="background:rgba(201,148,58,0.08);border-color:rgba(201,148,58,0.2);">
+    <div class="text-sm" style="color:var(--accent);">
+        Staff-only diagnostic. Advisory only — no engine changes are applied automatically.
+        ROI is computed across all settled bets; CLV metrics are moneyline-only in v1.
+    </div>
+</div>
+
+{# =========================================================================
+   1. SYSTEM VERDICT
+   ========================================================================= #}
+<div class="card mb-1">
+    {% with health=verdict.health %}
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div style="font-size:1.1rem;font-weight:600;">System Health:</div>
+        {% if health == 'strong' %}
+            <div style="font-size:1.05rem;color:#3ecf8e;">✅ Strong</div>
+        {% elif health == 'weak' %}
+            <div style="font-size:1.05rem;color:#e35d5d;">❌ Weak</div>
+        {% else %}
+            <div style="font-size:1.05rem;color:var(--accent);">⚠️ Needs Adjustment</div>
+        {% endif %}
+    </div>
+    {% endwith %}
+
+    <div style="margin-top:12px;display:grid;grid-template-columns:1fr;gap:8px;">
+        <div>
+            <div class="text-sm" style="color:#3ecf8e;font-weight:600;">Strength</div>
+            {% if verdict.strength %}
+                <ul style="margin:4px 0 0 18px;padding:0;">
+                {% for s in verdict.strength %}<li>{{ s }}</li>{% endfor %}
+                </ul>
+            {% else %}
+                <div class="text-sm" style="color:var(--muted);">— None detected.</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-sm" style="color:#e35d5d;font-weight:600;">Weakness</div>
+            {% if verdict.weakness %}
+                <ul style="margin:4px 0 0 18px;padding:0;">
+                {% for w in verdict.weakness %}<li>{{ w }}</li>{% endfor %}
+                </ul>
+            {% else %}
+                <div class="text-sm" style="color:var(--muted);">— None detected.</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-sm" style="color:var(--accent);font-weight:600;">Risk</div>
+            {% if verdict.risk %}
+                <ul style="margin:4px 0 0 18px;padding:0;">
+                {% for r in verdict.risk %}<li>{{ r }}</li>{% endfor %}
+                </ul>
+            {% else %}
+                <div class="text-sm" style="color:var(--muted);">— None detected.</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{# =========================================================================
+   2. DATA CONFIDENCE
+   ========================================================================= #}
+<div class="card mb-1">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div style="font-weight:600;">Data Confidence:</div>
+        {% if data_confidence.level == 'HIGH' %}
+            <div style="color:#3ecf8e;font-weight:600;">HIGH</div>
+        {% elif data_confidence.level == 'MEDIUM' %}
+            <div style="color:var(--accent);font-weight:600;">MEDIUM</div>
+        {% else %}
+            <div style="color:#e35d5d;font-weight:600;">LOW</div>
+        {% endif %}
+        <div class="text-sm" style="color:var(--muted);">
+            {{ data_confidence.total_bets }} total bet{{ data_confidence.total_bets|pluralize }}
+            (LOW &lt; {{ data_confidence.thresholds.low_max }},
+             MEDIUM &lt; {{ data_confidence.thresholds.medium_max }}).
+        </div>
+    </div>
+</div>
+
+{# =========================================================================
+   3. KEY METRICS — overall + time windows
+   ========================================================================= #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Key Metrics</h2>
+    <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px;">Window</th>
+                    <th style="text-align:right;padding:6px;">Bets</th>
+                    <th style="text-align:right;padding:6px;">ROI</th>
+                    <th style="text-align:right;padding:6px;">Win Rate</th>
+                    <th style="text-align:right;padding:6px;">Net P/L</th>
+                    <th style="text-align:right;padding:6px;">Avg CLV</th>
+                    <th style="text-align:right;padding:6px;">CLV+ %</th>
+                    <th style="text-align:right;padding:6px;">CLV n</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for label, w in time_window_rows %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px;">{{ label }}</td>
+                    <td style="text-align:right;padding:6px;">{{ w.count }}</td>
+                    <td style="text-align:right;padding:6px;">{{ w.roi|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ w.win_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">${{ w.net_pl|floatformat:2 }}</td>
+                    <td style="text-align:right;padding:6px;">{{ w.avg_clv|floatformat:4 }}</td>
+                    <td style="text-align:right;padding:6px;">{{ w.positive_clv_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ w.clv_sample }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="text-sm" style="color:var(--muted);margin-top:6px;">
+        CLV metrics are moneyline-only in v1.
+    </div>
+</div>
+
+{# =========================================================================
+   4. SEGMENTATIONS
+   ========================================================================= #}
+
+{# 4a. Bet Type #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">By Bet Type</h2>
+    <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px;">Type</th>
+                    <th style="text-align:right;padding:6px;">Bets</th>
+                    <th style="text-align:right;padding:6px;">Win Rate</th>
+                    <th style="text-align:right;padding:6px;">ROI</th>
+                    <th style="text-align:right;padding:6px;">Net P/L</th>
+                    <th style="text-align:right;padding:6px;">CLV</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for label, row in bet_type_rows %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px;">{{ label }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.total_bets }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.win_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ row.roi|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">${{ row.net_pl|floatformat:2 }}</td>
+                    <td style="text-align:right;padding:6px;">
+                        {% if row.clv_available %}
+                            {{ row.positive_clv_rate|floatformat:1 }}% (n={{ row.clv_sample }})
+                        {% else %}
+                            <span style="color:var(--muted);">ROI-based (no CLV yet)</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# 4b. Edge Buckets — reused from existing analytics (command_center.compute_edge_buckets) #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">By Edge Bucket</h2>
+    {% if edge %}
+    <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px;">Range</th>
+                    <th style="text-align:right;padding:6px;">Bets</th>
+                    <th style="text-align:right;padding:6px;">Win Rate</th>
+                    <th style="text-align:right;padding:6px;">ROI</th>
+                    <th style="text-align:right;padding:6px;">CLV+ %</th>
+                    <th style="text-align:right;padding:6px;">CLV n</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in edge %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px;">{{ row.range }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.count }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.win_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ row.roi|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ row.clv_positive_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ row.clv_sample }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <div class="text-sm" style="color:var(--muted);">No edge-tagged bets yet.</div>
+    {% endif %}
+</div>
+
+{# 4c. Odds Range #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">By Odds Range</h2>
+    <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:6px;">Range</th>
+                    <th style="text-align:right;padding:6px;">Bets</th>
+                    <th style="text-align:right;padding:6px;">Win Rate</th>
+                    <th style="text-align:right;padding:6px;">ROI</th>
+                    <th style="text-align:right;padding:6px;">Net P/L</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for label, row in odds_range_rows %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px;">{{ label }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.total_bets }}</td>
+                    <td style="text-align:right;padding:6px;">{{ row.win_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">{{ row.roi|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:6px;">${{ row.net_pl|floatformat:2 }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# 4d. Source Quality (placeholder) #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">By Source Quality</h2>
+    <div class="text-sm" style="color:var(--muted);">
+        <div><strong>Source Quality:</strong> Not yet instrumented</div>
+        <div>{{ source_quality.message }}</div>
+    </div>
+</div>
+
+{# =========================================================================
+   5. RULE-BASED INSIGHTS
+   ========================================================================= #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Insights</h2>
+    {% if insights %}
+        <ul style="margin:0 0 0 18px;padding:0;">
+            {% for i in insights %}
+                <li style="margin-bottom:6px;">
+                    {% if i.category == 'strength' %}
+                        <span style="color:#3ecf8e;">✅</span>
+                    {% elif i.category == 'weakness' %}
+                        <span style="color:#e35d5d;">⚠️</span>
+                    {% else %}
+                        <span style="color:var(--accent);">⚠️</span>
+                    {% endif %}
+                    <strong style="text-transform:capitalize;">{{ i.category }}:</strong>
+                    {{ i.message }}
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <div class="text-sm" style="color:var(--muted);">No insight rules triggered with the current data.</div>
+    {% endif %}
+</div>
+
+{# =========================================================================
+   6. RECOMMENDED ACTIONS
+   ========================================================================= #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Recommended Actions</h2>
+    {% if actions %}
+        <ol style="margin:0 0 0 18px;padding:0;">
+            {% for a in actions %}<li style="margin-bottom:6px;">{{ a }}</li>{% endfor %}
+        </ol>
+    {% else %}
+        <div class="text-sm" style="color:var(--muted);">No actions to recommend at this time.</div>
+    {% endif %}
+</div>
+
+{# =========================================================================
+   7. CONFIG PANEL (READ-ONLY)
+   ========================================================================= #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Engine Config (Read-Only)</h2>
+    <pre style="background:rgba(0,0,0,0.25);padding:10px;border-radius:6px;overflow-x:auto;font-size:0.85rem;margin:0;">{{ config_json }}</pre>
+    <div class="text-sm" style="color:var(--muted);margin-top:6px;">
+        {{ config.note }}
+    </div>
+</div>
+
+{% endblock %}
