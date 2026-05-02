@@ -435,6 +435,146 @@ class MLBHubViewTests(TestCase):
         self.assertIn('mlb-decision-group--fade', body)
 
 
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MLBHubUserPickTileTests(TestCase):
+    """The decision-first tile shows a persistent 'MY PICK' row + a
+    '✓ Bet Placed' button when the logged-in user has a pending mock
+    bet on the game. Restores the user-feedback signal that was lost
+    when the tile partial was simplified."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from django.test import Client
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot as MLBOdds
+        self.MLBGame = MLBGame
+        self.MLBOdds = MLBOdds
+        conf = MLBConf.objects.create(name='AL-pick', slug='al-pick')
+        self.t_home = MLBTeam.objects.create(
+            name='Yankees', slug='pick-yankees', conference=conf, rating=70,
+            source='mlb_stats_api', external_id='pick-1',
+        )
+        self.t_away = MLBTeam.objects.create(
+            name='Rays', slug='pick-rays', conference=conf, rating=40,
+            source='mlb_stats_api', external_id='pick-2',
+        )
+        self.user = User.objects.create_user('pick_user', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _seeded_game(self, ext='pick-game-1'):
+        game = self.MLBGame.objects.create(
+            home_team=self.t_home, away_team=self.t_away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            status='scheduled',
+            source='mlb_stats_api', external_id=ext,
+        )
+        self.MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-122, moneyline_away=110,
+        )
+        return game
+
+    def _bet(self, game, selection='Yankees', odds=-122):
+        from apps.mockbets.models import MockBet
+        from decimal import Decimal as D
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', mlb_game=game,
+            bet_type='moneyline', selection=selection,
+            odds_american=odds,
+            implied_probability=D('0.5500'),
+            stake_amount=D('100.00'),
+            result='pending',
+        )
+
+    # --- Render presence ----------------------------------------------------
+
+    def test_my_pick_row_renders_when_user_has_pending_bet(self):
+        game = self._seeded_game()
+        self._bet(game, selection='Yankees', odds=-122)
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('mlb-tile__user-pick', body)
+        self.assertIn('MY PICK:', body)
+        self.assertIn('Yankees', body)
+        # American odds rendered with the sign character.
+        self.assertIn('-122', body)
+
+    def test_my_pick_row_absent_when_no_bet(self):
+        self._seeded_game()
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertNotIn('mlb-tile__user-pick', body)
+        self.assertNotIn('MY PICK:', body)
+
+    def test_bet_placed_button_replaces_bet_this(self):
+        game = self._seeded_game()
+        self._bet(game)
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('mlb-bet-btn--placed', body)
+        self.assertIn('✓ Bet Placed', body)
+        # The "Bet This" CTA should NOT also render — replaced, not stacked.
+        # (Allowing the modal's static label to slip through is fine — we
+        # check for the button class specifically.)
+        self.assertNotIn('mlb-bet-btn--bet-this', body)
+
+    def test_positive_odds_render_with_plus_sign(self):
+        game = self._seeded_game()
+        self._bet(game, selection='Rays', odds=145)
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('Rays', body)
+        # Positive American odds should be rendered with a leading +.
+        self.assertIn('(+145)', body)
+
+    # --- Per-game isolation -------------------------------------------------
+
+    def test_pick_attached_to_correct_game_only(self):
+        """When the user has bets on game A but not game B, the MY PICK
+        row appears on A's tile only — no cross-contamination."""
+        game_a = self._seeded_game(ext='pick-A')
+
+        # Build a second matchup on a separate Conference so slugs stay unique.
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        conf_b = MLBConf.objects.create(name='NL-pick', slug='nl-pick')
+        t_b_home = MLBTeam.objects.create(
+            name='Mets', slug='pick-mets', conference=conf_b, rating=65,
+            source='mlb_stats_api', external_id='pick-3',
+        )
+        t_b_away = MLBTeam.objects.create(
+            name='Phils', slug='pick-phils', conference=conf_b, rating=55,
+            source='mlb_stats_api', external_id='pick-4',
+        )
+        game_b = self.MLBGame.objects.create(
+            home_team=t_b_home, away_team=t_b_away,
+            first_pitch=timezone.now() + timedelta(hours=3),
+            status='scheduled',
+            source='mlb_stats_api', external_id='pick-B',
+        )
+        self.MLBOdds.objects.create(
+            game=game_b, captured_at=timezone.now(),
+            market_home_win_prob=0.6,
+            moneyline_home=-150, moneyline_away=130,
+        )
+
+        # Bet on A only.
+        self._bet(game_a, selection='Yankees', odds=-122)
+
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        # Exactly one parent MY PICK container on the page. Use the
+        # closing quote to disambiguate from child classes that share
+        # the prefix (mlb-tile__user-pick-icon / -label / -team / -odds).
+        self.assertEqual(body.count('class="mlb-tile__user-pick"'), 1)
+        self.assertIn('Yankees', body)
+        # B's teams render without an attached MY PICK row.
+        self.assertIn('Mets', body)
+
+
 class MLBHubBucketAssignmentTests(TestCase):
     """Each game must land in exactly ONE of the 3 buckets — no double-
     counting between Recommended / Potential / Not Recommended."""

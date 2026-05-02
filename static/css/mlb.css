@@ -379,6 +379,59 @@
 .mlb-tile--has-bet {
     border-right: 2px solid rgba(34,197,94,0.5);
 }
+
+/* Persistent "MY PICK" row on decision tiles — renders directly under
+   the team matchup, above the Model/Market/Edge stats. Subtle green
+   wash + monospaced odds so a scanning user can confirm at a glance
+   what they bet on this game without hovering or opening the popup.
+   Restored 2026-05-02 after the decision-first rewrite collapsed the
+   old action chip that carried this info. */
+.mlb-tile__user-pick {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(34,197,94,0.10);
+    border-left: 3px solid #22c55e;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #d1fae5;
+}
+.mlb-tile__user-pick-icon {
+    font-size: 11px;
+    line-height: 1;
+}
+.mlb-tile__user-pick-label {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #6ee7b7;
+}
+.mlb-tile__user-pick-team {
+    font-weight: 600;
+    color: #ecfdf5;
+}
+.mlb-tile__user-pick-odds {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #a7f3d0;
+}
+
+/* "✓ Bet Placed" pill — replaces "Bet This" once the user has a bet.
+   Subtle green outline, not the gold/green high-contrast CTA fill —
+   the bet is already in, no further action required. Click navigates
+   to the bet-detail page where the user can review or cancel. */
+.mlb-bet-btn--placed {
+    background: rgba(34,197,94,0.08);
+    color: #6ee7b7;
+    border: 1px solid rgba(34,197,94,0.45);
+    text-decoration: none;
+}
+.mlb-bet-btn--placed:hover {
+    background: rgba(34,197,94,0.16);
+    color: #ecfdf5;
+}
 .mlb-tile__vs {
     font-size: 11px;
     font-weight: 600;

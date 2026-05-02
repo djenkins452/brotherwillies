@@ -40,6 +40,25 @@
     </div>
   </div>
 
+  {% comment %}
+    Persistent "MY PICK" row — restored 2026-05-02. Renders directly
+    under teams, above the decision stats, so the user can confirm what
+    they bet at a glance without hovering or opening a popup. Shown in
+    every section (Recommended / Potential / Not Recommended) since the
+    bet may have been placed when the game's classification was different.
+    Source data lives on GameSignals (already populated upstream).
+  {% endcomment %}
+  {% if s.user_bet_id %}
+  <div class="mlb-tile__user-pick" aria-label="Your mock bet on this game">
+    <span class="mlb-tile__user-pick-icon">🟢</span>
+    <span class="mlb-tile__user-pick-label">MY PICK:</span>
+    <span class="mlb-tile__user-pick-team">{{ s.user_bet_selection|default:"—" }}</span>
+    {% if s.user_bet_odds is not None %}
+      <span class="mlb-tile__user-pick-odds">({% if s.user_bet_odds > 0 %}+{% endif %}{{ s.user_bet_odds }})</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if rec %}
   <div class="mlb-tile__decision">
     <div class="mlb-tile__decision-pick">
@@ -103,12 +122,23 @@
     {% else %}⚫ Pass{% endif %}
   </div>
 
-  {% if user.is_authenticated and rec and section_kind == 'recommended' %}
+  {% comment %}
+    Action button. Three states:
+      - User has a bet on this game → "✓ Bet Placed" linking to detail
+        (renders in any section so the bet is reachable from anywhere).
+      - User has no bet AND section is Recommended → "Bet This" CTA.
+      - Otherwise → no button (Potential / Not Recommended without an
+        existing bet stays read-only; the user opens game-detail to act).
+  {% endcomment %}
+  {% if user.is_authenticated %}
     {% if s.user_bet_id %}
       <a href="{% url 'mockbets:bet_detail' s.user_bet_id %}"
-         class="mlb-bet-btn mlb-bet-btn--view"
-         onclick="event.stopPropagation();">View Bet</a>
-    {% elif s.prefill_json %}
+         class="mlb-bet-btn mlb-bet-btn--placed"
+         onclick="event.stopPropagation();"
+         aria-label="View your mock bet">
+        ✓ Bet Placed
+      </a>
+    {% elif rec and section_kind == 'recommended' and s.prefill_json %}
       <button type="button"
               class="mlb-bet-btn mlb-bet-btn--bet-this"
               data-mlb-prefill='{{ s.prefill_json }}'

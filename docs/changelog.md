@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-02 - MLB tile: persistent "MY PICK" row + ✓ Bet Placed button
+
+**Summary:** Restores instant per-tile feedback for the user's pending bets without requiring a click or hover. Bridges the gap left when the decision-first tile rewrite removed the legacy "Your Bet · selection (odds)" action chip.
+
+### What changed
+
+- New row on `templates/mlb/_tile_decision.html`: `🟢 MY PICK: <team> (<odds>)` — renders directly under the matchup, above the Model/Market/Edge stats.
+- Renders in **all three sections** (Recommended / Potential / Not Recommended) so a bet is visible no matter how the engine has reclassified the game since placement.
+- "Bet This" button is replaced by `✓ Bet Placed` (linked to the bet-detail page) when the user has a pending bet on the game. The replacement renders in any section — so the bet is reachable from anywhere it appears.
+- Subtle green wash + monospaced odds — visible without overwhelming the card.
+
+### Underlying data
+
+`GameSignals.user_bet_id`, `user_bet_selection`, `user_bet_odds`, `has_user_bet` were already populated upstream by `apps/mlb/services/prioritization.py`. The only change was to surface them on the new tile.
+
+### Tests
+
+5 new tests in `apps/mlb/tests.MLBHubUserPickTileTests` covering:
+- MY PICK row renders when a pending bet exists, with correct team name + signed American odds
+- Row absent when no bet exists
+- "✓ Bet Placed" button replaces (not stacks alongside) "Bet This"
+- Positive American odds render with leading "+"
+- Per-game isolation — bet on game A does not leak onto game B's tile
+
+Full app suite: 941/942 (only `feedback.tests` ImportError remains, pre-existing).
+
+---
+
 ## 2026-05-02 - MLB hub: decision-first 3-section view
 
 **Summary:** Today's MLB slate collapses from six overlapping sections (Top Plays, Recommended Bets, Recommended ESPN, Two-Lane View, Today's Fades, Value Underdogs) to three mutually-exclusive decision groups: **Recommended (Bet These) → Potential (Review Carefully) → Not Recommended (Ignore)**. User can read the page in seconds.
