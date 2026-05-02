@@ -261,6 +261,18 @@
     <summary style="cursor:pointer;font-weight:700;color:#facc15;">
       &#x1F50D; Staff diagnostic ({{ diag_rows|length }} games) &mdash; why sections are what they are
     </summary>
+
+    {# Stale-odds summary — count games in the pre-game window with stale data. #}
+    {% with stale_count=diag_stale_count %}
+    <div class="text-sm" style="margin:10px 0 0 0;color:{% if stale_count %}#e35d5d{% else %}var(--muted){% endif %};">
+        {% if stale_count %}
+            &#9888; {{ stale_count }} game{{ stale_count|pluralize }} with stale odds within 30 minutes of start.
+        {% else %}
+            No games with stale odds within 30 minutes of start.
+        {% endif %}
+    </div>
+    {% endwith %}
+
     <div style="overflow-x:auto;margin-top:12px;">
       <table class="data-table" style="font-size:0.8rem;white-space:nowrap;">
         <thead>
@@ -268,6 +280,7 @@
             <th>Matchup</th>
             <th>Odds?</th>
             <th>ML?</th>
+            <th>Stale?</th>
             <th>ML H/A</th>
             <th>Mkt %</th>
             <th>House %</th>
@@ -285,6 +298,7 @@
             <td>{{ r.matchup }}</td>
             <td>{% if r.has_odds %}&#10003;{% else %}&mdash;{% endif %}</td>
             <td>{% if r.has_moneyline %}&#10003;{% else %}&mdash;{% endif %}</td>
+            <td>{% if r.is_stale %}<span style="color:#e35d5d;">&#9888;</span>{% else %}&mdash;{% endif %}</td>
             <td>{% if r.ml_home %}{{ r.ml_home }} / {{ r.ml_away }}{% else %}&mdash;{% endif %}</td>
             <td>{% if r.market_prob %}{{ r.market_prob }}{% else %}&mdash;{% endif %}</td>
             <td>{% if r.house_prob %}{{ r.house_prob }}{% else %}&mdash;{% endif %}</td>

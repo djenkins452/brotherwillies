@@ -234,6 +234,9 @@ def place_bulk_recommended_bets(
                 skipped_existing += 1
                 continue
             implied = _implied_prob_decimal(rec.odds_american)
+            # Provenance — system-generated, source pulled from latest snapshot.
+            from apps.core.utils.multi_book import get_odds_source_for_game
+            odds_source = get_odds_source_for_game(game)
             bet = MockBet.objects.create(
                 user=user,
                 sport='mlb',
@@ -252,6 +255,9 @@ def place_bulk_recommended_bets(
                 recommendation_tier=rec.tier or '',
                 recommendation_confidence=Decimal(str(rec.confidence_score)) if rec.confidence_score is not None else None,
                 status_reason=rec.status_reason or '',
+                # Engine-generated path — flag for analytics partition.
+                is_system_generated=True,
+                odds_source=odds_source,
             )
             # Persist the BettingRecommendation row + link as the per-bet
             # placement view does. Non-fatal on failure.
@@ -377,6 +383,8 @@ def place_bulk_proven_spread_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict
                 skipped_existing += 1
                 continue
             implied = _implied_prob_decimal(odds)
+            from apps.core.utils.multi_book import get_odds_source_for_game
+            odds_source = get_odds_source_for_game(game)
             MockBet.objects.create(
                 user=user, sport='mlb', mlb_game=game,
                 bet_type='spread', selection=selection,
@@ -397,6 +405,8 @@ def place_bulk_proven_spread_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict
                     if opp.historical_win_rate is not None else None
                 ),
                 status_reason='proven_spread_phase3',
+                is_system_generated=True,
+                odds_source=odds_source,
             )
             placed += 1
     return {
@@ -432,6 +442,8 @@ def place_bulk_proven_total_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
                 skipped_existing += 1
                 continue
             implied = _implied_prob_decimal(odds)
+            from apps.core.utils.multi_book import get_odds_source_for_game
+            odds_source = get_odds_source_for_game(game)
             MockBet.objects.create(
                 user=user, sport='mlb', mlb_game=game,
                 bet_type='total', selection=selection,
@@ -450,6 +462,8 @@ def place_bulk_proven_total_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
                     if opp.historical_win_rate is not None else None
                 ),
                 status_reason='proven_total_phase3',
+                is_system_generated=True,
+                odds_source=odds_source,
             )
             placed += 1
     return {

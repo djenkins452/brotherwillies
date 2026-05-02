@@ -195,6 +195,21 @@ def place_bet(request):
 
     bet.save()
 
+    # Source provenance — denormalize the upstream odds_source onto the bet
+    # at placement time (mirrors the recommendation_status pattern). Manual
+    # placements without any reachable snapshot get 'manual'; everything else
+    # inherits the latest snapshot's odds_source. This view is the manual
+    # placement path, so is_system_generated stays at its default False.
+    try:
+        from apps.core.utils.multi_book import get_odds_source_for_game
+        source = get_odds_source_for_game(bet.game)
+        # Manual placement with no snapshot → 'manual', not 'unknown'.
+        # 'unknown' is reserved for pre-feature historical rows.
+        bet.odds_source = source if source != 'unknown' else 'manual'
+        bet.save(update_fields=['odds_source'])
+    except Exception:
+        pass  # Non-fatal — bet is valid without the source tag.
+
     # Snapshot the current model pick alongside the bet (team sports only).
     # Non-fatal on failure — the bet is already saved and valid without it.
     #

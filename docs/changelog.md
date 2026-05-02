@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-02 - Data foundation: multi-book helpers, bet provenance, stale-odds detection
+
+**Summary:** System integrity upgrade. No engine logic changed — strictly improves the input-quality and analytics-cleanliness layers around the existing recommendation engine.
+
+### What changed
+
+**1. Multi-book odds helpers** (`apps/core/utils/multi_book.py`)
+Multi-book ingestion was already live in every sport's `odds_provider.py` (one OddsSnapshot per bookmaker per game). Added the read-side helpers that were missing:
+- `get_latest_snapshots_for_game(game)` — most recent snapshot per distinct sportsbook, excluding `is_derived` rows
+- `get_consensus_prob(game)` — average of `market_home_win_prob` across the latest-per-book set
+- `get_best_price(game, side)` — book + American odds with the lowest implied probability (most favorable to the bettor; sidesteps the +100/-100 sign discontinuity)
+- `get_odds_source_for_game(game)` — returns the latest snapshot's `odds_source` for placement-time provenance
+- `is_odds_stale(game, threshold_minutes=30)` — True only when game is in the pre-game window AND no fresh snapshot exists; False for already-started games and games with no snapshots (those are separate signals)
+- `count_stale_games(games)` — bulk count helper
+
+The recommendation engine continues to read its single-snapshot path (`game.odds_snapshots.first()`); these helpers are infrastructure for future engine upgrades, not consumed by it today.
+
+**2. MockBet provenance fields** (`apps/mockbets/models.py`, migration `0007_*`)
+- `odds_source` — `'odds_api' | 'espn' | 'manual' | 'unknown'`. Snapshotted at placement time (mirrors the recommendation_status pattern). Manual placements with no snapshot get `'manual'`; `'unknown'` is reserved for pre-feature historical rows.
+- `is_system_generated` — True for all three bulk-action paths (moneyline, proven-spread, proven-total); False for manual placements through `views.place_bet`. No retroactive backfill — historical bets default to False because we cannot reliably classify them.
+
+**3. Stale-odds surface**
+- System Tuning page (`/mockbets/system-tuning/`) — adds a `stale_games_count` line under Data Confidence ("X games currently have stale odds within 30 minutes of start").
+- MLB Diagnostic (`/mlb/?diag=1`) — new `Stale?` column per game + summary count above the table.
+
+### Implementation notes
+- `OddsSnapshot.odds_source` and `OddsSnapshot.source_quality` already exist on all four sports (CFB/CBB/MLB/CB) — no schema changes there.
+- Consensus prob does not per-book de-vig in v1 — the average across books partially neutralizes vig, and per-book de-vig can be added later when the engine actually consumes this output. Documented in the helper docstring.
+- All four tasks are additive. No existing logic modified. The recommendation engine, probability calibration, decision thresholds, and lane gates are byte-for-byte unchanged.
+
+### Tests
+- 21 new tests in `apps/core/test_multi_book.py` covering all helpers including boundary conditions on `is_odds_stale`.
+- New tests in `apps/mockbets/tests.py` for: default field values on backfilled rows, manual placement with/without snapshot, bulk-place engine path setting `is_system_generated=True` + correct source, stale-count key always present in System Tuning output, MLB diagnostic row shape.
+- Full mockbets + core suite: 463 tests, 0 regressions. Full app suite: 917/918 (only `feedback.tests` ImportError remains, pre-existing per project memory).
+
+---
+
 ## 2026-05-02 - System Tuning page (staff-only)
 
 **Summary:** New `/mockbets/system-tuning/` diagnostic that turns mock-bet history into deterministic, actionable signals about the recommendation engine. Advisory only — no engine changes are applied automatically.

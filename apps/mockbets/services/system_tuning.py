@@ -369,6 +369,52 @@ def current_config():
 
 # --- Top-level entry point ---------------------------------------------------
 
+# --- Stale-odds count -------------------------------------------------------
+# Scans upcoming games across all team sports for snapshots that are stale
+# inside the 30-min pre-game window. Surfaced as a single advisory line on
+# the System Tuning page; does not affect verdict / insights / actions.
+
+def compute_stale_games_count(threshold_minutes: int = 30) -> int:
+    """Count team-sport games in the pre-game window with stale odds.
+
+    Scope: next 24 hours, all four team sports. Golf has no per-game start
+    time on a snapshot basis so it's excluded. Returns 0 on any DB / import
+    failure rather than blocking the page render.
+    """
+    try:
+        from datetime import timedelta
+        from apps.core.utils.multi_book import is_odds_stale
+        from django.utils import timezone as _tz
+
+        now = _tz.now()
+        cutoff = now + timedelta(hours=24)
+
+        # Lazy imports — keep this module dependency-light at import time so
+        # the helper functions above are usable in tests without loading
+        # every sport's Game model.
+        from apps.cfb.models import Game as CFBGame
+        from apps.cbb.models import Game as CBBGame
+        from apps.mlb.models import Game as MLBGame
+        from apps.college_baseball.models import Game as CBBaseGame
+
+        count = 0
+        for model, start_field in [
+            (CFBGame, 'kickoff'),
+            (CBBGame, 'tipoff'),
+            (MLBGame, 'first_pitch'),
+            (CBBaseGame, 'first_pitch'),
+        ]:
+            qs = model.objects.filter(
+                **{f'{start_field}__gt': now, f'{start_field}__lte': cutoff}
+            )
+            for game in qs:
+                if is_odds_stale(game, threshold_minutes):
+                    count += 1
+        return count
+    except Exception:
+        return 0
+
+
 def compute_all(bets):
     """Single call the view uses. Stable output shape even with zero bets."""
     materialized = list(bets)
@@ -391,6 +437,7 @@ def compute_all(bets):
         'source_quality': segment_by_source_quality(materialized),
         'edge': edge or [],
         'config': current_config(),
+        'stale_games_count': compute_stale_games_count(),
     }
 
     ctx['insights'] = generate_insights(ctx)

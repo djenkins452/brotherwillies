@@ -183,6 +183,31 @@ class MockBet(models.Model):
         max_length=10, choices=CLV_DIRECTION_CHOICES, blank=True, default='',
     )
 
+    # Provenance fields — snapshot WHERE the odds came from and WHO placed the
+    # bet at placement time (mirrors the recommendation_status / tier pattern).
+    # Never re-derived from upstream after placement so analytics stay stable
+    # through provider/source changes.
+    #
+    # odds_source vocabulary mirrors OddsSnapshot.odds_source ('odds_api',
+    # 'espn') plus two MockBet-specific values:
+    #   'manual'  — placed without any underlying snapshot for the game
+    #   'unknown' — pre-feature bets, or snapshot not reachable at placement
+    ODDS_SOURCE_CHOICES = [
+        ('odds_api', 'Odds API'),
+        ('espn', 'ESPN'),
+        ('manual', 'Manual'),
+        ('unknown', 'Unknown'),
+    ]
+    odds_source = models.CharField(
+        max_length=20, choices=ODDS_SOURCE_CHOICES, default='unknown', db_index=True,
+    )
+    # True for bets created by the recommendation engine / bulk endpoints.
+    # False for manual placements through the UI. Defaulting to False is the
+    # safe choice for pre-feature rows — we cannot reliably backfill historical
+    # bets, so the analytics filter must opt-in rather than rely on this flag
+    # being trustworthy across the full table.
+    is_system_generated = models.BooleanField(default=False, db_index=True)
+
     class Meta:
         ordering = ['-placed_at']
 

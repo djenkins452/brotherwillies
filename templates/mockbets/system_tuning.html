@@ -15,9 +15,7 @@
     </div>
 </div>
 
-{# =========================================================================
-   1. SYSTEM VERDICT
-   ========================================================================= #}
+{% comment %} 1. SYSTEM VERDICT {% endcomment %}
 <div class="card mb-1">
     {% with health=verdict.health %}
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -66,9 +64,7 @@
     </div>
 </div>
 
-{# =========================================================================
-   2. DATA CONFIDENCE
-   ========================================================================= #}
+{% comment %} 2. DATA CONFIDENCE  +  Stale Odds advisory {% endcomment %}
 <div class="card mb-1">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <div style="font-weight:600;">Data Confidence:</div>
@@ -85,11 +81,18 @@
              MEDIUM &lt; {{ data_confidence.thresholds.medium_max }}).
         </div>
     </div>
+    <div class="text-sm" style="color:var(--muted);margin-top:8px;">
+        {% if stale_games_count > 0 %}
+            <span style="color:#e35d5d;">⚠️</span>
+            {{ stale_games_count }} game{{ stale_games_count|pluralize }} currently
+            {{ stale_games_count|pluralize:"has,have" }} stale odds within 30 minutes of start.
+        {% else %}
+            No games currently have stale odds within 30 minutes of start.
+        {% endif %}
+    </div>
 </div>
 
-{# =========================================================================
-   3. KEY METRICS — overall + time windows
-   ========================================================================= #}
+{% comment %} 3. KEY METRICS — overall + time windows {% endcomment %}
 <div class="card mb-1">
     <h2 class="text-md" style="margin:0 0 8px 0;">Key Metrics</h2>
     <div style="overflow-x:auto;">
@@ -127,9 +130,7 @@
     </div>
 </div>
 
-{# =========================================================================
-   4. SEGMENTATIONS
-   ========================================================================= #}
+{% comment %} 4. SEGMENTATIONS {% endcomment %}
 
 {# 4a. Bet Type #}
 <div class="card mb-1">
@@ -241,9 +242,7 @@
     </div>
 </div>
 
-{# =========================================================================
-   5. RULE-BASED INSIGHTS
-   ========================================================================= #}
+{% comment %} 5. RULE-BASED INSIGHTS {% endcomment %}
 <div class="card mb-1">
     <h2 class="text-md" style="margin:0 0 8px 0;">Insights</h2>
     {% if insights %}
@@ -267,9 +266,7 @@
     {% endif %}
 </div>
 
-{# =========================================================================
-   6. RECOMMENDED ACTIONS
-   ========================================================================= #}
+{% comment %} 6. RECOMMENDED ACTIONS {% endcomment %}
 <div class="card mb-1">
     <h2 class="text-md" style="margin:0 0 8px 0;">Recommended Actions</h2>
     {% if actions %}
@@ -281,9 +278,7 @@
     {% endif %}
 </div>
 
-{# =========================================================================
-   7. CONFIG PANEL (READ-ONLY)
-   ========================================================================= #}
+{% comment %} 7. CONFIG PANEL (READ-ONLY) {% endcomment %}
 <div class="card mb-1">
     <h2 class="text-md" style="margin:0 0 8px 0;">Engine Config (Read-Only)</h2>
     <pre style="background:rgba(0,0,0,0.25);padding:10px;border-radius:6px;overflow-x:auto;font-size:0.85rem;margin:0;">{{ config_json }}</pre>

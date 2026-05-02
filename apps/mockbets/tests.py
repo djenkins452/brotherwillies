@@ -1565,6 +1565,26 @@ class BulkActionsTests(TestCase):
         per_game = MockBet.objects.filter(user=self.user, mlb_game=game).count()
         self.assertLessEqual(per_game, 1)
 
+    def test_bulk_place_marks_bets_system_generated(self):
+        """Engine-generated bets must carry is_system_generated=True and an
+        odds_source pulled from the snapshot the engine read."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        game = self._game(hours_out=2)
+        snap = self._add_odds(game)
+        # OddsSnapshot.odds_source default is 'odds_api' on MLB — explicit
+        # set keeps the test resilient to default changes.
+        snap.odds_source = 'odds_api'
+        snap.save(update_fields=['odds_source'])
+
+        summary = place_bulk_recommended_bets(self.user)
+        self.assertGreaterEqual(summary['placed'], 1)
+        for bet in MockBet.objects.filter(user=self.user):
+            self.assertTrue(
+                bet.is_system_generated,
+                f'expected is_system_generated=True on bulk-placed bet, got False on {bet.id}',
+            )
+            self.assertEqual(bet.odds_source, 'odds_api')
+
     def test_bulk_place_skips_started_games(self):
         from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
         # Game already started — shouldn't be eligible
@@ -2377,3 +2397,138 @@ class SystemTuningAccessTests(TestCase):
         # login_required → 302 to login URL
         self.assertEqual(resp.status_code, 302)
         self.assertIn('/login', resp.url)
+
+
+# =============================================================================
+# Provenance fields — odds_source + is_system_generated.
+# =============================================================================
+
+class MockBetProvenanceFieldDefaultsTests(TestCase):
+    """Schema-level defaults — backfilled rows + bets created without the new
+    fields explicitly set should land in the safe state."""
+
+    def test_default_odds_source_is_unknown(self):
+        user = User.objects.create_user('prov_default', password='x')
+        bet = MockBet.objects.create(
+            user=user, sport='cfb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.5'),
+            stake_amount=Decimal('100'),
+        )
+        self.assertEqual(bet.odds_source, 'unknown')
+        self.assertFalse(bet.is_system_generated)
+
+
+class ManualPlacementOddsSourceTests(TestCase):
+    """The /mockbets/place/ endpoint is the manual placement path. It
+    should populate odds_source from the latest snapshot (or 'manual' when
+    none exists) and leave is_system_generated as False."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference, Team, Game
+        league = Conference.objects.create(
+            name=f'L{timezone.now().timestamp()}',
+            slug=f'l{timezone.now().timestamp()}',
+        )
+        self.home = Team.objects.create(name='HomeTeam', slug='hometeam', conference=league)
+        self.away = Team.objects.create(name='AwayTeam', slug='awayteam', conference=league)
+        self.game = Game.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() + timedelta(hours=4),
+        )
+        self.user = User.objects.create_user('manual_user', password='x')
+        self.client.force_login(self.user)
+
+    def test_manual_with_snapshot_inherits_source(self):
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.create(
+            game=self.game, captured_at=timezone.now(),
+            sportsbook='draftkings', market_home_win_prob=0.55,
+            moneyline_home=-122, moneyline_away=110,
+            odds_source='odds_api',
+        )
+        import json
+        resp = self.client.post('/mockbets/place/', json.dumps({
+            'sport': 'mlb', 'game_id': str(self.game.id),
+            'bet_type': 'moneyline', 'selection': 'HomeTeam',
+            'odds_american': -122, 'stake_amount': '100',
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        bet = MockBet.objects.get(user=self.user)
+        self.assertEqual(bet.odds_source, 'odds_api')
+        self.assertFalse(bet.is_system_generated)
+
+    def test_manual_without_snapshot_marked_manual(self):
+        # No snapshot exists for the game → 'manual', not 'unknown'.
+        # 'unknown' is reserved for pre-feature historical rows.
+        import json
+        resp = self.client.post('/mockbets/place/', json.dumps({
+            'sport': 'mlb', 'game_id': str(self.game.id),
+            'bet_type': 'moneyline', 'selection': 'HomeTeam',
+            'odds_american': -122, 'stake_amount': '100',
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        bet = MockBet.objects.get(user=self.user)
+        self.assertEqual(bet.odds_source, 'manual')
+        self.assertFalse(bet.is_system_generated)
+
+
+class SystemTuningStaleCountTests(TestCase):
+    """compute_all should always include stale_games_count, even when it
+    can't compute the value (returns 0 on any failure)."""
+
+    def test_stale_games_count_in_output(self):
+        from apps.mockbets.services.system_tuning import compute_all
+        ctx = compute_all([])
+        self.assertIn('stale_games_count', ctx)
+        self.assertIsInstance(ctx['stale_games_count'], int)
+
+
+# =============================================================================
+# Stale-flag rendering on MLB diagnostic.
+# =============================================================================
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MLBDiagnosticStaleColumnTests(TestCase):
+    """Smoke test the new column wiring — the row dict must carry an
+    is_stale key after the change in apps/mlb/views.py."""
+
+    def test_diag_row_has_is_stale_key(self):
+        from apps.mlb.views import _build_diag_rows
+
+        class _StubGame:
+            class _Team:
+                def __init__(self, n):
+                    self.name = n
+            home_team = _Team('H')
+            away_team = _Team('A')
+            status = 'scheduled'
+            first_pitch = timezone.now() + timedelta(hours=4)
+            id = 'stub'
+
+            class _Manager:
+                def order_by(self, *a, **kw):
+                    class _QS:
+                        def first(self):
+                            return None
+                    return _QS()
+
+                def filter(self, *a, **kw):
+                    return self
+
+            odds_snapshots = _Manager()
+
+        class _StubSignal:
+            game = _StubGame()
+            latest_odds = None
+            recommendation = None
+            house_prob = None
+
+        rows = _build_diag_rows([_StubSignal()])
+        self.assertEqual(len(rows), 1)
+        self.assertIn('is_stale', rows[0])
+        # No snapshots → not stale.
+        self.assertFalse(rows[0]['is_stale'])

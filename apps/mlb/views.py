@@ -237,6 +237,7 @@ def mlb_hub(request):
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,
+        'diag_stale_count': sum(1 for r in (diag_rows or []) if r.get('is_stale')),
         'teams': Team.objects.select_related('conference').all(),
         # Tiered Intelligence Phase 1 — passed always so the template
         # can use them gated by `spread_total_signals_enabled`. When
@@ -273,6 +274,7 @@ def _build_diag_rows(signals):
     moneyline prices exist, raw market/house probs, edge, tier, status, reason.
     Helps pinpoint why the decision sections are empty on any given slate.
     """
+    from apps.core.utils.multi_book import is_odds_stale
     rows = []
     for s in signals:
         game = s.game
@@ -286,6 +288,11 @@ def _build_diag_rows(signals):
                 odds and odds.moneyline_home is not None
                 and odds.moneyline_away is not None
             ),
+            # Stale = pre-game inside the 30-min window with no recent capture.
+            # Helper returns False for already-started games and games >30min
+            # away, so this column is meaningful only for the live edge of the
+            # slate — exactly where staleness matters.
+            'is_stale': is_odds_stale(game),
             'ml_home': odds.moneyline_home if odds else None,
             'ml_away': odds.moneyline_away if odds else None,
             'market_prob': round(odds.market_home_win_prob * 100, 1) if odds else None,
