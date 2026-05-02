@@ -61,6 +61,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'apps.accounts.context_processors.user_profile',
                 'apps.ops.context_processors.ops_status',
+                'apps.core.context_processors.feature_flags',
             ],
         },
     },
@@ -176,6 +177,16 @@ STALE_ODDS_MAX_AGE_MINUTES = int(os.environ.get('STALE_ODDS_MAX_AGE_MINUTES', '7
 # code deploy. Default OFF so the initial deploy is a pure no-op for
 # the user-facing pages even though the post_save hook is already
 # generating rows in the new tables.
+# Master switch — Moneyline-Only Mode (2026-05-02). When True, the
+# recommendation engine, placement layer, analytics, and UI all behave as
+# though spread/total don't exist. Per-feature flags below remain readable
+# but are AND-composed with this master via apps.core.config helpers, so
+# this single toggle is sufficient to silence every spread/total surface.
+# Default True — flip to False to restore full behavior.
+MONEYLINE_ONLY_MODE = (
+    os.environ.get('MONEYLINE_ONLY_MODE', 'true').lower() == 'true'
+)
+
 SPREAD_TOTAL_SIGNALS_ENABLED = (
     os.environ.get('SPREAD_TOTAL_SIGNALS_ENABLED', 'false').lower() == 'true'
 )

@@ -345,14 +345,15 @@ def performance_view(request):
     # performance. Read-side helpers handle their own DB queries; we
     # only render this section when the leans feature flag is on so
     # the panel doesn't ship dark with empty data.
-    spread_total_leans_enabled = bool(
-        getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
+    # Both helpers AND-compose with MONEYLINE_ONLY_MODE — so the
+    # performance panel is silenced under the master switch.
+    from apps.core.config import (
+        is_spread_total_leans_enabled,
+        is_spread_total_recommendations_enabled,
     )
-    # Phase 3 — Promoted Recommendations sub-section. Independent
-    # flag so Phase 2 perf can ship without yet surfacing promotions.
-    spread_total_recommendations_enabled = bool(
-        getattr(settings, 'SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', False)
-    )
+    spread_total_leans_enabled = is_spread_total_leans_enabled()
+    # Phase 3 — Promoted Recommendations sub-section.
+    spread_total_recommendations_enabled = is_spread_total_recommendations_enabled()
     opportunity_perf_spread = None
     opportunity_perf_total = None
     promoted_signal_summary = None

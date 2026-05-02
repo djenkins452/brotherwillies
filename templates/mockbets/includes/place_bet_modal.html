@@ -99,10 +99,11 @@
 </div>
 
 <script>
+{% comment %} Moneyline-Only Mode (apps/core/config.py): the bet_type list collapses to Moneyline only when the master switch is on. Spread/Total entries are preserved in the source — flipping the flag back to False restores them. Server-side place_bet enforces the same gate. {% endcomment %}
 var GAME_BET_TYPES = [
-    ['moneyline', 'Moneyline'],
+    ['moneyline', 'Moneyline']{% if not MONEYLINE_ONLY_MODE %},
     ['spread', 'Spread'],
-    ['total', 'Total (Over/Under)']
+    ['total', 'Total (Over/Under)']{% endif %}
 ];
 var GOLF_BET_TYPES = [
     ['outright', 'Outright Winner'],

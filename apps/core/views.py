@@ -38,6 +38,10 @@ def home(request):
         'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
+    # Master-switch gate at the query layer.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        bets = bets.filter(bet_type='moneyline')
 
     # Apply filters
     sport = request.GET.get('sport')

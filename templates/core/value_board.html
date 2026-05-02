@@ -103,11 +103,11 @@
             {% endif %}
             <div class="teams">
                 <span class="team-name">{{ g.game.away_team.name }}</span>
-                {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
+                {% if not MONEYLINE_ONLY_MODE and g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"away" }}</span>{% endif %}
                 {% if section.is_live and g.game.away_score is not None %}<span class="game-score">{{ g.game.away_score }}</span>{% endif %}
                 <span class="vs">@</span>
                 <span class="team-name">{{ g.game.home_team.name }}</span>
-                {% if g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
+                {% if not MONEYLINE_ONLY_MODE and g.latest_odds.spread is not None %}<span class="spread-tag">{{ g.latest_odds.spread|spread_display:"home" }}</span>{% endif %}
                 {% if section.is_live and g.game.home_score is not None %}<span class="game-score">{{ g.game.home_score }}</span>{% endif %}
             </div>
             {% if not section.is_live %}

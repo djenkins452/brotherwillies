@@ -58,6 +58,7 @@
                 <select name="bet_type" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="">All</option>
                     <option value="moneyline" {% if current_bet_type == 'moneyline' %}selected{% endif %}>Moneyline</option>
+                    {% if not MONEYLINE_ONLY_MODE %}
                     <option value="spread" {% if current_bet_type == 'spread' %}selected{% endif %}>Spread</option>
                     <option value="total" {% if current_bet_type == 'total' %}selected{% endif %}>Total</option>
                     <option value="outright" {% if current_bet_type == 'outright' %}selected{% endif %}>Outright</option>
@@ -66,6 +67,7 @@
                     <option value="top_20" {% if current_bet_type == 'top_20' %}selected{% endif %}>Top 20</option>
                     <option value="make_cut" {% if current_bet_type == 'make_cut' %}selected{% endif %}>Make Cut</option>
                     <option value="matchup" {% if current_bet_type == 'matchup' %}selected{% endif %}>Matchup</option>
+                    {% endif %}
                 </select>
             </div>
             <div style="flex:1;min-width:90px;">

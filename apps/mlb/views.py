@@ -114,9 +114,15 @@ def mlb_hub(request):
     )
     spread_tiles = []
     total_tiles = []
-    spread_total_signals_enabled = bool(
-        getattr(settings, 'SPREAD_TOTAL_SIGNALS_ENABLED', False)
+    # Read through the centralized helpers — they AND-compose the per-feature
+    # flags with MONEYLINE_ONLY_MODE, so a single master toggle silences
+    # every spread/total surface here without per-flag conditionals.
+    from apps.core.config import (
+        is_spread_total_enabled,
+        is_spread_total_leans_enabled,
+        is_spread_total_recommendations_enabled,
     )
+    spread_total_signals_enabled = is_spread_total_enabled()
     if spread_total_signals_enabled:
         # Phase 3: also pre-compute break-even rate (% format) for the
         # "X% vs Y% break-even" badge format. -110 standard pricing —
@@ -164,14 +170,10 @@ def mlb_hub(request):
 
     # Phase 2 — Leans intelligence layer. Separate flag from Phase 1 so
     # we can keep Phase 1 in prod while iterating on the Lean copy.
-    spread_total_leans_enabled = bool(
-        getattr(settings, 'SPREAD_TOTAL_LEANS_ENABLED', False)
-    )
-    # Phase 3 — Promoted Recommendations. Independent flag from leans;
-    # recommendations require both flags + Phase 3 historical data.
-    spread_total_recommendations_enabled = bool(
-        getattr(settings, 'SPREAD_TOTAL_RECOMMENDATIONS_ENABLED', False)
-    )
+    # Both helpers AND-compose with MONEYLINE_ONLY_MODE.
+    spread_total_leans_enabled = is_spread_total_leans_enabled()
+    # Phase 3 — Promoted Recommendations.
+    spread_total_recommendations_enabled = is_spread_total_recommendations_enabled()
     # The Leans Only filter only makes sense when the Leans layer is on.
     # If a stale URL has bet_type=leans but the flag is off, fall back
     # to 'all' so the page still renders normally.

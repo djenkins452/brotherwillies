@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-02 - Moneyline-Only Mode (master switch)
+
+**Summary:** Single environment-controllable feature flag (`MONEYLINE_ONLY_MODE`, default `True`) that silences all spread/total functionality across the system. Temporary system-wide focus mode to allow accurate moneyline-performance evaluation. **Nothing is deleted** — flipping the flag back to `False` restores full behavior in one place.
+
+### Architecture
+The master flag lives in `apps/core/config.py` and is read through three helpers:
+- `is_moneyline_only_mode()` — the master
+- `is_spread_total_enabled()` — AND-composes master with `SPREAD_TOTAL_SIGNALS_ENABLED`
+- `is_spread_total_leans_enabled()` — AND-composes master with `SPREAD_TOTAL_LEANS_ENABLED`
+- `is_spread_total_recommendations_enabled()` — AND-composes master with `SPREAD_TOTAL_RECOMMENDATIONS_ENABLED`
+
+Every existing reader of `getattr(settings, 'SPREAD_TOTAL_*', ...)` was migrated to the helper. The master switch wins regardless of the per-feature flag values.
+
+### Server-side gates (entry points only)
+- `apps/mockbets/views.py::place_bet` — manual placement of `bet_type` ∈ {spread, total} returns 400 with `blocked: 'moneyline_only_mode'`. Golf positional types (outright, top_5, etc.) remain unaffected.
+- `apps/mockbets/views.py::bulk_place_recommended` — same gate at the view boundary.
+- `apps/mockbets/services/bulk_actions.py::place_bulk_proven_spread_bets` and `_total_bets` — wrapped to return a structured `{placed: 0, blocked: 'moneyline_only_mode'}` summary BEFORE any DB work. Original logic preserved in `_place_bulk_proven_*_bets_impl`.
+- `apps/mlb/views.py` — spread/total tile computation, opportunity_signals queries, and Phase 2/3 wiring all short-circuit when the master is on. No wasted reads.
+- `apps/accounts/views.py` — Phase 2 performance panel suppresses itself.
+
+### Analytics filtering (query layer only)
+- Five query sites filter to `bet_type='moneyline'` when the master is on:
+  - `mockbets.views.my_bets`, `analytics_dashboard`, `system_tuning_view`, `ai_summary`, `ai_commentary`, `flat_bet_sim`
+  - `core.views.home`
+- Filter applied once at the queryset, before any aggregation. Every downstream KPI/chart/segment inherits the filter — no per-segment conditionals.
+
+### UI cleanup (`{% if not MONEYLINE_ONLY_MODE %}` wrappers)
+- `mockbets/includes/place_bet_modal.html` — only Moneyline in bet-type dropdown
+- `mockbets/analytics.html` — bet-type filter dropdown collapses to Moneyline
+- `core/home.html` + `core/value_board.html` — spread tags hidden on game tiles
+- `cfb/cbb/mlb/college_baseball/game_detail.html` — spread tags + Run Line + Total (runs) sections hidden
+- `parlays/new.html` — only Moneyline in market-type dropdown
+- System Tuning by-bet-type table drops the spread/total rows (set at row-build time)
+
+### Context processor
+`apps.core.context_processors.feature_flags` exposes `MONEYLINE_ONLY_MODE`, `SPREAD_TOTAL_ENABLED`, `SPREAD_TOTAL_RECOMMENDATIONS_ENABLED` to every template — no per-view plumbing.
+
+### Logging
+Both view-level and service-level gates emit `logger.info('Blocked non-moneyline ... due to MONEYLINE_ONLY_MODE bet_type=%s')` so the block events are visible in production logs.
+
+### Tests
+- 16 new tests in `apps/core/test_moneyline_only_mode.py` covering flag composition, both server-side gates, analytics filtering, context processor, and a reversibility test (`MONEYLINE_ONLY_MODE=False` restores full behavior).
+- Existing MLB Phase 2/3 tests get a class-level `@override_settings(MONEYLINE_ONLY_MODE=False)` decorator so they continue testing spread/total functionality.
+- Full app suite: 933/934 tests passing (only the pre-existing `feedback.tests` ImportError remains).
+
+### Untouched (per "no deletion" rule)
+- All spread/total models, services, opportunity_signals, lean intelligence, Phase 3 promotion logic
+- Help/User Guide/What's New templates (describe what *exists*, not what's *active*)
+- Backtest service (already moneyline-only by design)
+- Recommendation engine constants, probability calibration, lane gates
+
+### How to flip back
+Set `MONEYLINE_ONLY_MODE=false` in the Railway env. No code change required — every dependent surface restores in one place.
+
+---
+
 ## 2026-05-02 - Data foundation: multi-book helpers, bet provenance, stale-odds detection
 
 **Summary:** System integrity upgrade. No engine logic changed — strictly improves the input-quality and analytics-cleanliness layers around the existing recommendation engine.

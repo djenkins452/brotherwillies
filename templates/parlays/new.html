@@ -33,8 +33,10 @@
             </select>
             <select name="market_types" class="form-control" style="flex:1;">
                 <option value="moneyline">Moneyline</option>
+                {% if not MONEYLINE_ONLY_MODE %}
                 <option value="spread">Spread</option>
                 <option value="total">Total</option>
+                {% endif %}
             </select>
         </div>
         <input type="hidden" name="odds" value="">

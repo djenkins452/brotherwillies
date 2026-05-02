@@ -28,6 +28,12 @@ def my_bets(request):
         pass  # Never block the page; cron is the authoritative path.
 
     bets = MockBet.objects.filter(user=request.user)
+    # Master-switch gate at the query layer. Single source of truth for
+    # which rows the entire page sees — every downstream KPI/chart/segment
+    # inherits this. No per-segment conditionals needed.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        bets = bets.filter(bet_type='moneyline')
 
     # Apply filters
     sport = request.GET.get('sport')
@@ -92,6 +98,25 @@ def place_bet(request):
     valid_types = [c[0] for c in MockBet.BET_TYPE_CHOICES]
     if bet_type not in valid_types:
         return JsonResponse({'error': 'Invalid bet type'}, status=400)
+
+    # Master-switch gate. Blocks the team-sport non-moneyline markets the
+    # mode is named for. Golf-specific bet types (outright, top_5, etc.)
+    # remain placeable — they're an entirely different decision system,
+    # and "moneyline-only" is a team-sports focus, not a sport-wide
+    # shutdown. The set is explicit so adding a new spread/total-like
+    # market in the future requires a deliberate addition here.
+    from apps.core.config import is_moneyline_only_mode
+    _MONEYLINE_ONLY_BLOCKED_TYPES = ('spread', 'total')
+    if is_moneyline_only_mode() and bet_type in _MONEYLINE_ONLY_BLOCKED_TYPES:
+        import logging
+        logging.getLogger(__name__).info(
+            'Blocked non-moneyline manual placement due to MONEYLINE_ONLY_MODE bet_type=%s',
+            bet_type,
+        )
+        return JsonResponse({
+            'error': 'Only moneyline bets are accepted right now.',
+            'blocked': 'moneyline_only_mode',
+        }, status=400)
 
     selection = data.get('selection', '').strip()
     if not selection:
@@ -325,6 +350,23 @@ def bulk_place_recommended(request):
     bet_type = request.GET.get('bet_type', 'moneyline')
     if bet_type not in ('moneyline', 'spread', 'total'):
         bet_type = 'moneyline'
+
+    # View-level master-switch gate. Belt-and-suspenders alongside the
+    # service-level gate in bulk_actions: rejecting at the view boundary
+    # gives callers an explicit 400 instead of a 200-with-zero-placed
+    # response, which is clearer for hand-crafted requests / external tools.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode() and bet_type in ('spread', 'total'):
+        import logging
+        logging.getLogger(__name__).info(
+            'Blocked non-moneyline bulk action due to MONEYLINE_ONLY_MODE bet_type=%s',
+            bet_type,
+        )
+        return JsonResponse({
+            'error': 'Only moneyline bulk placement is enabled right now.',
+            'blocked': 'moneyline_only_mode',
+        }, status=400)
+
     try:
         raw_stake = request.GET.get('stake', '100')
         stake = Decimal(str(raw_stake))
@@ -390,6 +432,11 @@ def analytics_dashboard(request):
         'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
+    # Master-switch gate at the query layer — every downstream chart, KPI,
+    # comparison, edge bucket, and AI summary inherits this filter.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        bets = bets.filter(bet_type='moneyline')
 
     # Apply filters
     sport = request.GET.get('sport')
@@ -546,9 +593,15 @@ def system_tuning_view(request):
     if not request.user.is_staff:
         raise Http404
     from .services.system_tuning import compute_all
+    from apps.core.config import is_moneyline_only_mode
     bets = MockBet.objects.all().select_related(
         'cfb_game', 'cbb_game', 'mlb_game', 'college_baseball_game',
     )
+    # Master-switch gate at the query layer. ONLY moneyline rows flow into
+    # tuning, so every segment / verdict / insight / action is computed
+    # against a clean ML-only fact set.
+    if is_moneyline_only_mode():
+        bets = bets.filter(bet_type='moneyline')
     ctx = compute_all(bets)
 
     # Pre-flatten dict-of-dicts into ordered (label, row) pairs so the
@@ -558,11 +611,14 @@ def system_tuning_view(request):
         ('Last 30 Days', ctx['time_windows']['30d']),
         ('All Time', ctx['time_windows']['all_time']),
     ]
-    bet_type_rows = [
-        ('Moneyline', ctx['by_bet_type']['moneyline']),
-        ('Spread', ctx['by_bet_type']['spread']),
-        ('Total', ctx['by_bet_type']['total']),
-    ]
+    # When MONEYLINE_ONLY_MODE is on the queryset already filters to
+    # bet_type='moneyline', so the spread/total rows would render as
+    # zero-count noise. Drop them at the row-build step rather than the
+    # template — keeps the template free of conditionals.
+    bet_type_rows = [('Moneyline', ctx['by_bet_type']['moneyline'])]
+    if not is_moneyline_only_mode():
+        bet_type_rows.append(('Spread', ctx['by_bet_type']['spread']))
+        bet_type_rows.append(('Total', ctx['by_bet_type']['total']))
     odds_range_rows = [
         ('Underdog (+150 and up)', ctx['by_odds_range']['underdog']),
         ('Mid Dog (+100 to +149)', ctx['by_odds_range']['mid_dog']),
@@ -594,7 +650,11 @@ def flat_bet_sim(request):
     except (json.JSONDecodeError, InvalidOperation, TypeError):
         return JsonResponse({'error': 'Invalid input'}, status=400)
 
-    bets = list(MockBet.objects.filter(user=request.user))
+    from apps.core.config import is_moneyline_only_mode
+    qs = MockBet.objects.filter(user=request.user)
+    if is_moneyline_only_mode():
+        qs = qs.filter(bet_type='moneyline')
+    bets = list(qs)
     result = compute_flat_bet_simulation(bets, flat_stake)
     if result is None:
         return JsonResponse({'error': 'No settled bets to simulate'}, status=400)
@@ -620,6 +680,10 @@ def ai_summary(request):
         'college_baseball_game__home_team', 'college_baseball_game__away_team',
         'golf_event', 'golf_golfer',
     )
+    # Master-switch gate at the query layer.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        bets = bets.filter(bet_type='moneyline')
 
     # Apply the same filter taxonomy as the analytics view. Re-doing the
     # parse rather than refactoring into a shared helper keeps this endpoint
@@ -675,8 +739,12 @@ def ai_summary(request):
 def ai_commentary(request):
     """AJAX endpoint for AI performance commentary."""
     from .services.ai_commentary import generate_commentary
+    from apps.core.config import is_moneyline_only_mode
 
-    bets = list(MockBet.objects.filter(user=request.user))
+    qs = MockBet.objects.filter(user=request.user)
+    if is_moneyline_only_mode():
+        qs = qs.filter(bet_type='moneyline')
+    bets = list(qs)
     kpis = compute_kpis(bets)
     comparison = compute_comparison(bets)
     calibration = compute_confidence_calibration(bets)

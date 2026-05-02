@@ -9,6 +9,7 @@ Default scope is MLB today's slate, since that's where the recommendation
 engine produces actionable picks. Multi-sport extension later is easy: add
 sport keys to _SUPPORTED_SPORTS.
 """
+import logging
 from decimal import Decimal
 from typing import Iterable
 
@@ -16,6 +17,29 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.mockbets.models import MockBet
+
+logger = logging.getLogger(__name__)
+
+
+def _moneyline_only_block_summary(bet_type: str) -> dict:
+    """Structured no-op response when MONEYLINE_ONLY_MODE blocks a bulk
+    spread/total path. Same shape as a normal bulk summary so callers can
+    treat it uniformly without try/except gymnastics.
+    """
+    logger.info(
+        'Blocked non-moneyline bulk action due to MONEYLINE_ONLY_MODE bet_type=%s',
+        bet_type,
+    )
+    return {
+        'placed': 0,
+        'skipped_existing': 0,
+        'skipped_no_odds': 0,
+        'tier_filter': f'proven_{bet_type}',
+        'source_filter': 'verified',
+        'bet_type': bet_type,
+        'stake': float(_DEFAULT_STAKE),
+        'blocked': 'moneyline_only_mode',
+    }
 
 
 # Sports whose recommendation engine produces moneyline picks suitable for
@@ -348,6 +372,16 @@ def _eligible_total_recommendations(user):
 
 
 def place_bulk_proven_spread_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
+    # Master-switch gate — short-circuit before any DB work or eligibility
+    # scanning. Returns the canonical "blocked" summary; callers see a
+    # structured zero-placed response instead of an exception.
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        return _moneyline_only_block_summary('spread')
+    return _place_bulk_proven_spread_bets_impl(user, stake)
+
+
+def _place_bulk_proven_spread_bets_impl(user, stake: Decimal) -> dict:
     """Place a $stake mock bet on every promoted spread recommendation
     in today's slate. -110 standard pricing assumed; selection is the
     side the EVALUATED_DIRECTION points at (underdog for tight_spread,
@@ -421,6 +455,13 @@ def place_bulk_proven_spread_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict
 
 
 def place_bulk_proven_total_bets(user, stake: Decimal = _DEFAULT_STAKE) -> dict:
+    from apps.core.config import is_moneyline_only_mode
+    if is_moneyline_only_mode():
+        return _moneyline_only_block_summary('total')
+    return _place_bulk_proven_total_bets_impl(user, stake)
+
+
+def _place_bulk_proven_total_bets_impl(user, stake: Decimal) -> dict:
     """Place a $stake mock bet on every promoted total recommendation
     in today's slate. EVALUATED_DIRECTION: high_scoring → over,
     low_scoring → under. -110 standard pricing assumed."""

@@ -2404,6 +2404,7 @@ class OpportunityPostSaveHookTests(TestCase):
         self.assertEqual(SpreadOpportunity.objects.count(), 1)
 
 
+@override_settings(MONEYLINE_ONLY_MODE=False)
 class SpreadTotalUITests(TestCase):
     """Phase 1 UI surface — feature flag + filter + render gating.
 
@@ -3057,6 +3058,7 @@ class SettleOutcomesIntegrationTests(_OpportunityPhase2TestBase):
         )
 
 
+@override_settings(MONEYLINE_ONLY_MODE=False)
 class Phase2LeanUITests(TestCase):
     """UI surface for Phase 2 Lean intelligence. Hard contract:
        - flag OFF: no yellow Lean badge, no Leans Only chip, no
@@ -3175,6 +3177,7 @@ class Phase2LeanUITests(TestCase):
         self.assertIn('"true"', body)  # aria-pressed="true" somewhere
 
 
+@override_settings(MONEYLINE_ONLY_MODE=False)
 class Phase2PerformancePanelTests(TestCase):
     """Performance panel on /profile/performance/ surfaces the per-
     signal-type stats table when leans flag is on, hides when off."""
@@ -3468,6 +3471,7 @@ class Phase3SourceSafetyTests(_OpportunityPhase2TestBase):
         self.assertTrue(new_opp.is_recommended)
 
 
+@override_settings(MONEYLINE_ONLY_MODE=False)
 class Phase3UITests(TestCase):
     """Phase 3 UI surface — proven-recommendations sections, badges,
     Recommended filter chip, bulk-bet button activation. The hard
@@ -3593,6 +3597,7 @@ class Phase3UITests(TestCase):
         self.assertGreaterEqual(proven_count, 1)
 
 
+@override_settings(MONEYLINE_ONLY_MODE=False)
 class Phase3BulkBetServiceTests(TestCase):
     """The new place_bulk_proven_spread_bets / place_bulk_proven_total_bets
     services. Hard rules from the spec:
