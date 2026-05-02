@@ -1,0 +1,121 @@
+{% load tz_extras mlb_reasons %}
+{% comment %}
+  Decision-first MLB tile (2026-05-02). Used by the Recommended /
+  Potential / Not Recommended sections on the MLB hub. Shows ONLY the
+  fields a bettor needs to make the decision: teams, pick odds, model %,
+  market % (de-vigged), edge, and a single primary badge.
+
+  Subtle badges (verified-source, market-movement) render as tiny chips
+  rather than first-class actions. Pitcher / injury / priority info is
+  intentionally omitted — surface that on the game-detail page.
+
+  Required template variable: `s` = GameSignals instance.
+  Required template variable: `section_kind` = 'recommended' | 'potential' | 'pass'.
+{% endcomment %}
+{% with rec=s.recommendation %}
+<a href="{% url 'mlb:game' s.game.id %}"
+   class="mlb-tile mlb-tile--decision mlb-tile--decision-{{ section_kind }}{% if s.has_user_bet %} mlb-tile--has-bet{% endif %}"
+   aria-label="{{ s.game.away_team.name }} at {{ s.game.home_team.name }}">
+
+  <header class="mlb-tile__header">
+    {% if s.game.status == 'live' %}
+      <span class="mlb-tile__status mlb-tile__status--live">LIVE</span>
+    {% else %}
+      <span class="mlb-tile__status">{{ s.game.first_pitch|date:"g:i A" }} <span class="mlb-tz">{% tz_abbr %}</span></span>
+    {% endif %}
+    {% if s.has_user_bet %}<span class="mlb-bet-indicator" title="You have a pending mock bet on this game">🎯</span>{% endif %}
+  </header>
+
+  <div class="mlb-tile__teams">
+    <div class="mlb-tile__team">
+      <span class="mlb-tile__abbr">{{ s.game.away_team.abbreviation|default:s.game.away_team.slug|upper }}</span>
+      <span class="mlb-tile__name">{{ s.game.away_team.name }}</span>
+      {% if s.game.away_score is not None %}<span class="mlb-tile__score">{{ s.game.away_score }}</span>{% endif %}
+    </div>
+    <div class="mlb-tile__vs">@</div>
+    <div class="mlb-tile__team">
+      <span class="mlb-tile__abbr">{{ s.game.home_team.abbreviation|default:s.game.home_team.slug|upper }}</span>
+      <span class="mlb-tile__name">{{ s.game.home_team.name }}</span>
+      {% if s.game.home_score is not None %}<span class="mlb-tile__score">{{ s.game.home_score }}</span>{% endif %}
+    </div>
+  </div>
+
+  {% if rec %}
+  <div class="mlb-tile__decision">
+    <div class="mlb-tile__decision-pick">
+      <span class="mlb-tile__decision-pick-label">{{ rec.pick }}</span>
+      <span class="mlb-tile__decision-pick-odds">{% if rec.odds_american > 0 %}+{% endif %}{{ rec.odds_american }}</span>
+    </div>
+    <div class="mlb-tile__decision-stats">
+      <div class="mlb-tile__decision-stat">
+        <span class="mlb-tile__decision-stat-label">Model</span>
+        <span class="mlb-tile__decision-stat-value">{{ rec.confidence_score|floatformat:0 }}%</span>
+      </div>
+      <div class="mlb-tile__decision-stat">
+        <span class="mlb-tile__decision-stat-label">Market</span>
+        <span class="mlb-tile__decision-stat-value">
+          {% if rec.market_implied_pct is not None %}{{ rec.market_implied_pct|floatformat:0 }}%{% else %}—{% endif %}
+        </span>
+      </div>
+      <div class="mlb-tile__decision-stat">
+        <span class="mlb-tile__decision-stat-label">Edge</span>
+        <span class="mlb-tile__decision-stat-value">{% if rec.model_edge >= 0 %}+{% endif %}{{ rec.model_edge|floatformat:1 }}pp</span>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="mlb-tile__decision mlb-tile__decision--unrated">
+    <span class="text-sm text-muted">No odds yet</span>
+  </div>
+  {% endif %}
+
+  {% comment %}
+    Subtle badges. Source provenance + market-movement signal still
+    available, but rendered as small chips so they don't compete with
+    the primary decision data.
+  {% endcomment %}
+  {% if rec %}
+  <div class="mlb-tile__subtle">
+    {% if rec.is_secondary %}
+      <span class="mlb-subtle-badge mlb-subtle-badge--espn" title="ESPN fallback source — confidence reduced">ESPN</span>
+    {% else %}
+      <span class="mlb-subtle-badge mlb-subtle-badge--verified" title="Verified primary-source odds">Verified</span>
+    {% endif %}
+    {% if rec.market_movement_chip %}
+      <span class="mlb-subtle-badge mlb-subtle-badge--movement" title="Market movement: {{ rec.movement_score|floatformat:0 }}/100">{{ rec.market_movement_chip }}</span>
+    {% endif %}
+    {% if rec.status == 'not_recommended' and rec.status_reason %}
+      <span class="mlb-subtle-badge mlb-subtle-badge--lean" title="Model would lean here but the rules block recommending: {{ rec.status_reason }}">Model Lean</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% comment %}
+    Primary decision badge — the spec's required single CTA per card.
+    Color/copy varies by section kind:
+      recommended → 🟢 Bet This
+      potential   → 🟡 Review
+      pass        → ⚫ Pass
+  {% endcomment %}
+  <div class="mlb-tile__primary-badge mlb-tile__primary-badge--{{ section_kind }}">
+    {% if section_kind == 'recommended' %}🟢 Bet This
+    {% elif section_kind == 'potential' %}🟡 Review
+    {% else %}⚫ Pass{% endif %}
+  </div>
+
+  {% if user.is_authenticated and rec and section_kind == 'recommended' %}
+    {% if s.user_bet_id %}
+      <a href="{% url 'mockbets:bet_detail' s.user_bet_id %}"
+         class="mlb-bet-btn mlb-bet-btn--view"
+         onclick="event.stopPropagation();">View Bet</a>
+    {% elif s.prefill_json %}
+      <button type="button"
+              class="mlb-bet-btn mlb-bet-btn--bet-this"
+              data-mlb-prefill='{{ s.prefill_json }}'
+              onclick="event.preventDefault(); event.stopPropagation(); openMLBBet(this);">
+        Bet This
+      </button>
+    {% endif %}
+  {% endif %}
+</a>
+{% endwith %}

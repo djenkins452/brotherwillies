@@ -320,271 +320,101 @@
   {% endif %}
 
   {% comment %}
-    Two-Lane sections (2026-04-28). Orthogonal slice of the same slate by
-    automation safety. Core lane is the Bet All filter; Qualified is
-    visible-but-excluded; Pass is collapsed by default since those picks
-    failed hard gates and are not actionable.
+    Decision-first 3-section view (2026-05-02). Replaces the previous
+    multi-section structure (Top Plays + Recommended + Recommended ESPN
+    + Fades + Value Underdogs + Two-Lane View). Each game appears in
+    EXACTLY ONE section so the user can read the page in seconds:
 
-    These sections render IN ADDITION TO the existing decision sections
-    below — same tiles may appear in both. The lane view is the spec's
-    primary partition for automation; the legacy decision sections remain
-    for backward compatibility with downstream tooling and tests.
+      Recommended (Bet These)        — engine cleared all hard gates
+      Potential (Review Carefully)   — qualified lane + value underdogs
+      Not Recommended (Ignore)       — failed gates / bulk-ineligible
+
+    Spread/Total opportunity sections still render below the 3 sections
+    when the master switch (MONEYLINE_ONLY_MODE) is off and the
+    per-feature flags are on. Upcoming games stay at the bottom.
   {% endcomment %}
-  {% if core_games or qualified_games or pass_games %}
-  <section class="mlb-lane-overview" style="margin-bottom: 1.25rem;">
-    <h2 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.6rem;">Two-Lane View</h2>
-
-    {# 🟢 Core — bulk-bet eligible. Open by default. #}
-    <details open style="margin-bottom: 0.5rem; border: 1px solid #1f4534; border-radius: 6px; padding: 0.5rem 0.75rem; background: #0f1f17;">
-      <summary style="cursor: pointer; font-weight: 600; color: #22c55e;">
-        🟢 Core Recommendations (Auto) — {{ core_games|length }}
-      </summary>
-      {% if core_games %}
-        <div class="mlb-rail tiles-container" role="list" style="margin-top: 0.6rem;">
-          {% for s in core_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p style="color: #888; font-size: 0.85rem; margin: 0.5rem 0 0;">No core picks on this slate.</p>
-      {% endif %}
-    </details>
-
-    {# 🟡 Qualified — visible but EXCLUDED from Bet All. Open by default if any. #}
-    <details {% if qualified_games %}open{% endif %} style="margin-bottom: 0.5rem; border: 1px solid #4a3a14; border-radius: 6px; padding: 0.5rem 0.75rem; background: #1f1a0e;">
-      <summary style="cursor: pointer; font-weight: 600; color: #d97706;">
-        🟡 Qualified Opportunities (Review) — {{ qualified_games|length }}
-      </summary>
-      {% if qualified_games %}
-        <p style="color: #aaa; font-size: 0.8rem; margin: 0.5rem 0;">
-          These picks pass the hard gates but carry 1–2 risk flags. Excluded from "Bet All" — review individually before placing.
-        </p>
-        <div class="mlb-rail tiles-container" role="list" style="margin-top: 0.4rem;">
-          {% for s in qualified_games %}
-            <div role="listitem">
-              {% if s.recommendation and s.recommendation.risk_flags %}
-                <div style="margin-bottom: 0.3rem; font-size: 0.78rem; color: #d97706;">
-                  Flags:
-                  {% if s.recommendation.risk_flags.market_conflict %}<span style="margin-right: 0.5rem;">Market Against</span>{% endif %}
-                  {% if s.recommendation.risk_flags.sanity_mismatch %}<span style="margin-right: 0.5rem;">Sanity Mismatch</span>{% endif %}
-                  {% if s.recommendation.risk_flags.thin_edge %}<span style="margin-right: 0.5rem;">Thin Edge</span>{% endif %}
-                  {% if s.recommendation.risk_flags.insight_conflict %}<span style="margin-right: 0.5rem;">Insight Conflict</span>{% endif %}
-                </div>
-              {% endif %}
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p style="color: #888; font-size: 0.85rem; margin: 0.5rem 0 0;">No qualified opportunities on this slate.</p>
-      {% endif %}
-    </details>
-
-    {# 🚫 Pass — collapsed by default since these are not actionable. #}
-    <details style="margin-bottom: 0.5rem; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.5rem 0.75rem; background: #161616;">
-      <summary style="cursor: pointer; font-weight: 600; color: #888;">
-        🚫 Pass — {{ pass_games|length }}
-      </summary>
-      <p style="color: #888; font-size: 0.8rem; margin: 0.5rem 0 0;">
-        Failed hard gates (probability, edge, max odds, or source quality) or carry 3+ risk flags. Not actionable.
-      </p>
-    </details>
-  </section>
-  {% endif %}
-
-  {% if not elite_games and not recommended_games and not recommended_espn_games and not not_recommended_games and not unrated_games and not future_games %}
+  {% if not recommended_tiles and not potential_tiles and not not_recommended_tiles and not future_games %}
     <div class="card card-muted">
       <p>Data temporarily unavailable. Live MLB data will appear here when ingestion is enabled.</p>
     </div>
   {% else %}
 
-    {% comment %}
-      Decision Group A — Recommended Plays.
-      Wraps Top Plays + Recommended Bets (verified) + Recommended Bets (ESPN)
-      in a single bordered group box so the user sees at a glance "these are
-      the plays the model said BET on." Section headers within the group are
-      kept (they distinguish elite vs standard, verified vs ESPN), but the
-      outer border + group label make the parent classification obvious.
-    {% endcomment %}
-    <div class="mlb-decision-group mlb-decision-group--recommended {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
-      <div class="mlb-decision-group__head">
-        <span class="mlb-decision-group__icon">&#x1F44D;</span>
-        <span class="mlb-decision-group__title">Recommended Plays</span>
-        <span class="mlb-decision-group__hint">Model says: BET — edge cleared the threshold</span>
+  {% comment %} Section 1 — Recommended (Bet These). {% endcomment %}
+  <div class="mlb-decision-group mlb-decision-group--recommended">
+    <div class="mlb-decision-group__head">
+      <span class="mlb-decision-group__icon">🟢</span>
+      <span class="mlb-decision-group__title">Recommended</span>
+      <span class="mlb-decision-group__hint">Bet These — engine cleared every hard gate</span>
+      {% if recommended_tiles %}<span class="mlb-section__count">{{ recommended_tiles|length }}</span>{% endif %}
+    </div>
+    {% if recommended_tiles %}
+      <div class="mlb-rail tiles-container" role="list">
+        {% for s in recommended_tiles %}
+          <div role="listitem">{% include "mlb/_tile_decision.html" with s=s section_kind="recommended" %}</div>
+        {% endfor %}
       </div>
-
-    {# Section 1 — 🔥 Top Plays (elite tier, VERIFIED only, capped at 2) #}
-    <section class="mlb-section mlb-section--elite">
-      <div class="mlb-section__head">
-        <h2 class="mlb-section__title">&#x1F525; Top Plays Today <span class="mlb-section__source-tag mlb-section__source-tag--verified">Verified Odds</span></h2>
-        {% if elite_games %}<span class="mlb-section__count">{{ elite_games|length }}</span>{% endif %}
-      </div>
-      {% if elite_games %}
-        <div class="mlb-rail tiles-container" role="list">
-          {% for s in elite_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="card card-muted mlb-empty-state">
-          <p>No high-confidence plays right now.</p>
-          <p class="text-sm text-muted">Check recommended bets below.</p>
-        </div>
-      {% endif %}
-    </section>
-
-    {# Section 2 — 👍 Recommended (status=recommended, tier != elite, VERIFIED only) #}
-    {% if recommended_games %}
-      <section class="mlb-section mlb-section--recommended">
-        <div class="mlb-section__head">
-          <h2 class="mlb-section__title">&#x1F44D; Recommended Bets <span class="mlb-section__source-tag mlb-section__source-tag--verified">Verified Odds</span></h2>
-          <span class="mlb-section__count">{{ recommended_games|length }}</span>
-        </div>
-        <div class="mlb-rail tiles-container" role="list">
-          {% for s in recommended_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
-    {% endif %}
-
-    {% comment %}
-      Section 2b — 🟡 Recommended Bets (ESPN Fallback) — Source-Aware Betting.
-      Only renders when there are secondary recommendations. The header
-      note tells users explicitly that this set uses lower-trust data so
-      they don't conflate these picks with the verified set above.
-    {% endcomment %}
-    {% if recommended_espn_games %}
-      <section class="mlb-section mlb-section--espn">
-        <div class="mlb-section__head">
-          <h2 class="mlb-section__title">&#x1F7E1; Recommended Bets <span class="mlb-section__source-tag mlb-section__source-tag--espn">ESPN Fallback</span></h2>
-          <span class="mlb-section__count">{{ recommended_espn_games|length }}</span>
-        </div>
-        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">
-          These bets use ESPN odds because primary market data is missing.
-          Displayed confidence is reduced to reflect lower trust in the source. Use with caution.
-        </p>
-        <div class="mlb-rail tiles-container" role="list">
-          {% for s in recommended_espn_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
-    {% endif %}
-
-    </div>{# /mlb-decision-group--recommended #}
-
-    {% comment %}
-      Decision Group B — Not Recommended.
-      Always renders so the user can confirm "the model has classified all
-      today's games" rather than guessing whether absence means "no fades
-      today" or "the section silently disappeared". When the bucket is
-      empty we show a positive empty-state message; otherwise the same
-      tiles render as before so the user has the full information set
-      (matchup, pitchers, line, model edge) and can still click through.
-    {% endcomment %}
-    <div class="mlb-decision-group mlb-decision-group--fade {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
-      <div class="mlb-decision-group__head">
-        <span class="mlb-decision-group__icon">&#x26A0;&#xFE0F;</span>
-        <span class="mlb-decision-group__title">Not Recommended</span>
-        <span class="mlb-decision-group__hint">Model says: FADE — edge below threshold or heavy juice</span>
-      </div>
-
-    {# Section 3 — ⚠️ Not Recommended (dimmed but still clickable) #}
-    {% if not_recommended_games %}
-      <section class="mlb-section mlb-section--not-recommended">
-        <div class="mlb-section__head">
-          <h2 class="mlb-section__title">Today&rsquo;s fades</h2>
-          <span class="mlb-section__count">{{ not_recommended_games|length }}</span>
-        </div>
-        <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
-          {% for s in not_recommended_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
     {% else %}
       <div class="card card-muted mlb-empty-state">
-        <p>No fades today &mdash; every game in today&rsquo;s slate either cleared the decision rules (see Recommended Plays above) or has no odds yet (see Unrated below).</p>
+        <p>No recommended plays on this slate.</p>
+        <p class="text-sm text-muted">Check Potential below for review-worthy opportunities.</p>
       </div>
     {% endif %}
+  </div>
 
-    </div>{# /mlb-decision-group--fade #}
+  {% comment %} Section 2 — Potential (Review Carefully). {% endcomment %}
+  <div class="mlb-decision-group mlb-decision-group--potential">
+    <div class="mlb-decision-group__head">
+      <span class="mlb-decision-group__icon">🟡</span>
+      <span class="mlb-decision-group__title">Potential</span>
+      <span class="mlb-decision-group__hint">Review Carefully — qualified picks with risk flags or value underdogs</span>
+      {% if potential_tiles %}<span class="mlb-section__count">{{ potential_tiles|length }}</span>{% endif %}
+    </div>
+    {% if potential_tiles %}
+      <div class="mlb-rail tiles-container" role="list">
+        {% for s in potential_tiles %}
+          <div role="listitem">{% include "mlb/_tile_decision.html" with s=s section_kind="potential" %}</div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card card-muted mlb-empty-state">
+        <p class="text-sm text-muted">Nothing in the Potential bucket right now.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  {% comment %} Section 3 — Not Recommended (Ignore). {% endcomment %}
+  <div class="mlb-decision-group mlb-decision-group--fade">
+    <div class="mlb-decision-group__head">
+      <span class="mlb-decision-group__icon">⚫</span>
+      <span class="mlb-decision-group__title">Not Recommended</span>
+      <span class="mlb-decision-group__hint">Ignore — failed hard gates or no actionable signal</span>
+      {% if not_recommended_tiles %}<span class="mlb-section__count">{{ not_recommended_tiles|length }}</span>{% endif %}
+    </div>
+    {% if not_recommended_tiles %}
+      <div class="mlb-rail tiles-container mlb-rail--dimmed" role="list">
+        {% for s in not_recommended_tiles %}
+          <div role="listitem">{% include "mlb/_tile_decision.html" with s=s section_kind="pass" %}</div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card card-muted mlb-empty-state">
+        <p class="text-sm text-muted">No fades today.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  {% endif %}{# /no-data fallback #}
 
     {% comment %}
-      2026-04-27 strict correction — Value Plays section.
+      Legacy multi-section block (Top Plays / Recommended Bets /
+      Recommended ESPN / Today's Fades / Value Underdogs) was removed
+      2026-05-02. The 3 decision-first sections above (Recommended /
+      Potential / Not Recommended) are the canonical replacement.
 
-      High-edge, low-probability picks (the +1700 underdog with 21%
-      probability and 15pp model edge that previously slipped into
-      Recommended). These are now classified as VALUE: visible for
-      manual decision-making, NEVER recommended, NEVER in Bet All.
-      The orange tint + warning copy makes the risk profile obvious.
+      Spread/Total Phase 3 + Phase 1 sections remain below, gated by
+      the master MONEYLINE_ONLY_MODE switch — they're dormant under
+      the current default and will reactivate when that flag flips.
     {% endcomment %}
-    {% if value_games %}
-    <div class="mlb-decision-group mlb-decision-group--value {% if bet_type_filter != 'all' and bet_type_filter != 'moneyline' %}is-hidden{% endif %}">
-      <div class="mlb-decision-group__head">
-        <span class="mlb-decision-group__icon">&#x1F4B0;</span>
-        <span class="mlb-decision-group__title">Value Plays <span class="mlb-decision-group__title-suffix">(Manual Only)</span></span>
-        <span class="mlb-decision-group__hint mlb-decision-group__hint--warn">High edge, low probability &mdash; not recommended, not in Bet All</span>
-      </div>
-      <section class="mlb-section mlb-section--value">
-        <div class="mlb-section__head">
-          <h2 class="mlb-section__title">&#x1F4B0; Value Underdogs</h2>
-          <span class="mlb-section__count">{{ value_games|length }}</span>
-        </div>
-        <p class="text-sm text-muted" style="margin:-4px 0 8px 0;">
-          The model sees an edge in price, but the projected win
-          probability is below 50%. These bets can pay off when they hit
-          but are <strong>more likely to lose than win</strong>. Decide for yourself.
-        </p>
-        <div class="mlb-rail tiles-container" role="list">
-          {% for s in value_games %}
-            <div role="listitem">
-              {% if s.game.status == 'live' %}
-                {% include "mlb/_tile_live.html" with s=s %}
-              {% else %}
-                {% include "mlb/_tile_upcoming.html" with s=s %}
-              {% endif %}
-            </div>
-          {% endfor %}
-        </div>
-      </section>
-    </div>
-    {% endif %}
 
     {% comment %}
       Tiered Intelligence Phase 3 — Promoted Recommendations.
@@ -876,8 +706,6 @@
         {% include "mlb/_list_future.html" with future_games=future_games %}
       </section>
     {% endif %}
-
-  {% endif %}
 </div>
 
 {% if user.is_authenticated %}

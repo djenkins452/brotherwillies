@@ -300,6 +300,17 @@ class Recommendation:
     risk_score: int = 0
 
     @property
+    def market_implied_pct(self) -> Optional[float]:
+        """De-vigged market implied probability for the picked side, in
+        percent. Computed as confidence_score (model %) minus model_edge
+        (pp). Used by the decision-first hub tiles to show Model | Market
+        | Edge alongside each other. Returns None if either input is None.
+        """
+        if self.confidence_score is None or self.model_edge is None:
+            return None
+        return float(self.confidence_score) - float(self.model_edge)
+
+    @property
     def tier_label(self) -> str:
         return _TIER_LABELS.get(self.tier, _TIER_LABELS['standard'])
 

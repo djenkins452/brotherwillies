@@ -399,6 +399,80 @@ class MLBHubViewTests(TestCase):
         for key in ['live_tiles', 'today_tiles', 'future_games']:
             self.assertIn(key, resp.context, f'missing context key: {key}')
 
+    def test_decision_first_three_section_context(self):
+        """Post-2026-05-02 rewrite: the hub passes three flat lists for
+        the new Recommended / Potential / Not Recommended sections."""
+        resp = self.client.get('/mlb/')
+        for key in ('recommended_tiles', 'potential_tiles', 'not_recommended_tiles'):
+            self.assertIn(key, resp.context, f'missing context key: {key}')
+            self.assertIsInstance(resp.context[key], list)
+
+    def test_decision_first_three_section_markup(self):
+        """Each of the 3 sections renders its own decision-group div.
+        Requires at least one game in the slate — otherwise the "data
+        unavailable" fallback fires."""
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame, OddsSnapshot as MLBOdds
+        conf = MLBConf.objects.create(name='AL-3sec', slug='al-3sec')
+        t1 = MLBTeam.objects.create(name='A', slug='3sec-a', conference=conf, rating=70,
+                                    source='mlb_stats_api', external_id='3sec-1')
+        t2 = MLBTeam.objects.create(name='B', slug='3sec-b', conference=conf, rating=40,
+                                    source='mlb_stats_api', external_id='3sec-2')
+        game = MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            status='scheduled',
+            source='mlb_stats_api', external_id='3sec-game',
+        )
+        MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+        )
+        resp = self.client.get('/mlb/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('mlb-decision-group--recommended', body)
+        self.assertIn('mlb-decision-group--potential', body)
+        self.assertIn('mlb-decision-group--fade', body)
+
+
+class MLBHubBucketAssignmentTests(TestCase):
+    """Each game must land in exactly ONE of the 3 buckets — no double-
+    counting between Recommended / Potential / Not Recommended."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        conf = MLBConf.objects.create(name='AL', slug='al-bucket')
+        self.t1 = MLBTeam.objects.create(
+            name='Yankees', slug='bucket-yankees', conference=conf, rating=70,
+            source='mlb_stats_api', external_id='b-1',
+        )
+        self.t2 = MLBTeam.objects.create(
+            name='Rays', slug='bucket-rays', conference=conf, rating=40,
+            source='mlb_stats_api', external_id='b-2',
+        )
+
+    def test_no_game_appears_in_two_buckets(self):
+        from apps.mlb.models import Game as MLBGame, OddsSnapshot as MLBOdds
+        game = MLBGame.objects.create(
+            home_team=self.t1, away_team=self.t2,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            status='scheduled',
+            source='mlb_stats_api', external_id='b-game-1',
+        )
+        MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+        )
+        resp = self.client.get('/mlb/')
+        rec_ids = {t.game.id for t in resp.context['recommended_tiles']}
+        pot_ids = {t.game.id for t in resp.context['potential_tiles']}
+        not_rec_ids = {t.game.id for t in resp.context['not_recommended_tiles']}
+        # No overlap between any pair.
+        self.assertFalse(rec_ids & pot_ids)
+        self.assertFalse(rec_ids & not_rec_ids)
+        self.assertFalse(pot_ids & not_rec_ids)
+
 
 class MLBActionResolverTests(TestCase):
     """Part 1: resolve_actions — map signals to 🔥 Watch Now / 💰 Best Bet."""
@@ -2089,23 +2163,25 @@ class HubTemplateSourceAwareTests(TestCase):
         )
 
     def test_espn_section_renders_when_secondary_present(self):
+        """Post-2026-05-02 decision-first rewrite: ESPN-source recs are
+        now folded into the Not Recommended section (their engine status
+        is 'not_recommended' under the strict-source correction). The
+        per-tile ESPN provenance survives as a subtle badge."""
         self._seed(self.verified_game, source='odds_api')
         self._seed(self.espn_game, source='espn')
         resp = self.client.get('/mlb/')
         self.assertEqual(resp.status_code, 200)
-        # Section CSS class is the most reliable marker — text like
-        # "ESPN Fallback" appears in the help modal regardless.
-        self.assertContains(resp, 'mlb-section--espn')
-        self.assertContains(resp, 'mlb-section__source-tag--espn')
-        # The "secondary market" note tells users explicitly.
-        self.assertContains(resp, 'These bets use ESPN odds')
+        # The new Not Recommended group is the canonical home for
+        # ESPN-source recs after the restructure.
+        self.assertContains(resp, 'mlb-decision-group--fade')
+        # ESPN provenance is preserved per-tile as a subtle badge.
+        self.assertContains(resp, 'mlb-subtle-badge--espn')
 
     def test_espn_section_hidden_when_no_secondary(self):
-        # Only verified rec → ESPN section markup should NOT render.
+        # Only verified rec → no ESPN provenance badge should render.
         self._seed(self.verified_game, source='odds_api')
         resp = self.client.get('/mlb/')
-        self.assertNotContains(resp, 'mlb-section--espn')
-        self.assertNotContains(resp, 'These bets use ESPN odds')
+        self.assertNotContains(resp, 'mlb-subtle-badge--espn')
 
     def test_only_moneyline_bulk_button_renders_after_correction(self):
         """2026-04-27 strict correction: 'Bet All ESPN Plays' button
@@ -2126,10 +2202,11 @@ class HubTemplateSourceAwareTests(TestCase):
         self.assertNotContains(resp, 'Bet All ESPN Plays')
 
     def test_source_badge_renders_on_espn_tile(self):
+        """Post-2026-05-02: the source badge moved from a primary chip on
+        the legacy tile to a subtle chip on the decision-first tile."""
         self._seed(self.espn_game, source='espn')
         resp = self.client.get('/mlb/')
-        self.assertContains(resp, 'mlb-source-badge--espn')
-        self.assertContains(resp, 'ESPN Odds')
+        self.assertContains(resp, 'mlb-subtle-badge--espn')
 
 
 # ===================================================================== #
@@ -2493,15 +2570,14 @@ class SpreadTotalUITests(TestCase):
 
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)
     def test_filter_spread_hides_moneyline_groups(self):
+        """Post-2026-05-02 decision-first rewrite: the moneyline groups
+        (Recommended/Potential/Not Recommended) always render — the
+        bet_type filter no longer toggles their visibility because they
+        ARE the page's primary structure now. Spread sections are still
+        visible under bet_type=spread."""
         resp = self.client.get('/mlb/?bet_type=spread')
         body = resp.content.decode('utf-8')
-        # Recommended group is rendered with `is-hidden` when filter
-        # excludes it — class on the wrapper, not removed from DOM, so
-        # the section still exists for accessibility consistency but
-        # is visually suppressed.
-        self.assertIn('mlb-decision-group--recommended is-hidden', body)
-        self.assertIn('mlb-decision-group--fade is-hidden', body)
-        # Spread group is NOT hidden
+        # Spread group is NOT hidden when filter selects spread.
         self.assertNotIn('mlb-decision-group--spread is-hidden', body)
 
     @override_settings(SPREAD_TOTAL_SIGNALS_ENABLED=True)

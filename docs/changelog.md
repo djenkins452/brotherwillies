@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-02 - MLB hub: decision-first 3-section view
+
+**Summary:** Today's MLB slate collapses from six overlapping sections (Top Plays, Recommended Bets, Recommended ESPN, Two-Lane View, Today's Fades, Value Underdogs) to three mutually-exclusive decision groups: **Recommended (Bet These) → Potential (Review Carefully) → Not Recommended (Ignore)**. User can read the page in seconds.
+
+### Bucket rules
+
+| Section | Source data | Sort |
+|---|---|---|
+| Recommended | `decision_sections['elite'] + decision_sections['recommended']` (status=='recommended', cleared all hard gates) | tier ASC (elite > strong > standard), then edge DESC |
+| Potential | `lane_sections['qualified'] + decision_sections['value']` (cleared hard gates with 1-2 risk flags, OR high edge / low probability) | edge DESC |
+| Not Recommended | everything else: not_recommended + recommended_espn + lane=='pass' + unrated | input order preserved |
+
+Each game lands in **exactly one** bucket — view-level dedupe by game id, first-match-wins in Recommended → Potential → Not Recommended priority order.
+
+### Tile simplification
+
+New partial `templates/mlb/_tile_decision.html` shows ONLY:
+- Teams (with abbreviations + scores when live)
+- Pick + American odds
+- Model % | Market % | Edge (one row, equal weight)
+- Single primary badge: 🟢 Bet This / 🟡 Review / ⚫ Pass
+
+Subtle badges (rendered as small chips below the decision row): `Verified` / `ESPN` source provenance, market-movement chip, "Model Lean" for picks the model would lean on but rules block. Pitcher / injury / priority / "why" copy is intentionally omitted from the new tile — surface that on the game-detail page.
+
+### Other changes
+
+- New property `Recommendation.market_implied_pct` — de-vigged market %, derived from `confidence_score - model_edge`. Used by the new tile for consistent Model/Market/Edge display.
+- The legacy multi-section markup was removed from `templates/mlb/hub.html`. Spread/Total Phase 1 + Phase 3 sections remain (gated by `MONEYLINE_ONLY_MODE`, dormant under the current default).
+- Upcoming Games section is unchanged.
+- Bulk "Bet All Moneyline Plays" button wiring is unchanged — still feeds from the engine's recommended set, which is the same data feeding the new Recommended section.
+
+### Tests
+
+- 3 new tests in `apps/mlb/tests.MLBHubViewTests` + `MLBHubBucketAssignmentTests`: 3-bucket context shape, 3-section markup rendering, mutual exclusion (no game appears in two buckets).
+- 3 obsolete tests updated to assert the new structure (legacy ESPN section / source-badge classes / bet_type filter hiding).
+- Full app suite: 936/937 tests passing (`feedback.tests` ImportError remains pre-existing).
+
+---
+
 ## 2026-05-02 - Moneyline-Only Mode (master switch)
 
 **Summary:** Single environment-controllable feature flag (`MONEYLINE_ONLY_MODE`, default `True`) that silences all spread/total functionality across the system. Temporary system-wide focus mode to allow accurate moneyline-performance evaluation. **Nothing is deleted** — flipping the flag back to `False` restores full behavior in one place.

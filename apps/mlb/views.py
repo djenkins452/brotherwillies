@@ -71,8 +71,63 @@ def mlb_hub(request):
     # in the template, and the Bet All filter ensures only `core` is bulk-
     # bet eligible. We compute it on the same all_tiles list so it stays
     # consistent with whatever the existing decision_sections rendered.
-    from apps.core.services.recommendations import partition_games_by_lane
+    from apps.core.services.recommendations import partition_games_by_lane, TIER_ORDER
     lane_sections = partition_games_by_lane(all_tiles)
+
+    # Decision-first 3-bucket partition (2026-05-02). Replaces the multi-
+    # section today's-slate UI with the spec-mandated three groups. Each
+    # tile appears in EXACTLY ONE bucket — first match wins, in
+    # Recommended → Potential → Not Recommended priority order — so the
+    # user never has to track the same game across two sections.
+    #
+    # The legacy decision_sections / lane_sections dicts above are still
+    # populated for downstream tests + bulk-button counts; the 3 buckets
+    # are derived from them.
+    _seen_ids = set()
+
+    def _take(tiles):
+        out = []
+        for t in tiles:
+            gid = t.game.id
+            if gid in _seen_ids:
+                continue
+            _seen_ids.add(gid)
+            out.append(t)
+        return out
+
+    def _tier_rank(tile):
+        rec = getattr(tile, 'recommendation', None)
+        return TIER_ORDER.get(getattr(rec, 'tier', None), 99) if rec else 99
+
+    def _edge_value(tile):
+        rec = getattr(tile, 'recommendation', None)
+        if rec is None or rec.model_edge is None:
+            return 0.0
+        return float(rec.model_edge)
+
+    # Recommended = engine cleared all hard gates, status='recommended'.
+    # Sort: tier ASC (elite=0 < strong=1 < standard=2) then edge DESC.
+    recommended_tiles = _take(
+        decision_sections['elite'] + decision_sections['recommended']
+    )
+    recommended_tiles.sort(key=lambda t: (_tier_rank(t), -_edge_value(t)))
+
+    # Potential = qualified lane (cleared hard gates, 1-2 risk flags) +
+    # value bucket (high edge, low probability). Sort: edge DESC.
+    potential_tiles = _take(
+        lane_sections['qualified'] + decision_sections.get('value', [])
+    )
+    potential_tiles.sort(key=lambda t: -_edge_value(t))
+
+    # Not Recommended = everything left from today's slate. No strict
+    # sort per spec — we keep the input ordering so callers can inject
+    # their own priority by feeding tiles in the desired order.
+    not_recommended_tiles = _take(
+        decision_sections['not_recommended']
+        + decision_sections.get('recommended_espn', [])
+        + lane_sections['pass']
+        + decision_sections.get('unrated', [])
+    )
 
     # Focus Engine: single "do this right now" surface. None when no game
     # meets the bar — the banner is simply omitted rather than forced.
@@ -236,6 +291,11 @@ def mlb_hub(request):
         'qualified_games': lane_sections['qualified'],
         'pass_games': lane_sections['pass'],
         'core_bulk_count': len(lane_sections['core']),
+        # 3-bucket decision-first view (2026-05-02). The new MLB hub
+        # renders these instead of the legacy multi-section structure.
+        'recommended_tiles': recommended_tiles,
+        'potential_tiles': potential_tiles,
+        'not_recommended_tiles': not_recommended_tiles,
         'future_games': future_upcoming,
         'focus': focus,
         'diag_rows': diag_rows,
