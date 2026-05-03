@@ -138,9 +138,54 @@ a:hover {
     height: 22px;
 }
 
-/* ========== Main Content ========== */
+/* ========== Top Nav (2026-05-03) ==========
+   Persistent text-only bar between the header and main content. Distinct
+   from the bottom nav (icon-driven sport switcher) so the user reads:
+       Top: Bet → Analyze            (the workflow)
+       Bottom: which sport           (the entry point)
+   The bar sits flush under the fixed header — main-content's top offset
+   absorbs both header + nav so we don't double-fixed-position. */
+.top-nav {
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    z-index: 99;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 4px;
+    padding: 6px 16px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.top-nav__item {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-decoration: none;
+    line-height: 1.2;
+    transition: background 0.12s, color 0.12s;
+}
+.top-nav__item:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+.top-nav__item--active {
+    background: var(--bg-card);
+    color: var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ========== Main Content ==========
+   Top offset = header + top-nav. The 40px constant matches the rendered
+   height of .top-nav at default font-size + 6+6 vertical padding +
+   1px border. Conservative — if the nav grows we just bump this. */
 .main-content {
-    margin-top: var(--header-height);
+    margin-top: calc(var(--header-height) + 40px);
     padding: 16px;
     padding-bottom: calc(var(--nav-height) + 80px);
     max-width: 1200px;
@@ -150,7 +195,7 @@ a:hover {
 
 /* ========== Messages ========== */
 .messages {
-    margin-top: var(--header-height);
+    margin-top: calc(var(--header-height) + 40px);
     padding: 8px 16px;
 }
 .message {

@@ -43,11 +43,16 @@
                     <div class="profile-dropdown" id="profile-dropdown">
                         <a href="/profile/" class="profile-dropdown-item">Profile</a>
                         <a href="/profile/preferences/" class="profile-dropdown-item">Preferences</a>
+                        {% comment %}
+                          System Tuning + Moneyline Evaluation moved to the
+                          persistent top nav 2026-05-03 — kept here would be
+                          redundant. MLB Diagnostic / Backtest Analytics are
+                          deeper diagnostics that don't yet warrant top-nav
+                          real estate so they stay in the dropdown.
+                        {% endcomment %}
                         {% if user.is_staff %}
                         <a href="/mlb/?diag=1" class="profile-dropdown-item">MLB Diagnostic</a>
                         <a href="/analytics/backtest/" class="profile-dropdown-item">Backtest Analytics</a>
-                        <a href="/mockbets/system-tuning/" class="profile-dropdown-item">System Tuning</a>
-                        <a href="/mockbets/moneyline-evaluation/" class="profile-dropdown-item">Moneyline Evaluation</a>
                         {% endif %}
                         <a href="/mockbets/" class="profile-dropdown-item">My Mock Bets</a>
                         <a href="/profile/user-guide/" class="profile-dropdown-item">User Guide</a>
@@ -70,6 +75,40 @@
             {% endif %}
         </div>
     </header>
+
+    {% comment %}
+      Top nav (2026-05-03). Persistent, text-only bar that surfaces the
+      analytics/evaluation pages for one-click access. Distinct from the
+      bottom nav (sport icons) so the user sees a clear separation:
+
+        Top:    Bet → Analyze
+        Bottom: which sport
+
+      Staff-only links (Evaluation, System Tuning) are gated by
+      user.is_staff so non-staff don't see broken links to 404 pages.
+      Active-state matching uses request.path with startswith semantics
+      where appropriate (Betting matches any sport hub).
+    {% endcomment %}
+    <nav class="top-nav" aria-label="Primary navigation">
+        <a href="/mlb/"
+           class="top-nav__item{% if request.path == '/mlb/' or request.path == '/cfb/' or request.path == '/cbb/' or request.path == '/golf/' %} top-nav__item--active{% endif %}">
+            Betting
+        </a>
+        <a href="/mockbets/analytics/"
+           class="top-nav__item{% if request.path|slice:':19' == '/mockbets/analytics' %} top-nav__item--active{% endif %}">
+            Analytics
+        </a>
+        {% if user.is_staff %}
+        <a href="/mockbets/moneyline-evaluation/"
+           class="top-nav__item{% if request.path|slice:':30' == '/mockbets/moneyline-evaluation' %} top-nav__item--active{% endif %}">
+            Evaluation
+        </a>
+        <a href="/mockbets/system-tuning/"
+           class="top-nav__item{% if request.path|slice:':23' == '/mockbets/system-tuning' %} top-nav__item--active{% endif %}">
+            System Tuning
+        </a>
+        {% endif %}
+    </nav>
 
     {% if messages %}
     <div class="messages">

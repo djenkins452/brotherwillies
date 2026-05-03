@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-03 - Top nav: persistent Bet → Analyze bar
+
+**Summary:** New persistent text-only nav bar between the header and main content. Surfaces Analytics, Moneyline Evaluation, and System Tuning so staff can reach them in one click from anywhere. Distinct from the bottom nav (sport icons) so the page reads:
+
+- **Top:** Betting → Analytics → Evaluation → System Tuning  *(the workflow)*
+- **Bottom:** Home / Lobby / CFB / CBB / MLB / Golf  *(which sport)*
+
+### Behavior
+
+- All users see: **Betting** (links to `/mlb/`) + **Analytics**
+- Staff additionally see: **Evaluation** + **System Tuning** (the staff-only diagnostic pages)
+- Active-state pill via `request.path` matching — visible accent underline + tinted background
+- Bar is fixed-position under the header (`z-index: 99`), with `overflow-x: auto` so it scrolls horizontally on narrow viewports without wrapping
+
+### Cleanup
+
+The profile dropdown's duplicate System Tuning + Moneyline Evaluation entries were removed (now redundant with the top nav). MLB Diagnostic + Backtest Analytics + Command Center remain in the dropdown — those are deeper diagnostics that don't yet warrant top-nav real estate.
+
+### Tests
+
+7 new tests in `apps/core/test_top_nav.py`:
+- Staff sees all 4 links
+- Non-staff sees only Betting + Analytics (no broken links to 404 pages)
+- Anon user sees the bar with public links
+- Active class lands on the correct link for each of `/mlb/`, `/mockbets/analytics/`, `/mockbets/moneyline-evaluation/`, `/mockbets/system-tuning/`
+
+Full app suite: 975/976 (only the pre-existing `feedback.tests` ImportError).
+
+---
+
 ## 2026-05-03 - Moneyline Evaluation page (staff-only)
 
 **Summary:** New staff diagnostic at `/mockbets/moneyline-evaluation/` for slate post-mortems. Pulls a date-bounded view of moneyline bets across ALL users (engine-performance evaluation, not user behavior) and produces a structured packet plus a copy-paste markdown blob ready for ChatGPT/Claude. Workflow: pick range → click Run Evaluation → copy packet → paste into chat.
