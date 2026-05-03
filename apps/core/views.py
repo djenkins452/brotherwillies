@@ -19,6 +19,100 @@ def _is_in_season(sport):
     return timezone.now().month in entry['season_months']
 
 
+def command_center_home(request):
+    """New homepage (2026-05-03) — staff/user landing page that answers:
+      - What should I bet on today?
+      - How did yesterday go?
+      - Is the system healthy?
+      - Where do I go next?
+
+    Pulls top-edge moneyline recommendations + reuses the moneyline
+    evaluation service for yesterday's numbers. Light query — no charts,
+    no per-user analytics computation. Falls through to the legacy
+    analytics dashboard for backwards-compat under `/home-analytics/`.
+    """
+    from datetime import timedelta as _td
+    from apps.core.models import BettingRecommendation
+    from apps.core.config import is_moneyline_only_mode
+    from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+    from apps.mockbets.models import MockBet
+
+    today_local = timezone.localdate()
+    yesterday = today_local - _td(days=1)
+
+    # --- Section 1: today's recommended bets -------------------------------
+    # Pull BettingRecommendation rows captured today, status=recommended,
+    # bet_type=moneyline (the only emitted type today). Order by edge DESC,
+    # cap at 5. select_related the per-sport game so the template can read
+    # team names without N+1 lookups. The `created_at` field defaults to
+    # `timezone.now()` so a today's-local-date filter on it gives us the
+    # current slate's recs without requiring a per-game-time join.
+    today_recs_qs = (
+        BettingRecommendation.objects
+        .filter(
+            bet_type='moneyline',
+            status='recommended',
+            created_at__date=today_local,
+        )
+        .select_related(
+            'cfb_game__home_team', 'cfb_game__away_team',
+            'cbb_game__home_team', 'cbb_game__away_team',
+            'mlb_game__home_team', 'mlb_game__away_team',
+            'college_baseball_game__home_team', 'college_baseball_game__away_team',
+        )
+        .order_by('-model_edge')
+    )
+    # Dedupe by (sport, game.id) — the engine writes a fresh row each time
+    # the rec mutates so the same game can have several rows in the day.
+    # Keep the highest-edge one per game (already first due to ordering).
+    seen_games = set()
+    today_recs = []
+    for rec in today_recs_qs:
+        game = rec.game  # uses the per-sport FK helper on the model
+        key = (rec.sport, getattr(game, 'id', None))
+        if key in seen_games or game is None:
+            continue
+        seen_games.add(key)
+        today_recs.append(rec)
+        if len(today_recs) >= 5:
+            break
+
+    # --- Section 2: yesterday's evaluation ---------------------------------
+    # Reuse the moneyline_evaluation service so the homepage and the
+    # /mockbets/moneyline-evaluation/ page show the same numbers. Engine-
+    # performance evaluation = system-generated only, all users.
+    eval_report = build_evaluation_report(
+        MockBet.objects.all(),
+        date_from=yesterday,
+        date_to=yesterday,
+        include_manual=False,
+    )
+    yesterday_summary = eval_report['executive_summary']
+
+    # --- Section 3: system health ------------------------------------------
+    # Spec rule: clv_positive_rate >= 50% → healthy, else warning.
+    # Special case: empty CLV sample → 'unknown' rather than fake-warning.
+    if yesterday_summary['clv_sample'] == 0:
+        health_status = 'unknown'
+        health_label = 'No CLV data yesterday'
+    elif yesterday_summary['positive_clv_rate'] >= 50.0:
+        health_status = 'healthy'
+        health_label = f"CLV+ {yesterday_summary['positive_clv_rate']:.1f}% — healthy"
+    else:
+        health_status = 'warning'
+        health_label = f"CLV+ {yesterday_summary['positive_clv_rate']:.1f}% — below 50%"
+
+    return render(request, 'core/command_center.html', {
+        'today_recs': today_recs,
+        'yesterday_summary': yesterday_summary,
+        'yesterday_label': yesterday.isoformat(),
+        'health_status': health_status,
+        'health_label': health_label,
+        'is_moneyline_only_mode': is_moneyline_only_mode(),
+        'nav_active': 'home',
+    })
+
+
 def home(request):
     """Home page — mock bet analytics dashboard."""
     if not request.user.is_authenticated:

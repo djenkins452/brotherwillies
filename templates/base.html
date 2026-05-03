@@ -103,6 +103,10 @@
       Icons are subtle visual anchors only — labels carry the meaning.
     {% endcomment %}
     <nav class="top-nav" aria-label="Primary navigation">
+        <a href="/"
+           class="top-nav__item{% if request.path == '/' %} top-nav__item--active{% endif %}">
+            <span class="top-nav__icon" aria-hidden="true">🏠</span> Home
+        </a>
         <a href="/mlb/"
            class="top-nav__item{% if request.path == '/mlb/' or request.path == '/cfb/' or request.path == '/cbb/' or request.path == '/golf/' %} top-nav__item--active{% endif %}">
             <span class="top-nav__icon" aria-hidden="true">⚾</span> MLB

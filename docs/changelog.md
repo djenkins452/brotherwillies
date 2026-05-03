@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-03 - Command Center homepage
+
+**Summary:** New homepage at `/` answering three questions in one render: what should I bet today, how did yesterday go, is the system healthy. Plus quick-action buttons. No charts, no JS, single SQL pass on each section. Legacy mock-bet analytics dashboard moved to `/home-analytics/` for backwards-compat.
+
+### Sections (top → bottom)
+
+1. **Today's Plays** — top 5 BettingRecommendation rows captured today, `bet_type='moneyline'`, `status='recommended'`, ordered by `model_edge` DESC, deduped to one rec per `(sport, game)`.
+2. **Yesterday Results** — stat boxes: Win Rate / ROI / Net P/L / CLV+ Rate. Reuses `moneyline_evaluation.build_evaluation_report` so numbers match the Evaluation page exactly. Linked to `/mockbets/moneyline-evaluation/?range=yesterday`.
+3. **System Health** — single pill: 🟢 Healthy / ⚠️ Warning / — Unknown. Rule per spec:
+   - `clv_positive_rate >= 50%` → healthy
+   - `clv_positive_rate < 50%` → warning
+   - `clv_sample == 0` → unknown (don't fake-warning when there's no signal)
+4. **Quick Actions** — buttons to MLB / My Bets / Performance + Evaluation / Tuning (staff).
+
+### Routing
+
+- `/` now resolves to `command_center_home` (URL name `'home'` preserved — every existing `reverse('core:home')` call lands here).
+- Legacy mock-bet analytics dashboard moved to `/home-analytics/` (URL name `'home_analytics'`).
+- The existing `apps.ops.command_center` view at `/ops/command-center/` is unrelated and untouched.
+
+### Top nav
+
+`🏠 Home` added as the first entry (active on `/` exactly). Final order: **Home · MLB · My Bets · Performance · Evaluation · Tuning**.
+
+### Tests (15 new)
+
+- All 4 sections render (smoke)
+- Quick-action buttons gated correctly per role (staff sees 5 links, non-staff sees 3)
+- Health rule branches: empty CLV → unknown, <50% → warning, ≥50% → healthy, exactly 50% → healthy (boundary)
+- Today's plays: edge DESC sort, moneyline-only filter, recommended-only filter, capped at 5
+- Top nav: Home present, first in the bar, active on `/`
+
+Full app suite: 998/999 (only the pre-existing `feedback.tests` ImportError).
+
+### Honest caveats
+
+- **The legacy `home` view** is preserved at `/home-analytics/` rather than deleted. It duplicates `/mockbets/analytics/` logic almost exactly, but removing it now would be premature — kept until we're sure nothing external links to it.
+- **"Today" semantics** for the recs query is `created_at__date == today_local` — recs created today regardless of game time. A late-night rec for tomorrow's first-pitch lands today; that's deliberate (matches the "decisions made on this day" framing the Moneyline Evaluation already uses).
+- **No CFB/CBB recs render today** because of `MONEYLINE_ONLY_MODE` — those engines are dormant. The query is sport-agnostic so when the master flag flips, college sports surface automatically.
+
+---
+
 ## 2026-05-03 - Top nav: My Bets active on bet-detail pages
 
 **Summary:** Tightening of the My Bets active-state rule. Was: exact match on `/mockbets/`. Now: any path under `/mockbets/` *except* the three sibling top-nav destinations (Performance, Evaluation, Tuning).

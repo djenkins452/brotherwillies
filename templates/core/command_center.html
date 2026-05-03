@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Brother Willies — Command Center{% endblock %}
+
+{% block content %}
+{% comment %}
+  Command Center homepage (2026-05-03). Four sections, top-down:
+    1. Today's Plays      — top 5 recommended moneyline bets, edge desc
+    2. Yesterday Results  — exec-summary stat boxes
+    3. System Health      — CLV+-rate band (green/yellow/red)
+    4. Quick Actions      — buttons to MLB / My Bets / Evaluation / Tuning
+  No charts. No JS. Single render. Reuses the moneyline_evaluation
+  service so yesterday's numbers match the Evaluation page exactly.
+{% endcomment %}
+
+<h1 class="page-title" style="margin:0 0 14px 0;">Command Center</h1>
+
+{# ===== Section 1 — Today's Plays ===== #}
+<div class="card mb-1">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 class="text-md" style="margin:0;">🟢 Today's Plays</h2>
+        <a href="{% url 'mlb:hub' %}" class="text-sm" style="color:var(--accent);">See full slate →</a>
+    </div>
+    {% if today_recs %}
+        <ul style="margin:8px 0 0 0;padding:0;list-style:none;">
+        {% for rec in today_recs %}
+            <li style="padding:10px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                <div>
+                    <div style="font-weight:600;">
+                        {{ rec.pick }}
+                        <span style="color:var(--text-muted);font-weight:normal;">
+                            ({% if rec.odds_american > 0 %}+{% endif %}{{ rec.odds_american }})
+                        </span>
+                    </div>
+                    <div class="text-sm" style="color:var(--text-muted);">
+                        {{ rec.sport|upper }} ·
+                        {% if rec.game %}
+                            {{ rec.game.away_team.name }} @ {{ rec.game.home_team.name }}
+                        {% else %}—{% endif %}
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-weight:600;color:#3ecf8e;">+{{ rec.model_edge|floatformat:1 }}pp</div>
+                    <div class="text-sm" style="color:var(--text-muted);">{{ rec.confidence_score|floatformat:0 }}% model</div>
+                </div>
+            </li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <div class="text-sm" style="color:var(--text-muted);margin-top:8px;">No recommended moneyline plays right now.</div>
+    {% endif %}
+</div>
+
+{# ===== Section 2 — Yesterday Results ===== #}
+<div class="card mb-1">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 class="text-md" style="margin:0;">📊 Yesterday ({{ yesterday_label }})</h2>
+        <a href="{% url 'mockbets:moneyline_evaluation' %}?range=yesterday" class="text-sm" style="color:var(--accent);">Open evaluation →</a>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:10px;">
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--text-muted);">Win Rate</div>
+            <div style="font-size:1.4rem;font-weight:700;{% if yesterday_summary.win_rate >= 55 %}color:#3ecf8e;{% elif yesterday_summary.win_rate < 50 and yesterday_summary.settled_count > 0 %}color:#e35d5d;{% endif %}">{{ yesterday_summary.win_rate|floatformat:1 }}%</div>
+            <div class="text-sm" style="color:var(--text-muted);">{{ yesterday_summary.wins }}W · {{ yesterday_summary.losses }}L</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--text-muted);">ROI</div>
+            <div style="font-size:1.4rem;font-weight:700;{% if yesterday_summary.roi > 0 %}color:#3ecf8e;{% elif yesterday_summary.roi < 0 %}color:#e35d5d;{% endif %}">{{ yesterday_summary.roi|floatformat:1 }}%</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--text-muted);">Net P/L</div>
+            <div style="font-size:1.4rem;font-weight:700;{% if yesterday_summary.net_pl > 0 %}color:#3ecf8e;{% elif yesterday_summary.net_pl < 0 %}color:#e35d5d;{% endif %}">${{ yesterday_summary.net_pl|floatformat:2 }}</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--text-muted);">CLV+ Rate</div>
+            <div style="font-size:1.4rem;font-weight:700;{% if yesterday_summary.positive_clv_rate >= 55 %}color:#3ecf8e;{% elif yesterday_summary.positive_clv_rate < 50 and yesterday_summary.clv_sample > 0 %}color:#e35d5d;{% endif %}">{{ yesterday_summary.positive_clv_rate|floatformat:1 }}%</div>
+            <div class="text-sm" style="color:var(--text-muted);">n={{ yesterday_summary.clv_sample }}</div>
+        </div>
+    </div>
+</div>
+
+{# ===== Section 3 — System Health ===== #}
+<div class="card mb-1"
+     style="border-color:{% if health_status == 'healthy' %}rgba(62,207,142,0.4){% elif health_status == 'warning' %}rgba(227,93,93,0.4){% else %}var(--border){% endif %};">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <h2 class="text-md" style="margin:0;">System Health</h2>
+        {% if health_status == 'healthy' %}
+            <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(62,207,142,0.15);color:#3ecf8e;font-weight:600;font-size:0.85rem;">✅ Healthy</span>
+        {% elif health_status == 'warning' %}
+            <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(227,93,93,0.15);color:#e35d5d;font-weight:600;font-size:0.85rem;">⚠️ Warning</span>
+        {% else %}
+            <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,0.06);color:var(--text-muted);font-weight:600;font-size:0.85rem;">— Unknown</span>
+        {% endif %}
+        <span class="text-sm" style="color:var(--text-muted);">{{ health_label }}</span>
+    </div>
+</div>
+
+{# ===== Section 4 — Quick Actions ===== #}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 10px 0;">Quick Actions</h2>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        <a href="/mlb/" class="btn btn-primary" style="font-size:0.9rem;">⚾ MLB</a>
+        <a href="/mockbets/" class="btn" style="font-size:0.9rem;">🎯 My Bets</a>
+        <a href="/mockbets/analytics/" class="btn" style="font-size:0.9rem;">📊 Performance</a>
+        {% if user.is_staff %}
+        <a href="/mockbets/moneyline-evaluation/" class="btn" style="font-size:0.9rem;">🔍 Evaluation</a>
+        <a href="/mockbets/system-tuning/" class="btn" style="font-size:0.9rem;">⚙️ Tuning</a>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
