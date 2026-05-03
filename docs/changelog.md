@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-03 - Calibration tighten: heavier shrink, tighter thresholds, disagreement cap
+
+**Summary:** Engine calibration tune driven by yesterday's evaluation showing too many recommendations producing negative CLV. Three coordinated changes pull the model harder toward the de-vigged market and concentrate recommendations on higher-confidence picks. **Reversible:** every change is a constant flip — restoring the previous behavior is a one-line revert per file.
+
+### Constants changed
+
+| Constant | Before | After | Why |
+|---|---|---|---|
+| `MARKET_BLEND_WEIGHT` | 0.15 | **0.30** | Heavier shrink toward consensus market |
+| `MARKET_BLEND_WEIGHT_CAP` | 0.20 | **0.30** | Caller-supplied cap kept in lock-step |
+| `MIN_EDGE` (pp) | 3.0 | **5.0** | Concentrate on stronger edges |
+| `MIN_PROBABILITY_FOR_RECOMMENDED` | 0.55 | **0.60** | Concentrate on higher-confidence picks |
+| `LANE_HARD_GATES_PROBABILITY_MIN` | 0.55 | **0.60** | Lane in lock-step with rec gates |
+| `LANE_HARD_GATES_EDGE_MIN` (decimal) | 0.03 | **0.05** | Lane in lock-step with rec gates |
+
+### New: extreme disagreement cap
+
+When the post-blend model probability differs from the picked-side de-vigged market by more than `EXTREME_DISAGREEMENT_GAP = 0.105` (= the spec's 0.15 raw gap, compressed by the 0.30 blend weight), the recommendation is **downgraded** (elite/strong → standard) but **NOT blocked**. The bet still surfaces; it just falls out of "Top Plays" and into the regular slate. blocked / value tiers are exempt — they already have their own UI treatment.
+
+### New: snapshot fields on `Recommendation` + `BettingRecommendation`
+
+Persisted alongside the existing `confidence_score` / `model_edge`:
+- `final_model_prob` (decimal) — post-blend, post-clamp
+- `market_prob` (decimal) — de-vigged picked side
+- `extreme_disagreement` (bool) — did the cap fire?
+- `raw_model_prob` (decimal, **None in v1**) — pre-calibration; populating it requires exposing pre-blend probability from each sport's `compute_*_win_prob`. Not done in v1 to keep the change reversible; tracked as follow-up.
+
+Migration `apps/core/migrations/0007_*` adds the fields; `persist_recommendation` writes them.
+
+### Logging
+
+`apps/core/services/recommendations.py` now uses `logger.info` to record:
+- Per-candidate calibration line: `Calibration: sport=X game=Y side=Z final=0.687 market=0.500 edge=0.187`
+- Per disagreement-cap fire: `Calibration: extreme disagreement cap fired — gap=0.187 tier=elite→standard`
+
+### Tests
+
+- 18 new tests in `apps/core/test_calibration_2026_05_03.py` covering:
+  - Probability shrink at 30% weight, output between model and market, no-market passthrough
+  - Bumped threshold constants + lane lock-step
+  - Disagreement cap: threshold value, doesn't fire inside band, fires on extreme gap, **does not block** (recommendation row still produced)
+  - Snapshot fields populated on the dataclass + decimal/percent unit consistency
+  - Edge equals (final_prob - market_prob) — uses post-blend, not raw
+  - Spec success criterion: marginal picks that scraped through old gates now fall short
+- 4 existing tests updated for the new threshold values:
+  - `test_default_weight_is_15_percent` → `test_default_weight_is_30_percent` (math + label)
+  - `test_blend_then_clamp_order_matters` + `test_blend_can_keep_in_range` (recomputed with new weight)
+  - `test_market_blend_weight_within_spec` + cap (assert new constant values)
+  - `test_heavy_favorite_with_weak_edge_is_not_recommended` (edge bumped 4.5 → 5.5 to specifically exercise the juice gate above MIN_EDGE)
+- 2 fixture bumps in `apps/mockbets/tests.BulkActionsTests` (rating gaps 70/40 → 90/20 + 72/42 → 88/22) so bulk-eligible picks still clear the new 60% gate
+- 1 fixture bump in `apps/mlb/tests.MLBFocusEngineTests.test_best_bet_preferred_over_watch_now` (`home_win_prob=0.5` → `0.20`) so the test still produces a Best Bet candidate
+
+Full app suite: 1016/1017 (only the pre-existing `feedback.tests` ImportError).
+
+### What this does NOT touch (per spec)
+
+- Spread/total logic (still gated by `MONEYLINE_ONLY_MODE`)
+- UI surfaces
+- Evaluation engine
+- CLV calculation
+- Ingestion logic
+- Backtest pipeline
+- Recommendation engine STRUCTURE (still status / tier / lane axes; only constants flipped)
+
+### Honest caveats
+
+- **`raw_model_prob` is None for v1.** Capturing it requires plumbing the pre-calibration value from each sport's `compute_house_win_prob` / `compute_user_win_prob` separately from the finalized output. Doing it cleanly is 8 small function refactors across 4 sports — deferred to keep this change minimal and reversible.
+- **The disagreement cap operates on the post-blend gap.** Spec phrasing was `abs(model_prob - market_prob) > 0.15` — a 15-point raw gap. After the 30% blend, a 15-point raw gap compresses to 10.5 points. `EXTREME_DISAGREEMENT_GAP` is set to 0.105 so the cap semantically matches the spec's intent.
+- **Test fixtures with rating gaps under 30 points may now fall short of the 60% gate.** The bulk-actions test fixtures were bumped accordingly. If new tests need a recommended pick post-tighten, use ratings ≥ 80/20.
+
+---
+
 ## 2026-05-03 - Command Center homepage
 
 **Summary:** New homepage at `/` answering three questions in one render: what should I bet today, how did yesterday go, is the system healthy. Plus quick-action buttons. No charts, no JS, single SQL pass on each section. Legacy mock-bet analytics dashboard moved to `/home-analytics/` for backwards-compat.

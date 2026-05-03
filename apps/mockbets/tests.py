@@ -1500,12 +1500,17 @@ class BulkActionsTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
         conf = MLBConf.objects.create(name='AL East', slug='bulk-al-east')
+        # 2026-05-03 calibration tighten: rating gap bumped 70/40 → 90/20.
+        # The new MIN_PROBABILITY_FOR_RECOMMENDED=0.60 + heavier 30% market
+        # blend pulls smaller gaps below the threshold; this fixture wants
+        # to exercise the bulk-place path, so we provision a gap big
+        # enough to clear all gates after calibration.
         self.t1 = MLBTeam.objects.create(
-            name='Yankees', slug='bulk-yankees', conference=conf, rating=70,
+            name='Yankees', slug='bulk-yankees', conference=conf, rating=90,
             source='mlb_stats_api', external_id='bulk-1',
         )
         self.t2 = MLBTeam.objects.create(
-            name='Rays', slug='bulk-rays', conference=conf, rating=40,
+            name='Rays', slug='bulk-rays', conference=conf, rating=20,
             source='mlb_stats_api', external_id='bulk-2',
         )
 
@@ -1536,10 +1541,13 @@ class BulkActionsTests(TestCase):
         # Different teams for second game so it's not a duplicate matchup
         from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
         conf = MLBConf.objects.first()
+        # 2026-05-03 calibration: 72/42 gap was insufficient under the new
+        # 60% probability gate; bumped to 88/22 to keep the second game
+        # bulk-eligible.
         t3 = MLBTeam.objects.create(name='Sox', slug='bulk-sox', conference=conf,
-                                     rating=72, source='mlb_stats_api', external_id='bulk-3')
+                                     rating=88, source='mlb_stats_api', external_id='bulk-3')
         t4 = MLBTeam.objects.create(name='Os', slug='bulk-os', conference=conf,
-                                     rating=42, source='mlb_stats_api', external_id='bulk-4')
+                                     rating=22, source='mlb_stats_api', external_id='bulk-4')
         game2 = self._game(hours_out=4, t1=t3, t2=t4)
         self._add_odds(game2)
 

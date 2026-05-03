@@ -152,6 +152,17 @@ class BettingRecommendation(models.Model):
     risk_flags = models.JSONField(default=dict, blank=True)
     risk_score = models.IntegerField(default=0)
 
+    # 2026-05-03 calibration snapshot. Three decimal probabilities + a
+    # disagreement flag preserved alongside the existing confidence_score
+    # / model_edge so analytics can audit "what did we decide on, against
+    # what market read?" without re-running the model. raw_model_prob is
+    # nullable because v1 doesn't yet plumb the pre-calibration value
+    # through the sport services — see changelog 2026-05-03.
+    raw_model_prob = models.FloatField(null=True, blank=True)
+    final_model_prob = models.FloatField(null=True, blank=True)
+    market_prob = models.FloatField(null=True, blank=True)
+    extreme_disagreement = models.BooleanField(default=False, db_index=True)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

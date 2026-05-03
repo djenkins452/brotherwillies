@@ -243,9 +243,12 @@ class DecisionRuleTests(TestCase):
         self.assertEqual(reason, '')
 
     def test_heavy_favorite_with_weak_edge_is_not_recommended(self):
-        """-200 odds + edge below 6pp → juice gate rejects it.
-        Important: |200| < 300 so the longshot gate doesn't trip."""
-        status, reason = compute_status(model_edge=4.5, odds_american=-200)
+        """-200 odds + edge between MIN_EDGE and STRONG_EDGE → juice gate
+        rejects. Edge is 5.5pp (above the 5.0 MIN_EDGE under the 2026-05-03
+        calibration tighten, but below the 6.0 STRONG_EDGE that the juice
+        gate requires for heavy-favorite picks). |200| < 300 so the
+        longshot gate doesn't trip."""
+        status, reason = compute_status(model_edge=5.5, odds_american=-200)
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
         self.assertEqual(reason, 'high_juice')
 

@@ -12,20 +12,25 @@ from dataclasses import dataclass, asdict, field
 from decimal import Decimal
 from typing import List, Optional
 
+import logging
+
 from apps.core.sport_registry import SPORT_REGISTRY
+
+logger = logging.getLogger(__name__)
 
 
 # Decision thresholds — units are percentage points (pp) to match the stored
 # `model_edge` scale (e.g. 5.2 means 5.2 pp above market). Mixing units here
 # with decimal probabilities would silently misclassify every recommendation.
 #
-# 2026-04-27 strict correction: lowered MIN_EDGE 4.0 → 3.0 per spec, and
-# added new HARD probability + longshot + source gates. The previous
-# elite-edge override let +1700 longshots with 21% probability sneak into
-# Recommended via "edge >= 8pp short-circuits everything"; that was the
-# bug the correction targets. Edge alone is no longer sufficient — the
-# pick must also be high-probability, reasonably-priced, and primary-sourced.
-MIN_EDGE = 3.0      # 3 pp — minimum edge for any recommended bet
+# 2026-04-27 strict correction: lowered MIN_EDGE 4.0 → 3.0 + HARD gates.
+# 2026-05-03 calibration tighten: bumped MIN_EDGE 3.0 → 5.0 and
+# MIN_PROBABILITY_FOR_RECOMMENDED 0.55 → 0.60 after eval showed the engine
+# producing too many recommendations with negative CLV. Tier markers
+# (STRONG_EDGE / ELITE_EDGE) unchanged — they're UI sort labels, not
+# decision gates. Edge alone is still not sufficient — the pick must also
+# clear probability + longshot + source gates.
+MIN_EDGE = 5.0      # 5 pp — minimum edge for any recommended bet (was 3.0)
 STRONG_EDGE = 6.0   # 6 pp — edge required to overcome heavy-favorite juice
 ELITE_EDGE = 8.0    # 8 pp — elite-tier marker for UI sorting (no longer
                     # overrides the probability/longshot/source gates)
@@ -46,10 +51,23 @@ MAX_ELITE_PER_SLATE = 2
 
 # 2026-04-27 strict correction: HARD safety rules — a pick can NEVER be
 # Recommended unless ALL of these clear.
+# 2026-05-03 calibration tighten: bumped MIN_PROBABILITY_FOR_RECOMMENDED
+# from 0.55 to 0.60 in concert with the heavier market blend (30%) to
+# concentrate recommendations on higher-confidence picks.
 HARD_MIN_PROBABILITY = 0.50              # absolute floor; below this → never recommended
-MIN_PROBABILITY_FOR_RECOMMENDED = 0.55   # actual recommended threshold (configurable 0.55–0.60)
+MIN_PROBABILITY_FOR_RECOMMENDED = 0.60   # actual recommended threshold (was 0.55)
 MAX_ABS_ODDS_FOR_RECOMMENDED = 300       # avoid extreme longshots / extreme favorites
                                           # (configurable; 300 keeps normal markets in range)
+
+# 2026-05-03 calibration tighten: extreme model-vs-market disagreement cap.
+# When the post-blend model and market diverge by more than this gap, the
+# recommendation is downgraded (elite/strong → standard) but NOT blocked.
+# The threshold is post-blend; under MARKET_BLEND_WEIGHT=0.30 a 15-point
+# raw disagreement compresses to 15 * (1 - 0.30) = 10.5 points after the
+# blend, which is what we gate on here. Spec: "if abs(model_prob -
+# market_prob) > 0.15: downgrade_confidence = True" — interpreted as the
+# raw-prob gap, mapped through the blend constant.
+EXTREME_DISAGREEMENT_GAP = 0.15 * (1.0 - 0.30)  # 0.105 post-blend
 
 # ---------------------------------------------------------------------------
 # Two-Lane System (2026-04-28)
@@ -72,8 +90,12 @@ LANE_CORE = 'core'
 LANE_QUALIFIED = 'qualified'
 LANE_PASS = 'pass'
 
-LANE_HARD_GATES_PROBABILITY_MIN = 0.55   # decimal — confidence floor for any non-pass lane
-LANE_HARD_GATES_EDGE_MIN = 0.03          # decimal — edge floor (3pp); MIN_EDGE matches today
+# 2026-05-03 calibration tighten: lane hard-gates raised to match the new
+# recommendation thresholds. Without this bump, a pick could clear the
+# lane (eligible for Bet All) but fail the recommendation gates — leaving
+# automation surfacing picks that aren't actually recommended.
+LANE_HARD_GATES_PROBABILITY_MIN = 0.60   # decimal — confidence floor (was 0.55)
+LANE_HARD_GATES_EDGE_MIN = 0.05          # decimal — edge floor 5pp (was 0.03 / 3pp)
 LANE_HARD_GATES_MAX_ABS_ODDS = 300       # |american odds| ceiling
 LANE_RISK_FLAGS_MAX_FOR_QUALIFIED = 2    # >=3 flags drops the pick to 'pass'
 
@@ -298,6 +320,18 @@ class Recommendation:
     lane: str = LANE_PASS
     risk_flags: dict = field(default_factory=dict)
     risk_score: int = 0
+
+    # 2026-05-03 calibration snapshot. Stored alongside the existing
+    # confidence_score (= final_model_prob * 100) and model_edge so
+    # downstream analytics can answer "what did we actually decide on?"
+    # without re-running the model. raw_model_prob is None for v1: the
+    # sport services don't yet return raw separately. Plumbing it requires
+    # exposing the pre-calibration value from each compute_*_win_prob —
+    # tracked as a follow-up in the changelog.
+    raw_model_prob: Optional[float] = None        # decimal 0..1, pre-calibration
+    final_model_prob: Optional[float] = None      # decimal 0..1, post-blend post-clamp
+    market_prob: Optional[float] = None           # decimal 0..1, de-vigged picked side
+    extreme_disagreement: bool = False            # |final - market| > 0.105 (post-blend)
 
     @property
     def market_implied_pct(self) -> Optional[float]:
@@ -588,6 +622,11 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
     if not odds or odds.moneyline_home is None or odds.moneyline_away is None:
         return None
 
+    # The model_service has already run the model output through
+    # finalize_win_prob (market blend at MARKET_BLEND_WEIGHT + soft clamp),
+    # so home_prob below is the FINAL, post-calibration probability. That
+    # is the right input for edge math — we want the post-shrink value vs
+    # the de-vigged market.
     if model_source == 'user' and data.get('user_prob') is not None:
         home_prob = data['user_prob'] / 100.0
     else:
@@ -612,15 +651,28 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         pick_odds = odds.moneyline_home
         edge = home_edge
         confidence = home_prob
+        market_prob = fair_home
         pick_side = 'home'
     else:
         pick_name = game.away_team.name
         pick_odds = odds.moneyline_away
         edge = away_edge
         confidence = away_prob
+        market_prob = fair_away
         pick_side = 'away'
 
     model_edge_pp = round(edge * 100, 1)
+
+    # 2026-05-03 calibration: lightweight log of every candidate's
+    # post-blend prob, the picked-side de-vigged market, and the resulting
+    # edge. Helps diagnose recommendations after the fact without re-
+    # running the model. Logged at INFO so production logs capture it.
+    logger.info(
+        'Calibration: sport=%s game=%s side=%s final=%.3f market=%.3f edge=%.3f',
+        getattr(game, '_meta', None) and game._meta.app_label or '?',
+        getattr(game, 'id', '?'),
+        pick_side, confidence, market_prob, edge,
+    )
 
     # 2026-04-27 strict correction: source-trust check moved BEFORE
     # compute_status so the source-quality flag can feed into the
@@ -656,6 +708,22 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
     # so the existing ESPN section's sorting still works — they just
     # carry status='not_recommended' with reason='secondary_source'
     # which the bulk-bet filter excludes.
+
+    # 2026-05-03 calibration: extreme model-vs-market disagreement cap.
+    # When the post-blend gap exceeds EXTREME_DISAGREEMENT_GAP we DO NOT
+    # block the bet, but we downgrade the tier — elite/strong → standard
+    # — so the pick falls out of "Top Plays" and into the regular slate.
+    # The lane classifier below will independently re-evaluate via its
+    # own risk flags. blocked / value tiers are exempt: they already have
+    # their own UI treatment and bypassing the cap on them risks losing
+    # important context for the staff diagnostic.
+    extreme_disagreement = abs(confidence - market_prob) > EXTREME_DISAGREEMENT_GAP
+    if extreme_disagreement and tier in ('elite', 'strong'):
+        logger.info(
+            'Calibration: extreme disagreement cap fired — gap=%.3f tier=%s→standard',
+            abs(confidence - market_prob), tier,
+        )
+        tier = 'standard'
 
     # Movement signal — purely additive. The model still drives the pick,
     # the tier, and the recommendation status. Movement only affects the
@@ -709,6 +777,14 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         lane=lane,
         risk_flags=risk_flags,
         risk_score=risk_score,
+        # 2026-05-03 calibration snapshot. raw_model_prob stays None until
+        # the sport services expose pre-calibration values; final_model_prob
+        # mirrors confidence_score in decimal form for direct comparison
+        # against market_prob.
+        raw_model_prob=None,
+        final_model_prob=confidence,
+        market_prob=market_prob,
+        extreme_disagreement=extreme_disagreement,
     )
 
 
@@ -776,5 +852,10 @@ def persist_recommendation(sport: str, game, user=None):
         lane=rec.lane,
         risk_flags=rec.risk_flags,
         risk_score=rec.risk_score,
+        # 2026-05-03 calibration snapshot.
+        raw_model_prob=rec.raw_model_prob,
+        final_model_prob=rec.final_model_prob,
+        market_prob=rec.market_prob,
+        extreme_disagreement=rec.extreme_disagreement,
         **{game_fk_field: game},
     )

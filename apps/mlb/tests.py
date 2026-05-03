@@ -1268,7 +1268,11 @@ class MLBFocusEngineTests(TestCase):
 
     def test_best_bet_preferred_over_watch_now(self):
         from apps.mlb.services.prioritization import get_focus_game, prioritize
-        bb = self._bb_game('bbf')  # gets Best Bet
+        # 2026-05-03 calibration tighten: default home_win_prob=0.5 with
+        # equal-rating teams produces ~0 edge under MIN_EDGE=5.0 → no
+        # Best Bet fires. Force a market that creates a meaningful
+        # moneyline edge to give this test a real Best Bet candidate.
+        bb = self._bb_game('bbf', home_win_prob=0.20)
         # Watch Now only: close live with no odds.
         home = _mk_team('WH', 50.0, 'wh')
         away = _mk_team('WA', 50.0, 'wa')
