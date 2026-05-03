@@ -639,6 +639,91 @@ def system_tuning_view(request):
 
 
 @login_required
+def moneyline_evaluation_view(request):
+    """Staff-only slate post-mortem.
+
+    Pulls bets from ALL users (this is engine-performance evaluation,
+    not user behavior — see the design plan). Date range defaults to
+    yesterday's slate. Output is a structured packet plus a copy-paste
+    markdown blob ready for ChatGPT/Claude.
+    """
+    if not request.user.is_staff:
+        raise Http404
+
+    from datetime import datetime, timedelta as _td
+    from .services.moneyline_evaluation import build_evaluation_report
+
+    today = timezone.localdate()
+
+    # Quick-range buttons feed `?range=`. Custom inputs feed
+    # `?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`. Quick range wins
+    # when both are present so the buttons are deterministic.
+    quick_range = (request.GET.get('range') or '').lower()
+    date_from = date_to = None
+
+    if quick_range == 'today':
+        date_from = date_to = today
+    elif quick_range == 'yesterday':
+        date_from = date_to = today - _td(days=1)
+    elif quick_range == '7d':
+        date_from = today - _td(days=6)
+        date_to = today
+    elif quick_range == '30d':
+        date_from = today - _td(days=29)
+        date_to = today
+    else:
+        # Custom range. Fall back to yesterday on parse failure so
+        # the page never blows up on a bad bookmark.
+        df_raw = request.GET.get('date_from', '')
+        dt_raw = request.GET.get('date_to', '')
+        try:
+            date_from = datetime.strptime(df_raw, '%Y-%m-%d').date() if df_raw else None
+            date_to = datetime.strptime(dt_raw, '%Y-%m-%d').date() if dt_raw else None
+        except ValueError:
+            date_from = date_to = None
+        if date_from is None or date_to is None:
+            quick_range = 'yesterday'
+            date_from = date_to = today - _td(days=1)
+
+    include_manual = request.GET.get('include_manual') == '1'
+
+    # MockBet.objects.all() — all users, all sports. The service applies
+    # the moneyline + system-generated + date-range filters itself.
+    bets_qs = MockBet.objects.all().select_related(
+        'cfb_game__home_team', 'cfb_game__away_team',
+        'cbb_game__home_team', 'cbb_game__away_team',
+        'mlb_game__home_team', 'mlb_game__away_team',
+        'college_baseball_game__home_team', 'college_baseball_game__away_team',
+    )
+    report = build_evaluation_report(
+        bets_qs,
+        date_from=date_from,
+        date_to=date_to,
+        include_manual=include_manual,
+    )
+
+    # Pre-flatten buckets into (title, rows) pairs so the template can
+    # iterate without a custom dict-lookup filter.
+    bucket_sections = [
+        ('By Edge', report['buckets']['by_edge']),
+        ('By Model Confidence', report['buckets']['by_confidence']),
+        ('By Odds Type', report['buckets']['by_odds_type']),
+        ('By Source', report['buckets']['by_source']),
+    ]
+
+    return render(request, 'mockbets/moneyline_evaluation.html', {
+        'report': report,
+        'bucket_sections': bucket_sections,
+        'current_range': quick_range,
+        'current_date_from': date_from.isoformat(),
+        'current_date_to': date_to.isoformat(),
+        'include_manual': include_manual,
+        'help_key': 'moneyline_evaluation',
+        'nav_active': 'mockbets',
+    })
+
+
+@login_required
 @require_POST
 def flat_bet_sim(request):
     """AJAX endpoint for flat-bet simulation what-if."""

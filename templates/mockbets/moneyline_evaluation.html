@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Moneyline Evaluation - Brother Willies{% endblock %}
+
+{% block content %}
+{% with summary=report.executive_summary %}
+
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin:0;">Moneyline Evaluation</h1>
+    <a href="{% url 'mockbets:system_tuning' %}" class="btn btn-sm" style="font-size:0.8rem;">Back to System Tuning</a>
+</div>
+
+<div class="card mb-1" style="background:rgba(201,148,58,0.08);border-color:rgba(201,148,58,0.2);">
+    <div class="text-sm" style="color:var(--accent);font-weight:600;">How to use this page</div>
+    <ol style="margin:6px 0 0 18px;padding:0;font-size:0.9rem;line-height:1.5;">
+        <li>Pick a date range (Yesterday is the default).</li>
+        <li>Click <strong>Run Evaluation</strong>.</li>
+        <li>Read the <strong>Executive Summary</strong> + <strong>Loss Review</strong>.</li>
+        <li>Click <strong>Copy Evaluation Packet</strong> and paste it into ChatGPT or Claude.</li>
+    </ol>
+    <div class="text-sm" style="color:var(--muted);margin-top:6px;">
+        Scope: ALL users, moneyline only, {{ include_manual|yesno:"system + manual bets,system-generated only" }}.
+    </div>
+</div>
+
+{% comment %} Filter bar — quick ranges + custom + manual toggle {% endcomment %}
+<div class="card mb-1">
+    <form method="get" id="eval-filters">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                <a href="?range=yesterday" class="btn btn-sm{% if current_range == 'yesterday' %} btn-primary{% endif %}" style="font-size:0.8rem;">Yesterday</a>
+                <a href="?range=today" class="btn btn-sm{% if current_range == 'today' %} btn-primary{% endif %}" style="font-size:0.8rem;">Today</a>
+                <a href="?range=7d" class="btn btn-sm{% if current_range == '7d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 7 Days</a>
+                <a href="?range=30d" class="btn btn-sm{% if current_range == '30d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 30 Days</a>
+            </div>
+            <div>
+                <label class="text-sm" style="color:var(--accent);">From</label>
+                <input type="date" name="date_from" value="{{ current_date_from }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+            </div>
+            <div>
+                <label class="text-sm" style="color:var(--accent);">To</label>
+                <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+            </div>
+            <div>
+                <label class="text-sm" style="color:var(--accent);display:block;">
+                    <input type="checkbox" name="include_manual" value="1" {% if include_manual %}checked{% endif %}>
+                    Include manual
+                </label>
+            </div>
+            <div>
+                <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.85rem;">Run Evaluation</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+{% comment %} Section 1 — Executive Summary, big and clear {% endcomment %}
+<div class="card mb-1">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <h2 class="text-md" style="margin:0;">Executive Summary</h2>
+        <div class="text-sm" style="color:var(--muted);">{{ report.date_range.from|date:"Y-m-d" }} → {{ report.date_range.to|date:"Y-m-d" }} · {{ report.date_range.label }}</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px;">
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">Total Bets</div>
+            <div style="font-size:1.5rem;font-weight:700;">{{ summary.bets_count }}</div>
+            <div class="text-sm" style="color:var(--muted);">{{ summary.wins }}W · {{ summary.losses }}L · {{ summary.pushes }}P</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">Win Rate</div>
+            <div style="font-size:1.5rem;font-weight:700;{% if summary.win_rate >= 55 %}color:#3ecf8e;{% elif summary.win_rate < 50 %}color:#e35d5d;{% endif %}">{{ summary.win_rate|floatformat:1 }}%</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">ROI</div>
+            <div style="font-size:1.5rem;font-weight:700;{% if summary.roi > 0 %}color:#3ecf8e;{% elif summary.roi < 0 %}color:#e35d5d;{% endif %}">{{ summary.roi|floatformat:1 }}%</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">Net P/L</div>
+            <div style="font-size:1.5rem;font-weight:700;{% if summary.net_pl > 0 %}color:#3ecf8e;{% elif summary.net_pl < 0 %}color:#e35d5d;{% endif %}">${{ summary.net_pl|floatformat:2 }}</div>
+            <div class="text-sm" style="color:var(--muted);">on ${{ summary.total_stake|floatformat:2 }}</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">CLV+ Rate</div>
+            <div style="font-size:1.5rem;font-weight:700;{% if summary.positive_clv_rate >= 55 %}color:#3ecf8e;{% elif summary.positive_clv_rate < 50 and summary.clv_sample > 0 %}color:#e35d5d;{% endif %}">{{ summary.positive_clv_rate|floatformat:1 }}%</div>
+            <div class="text-sm" style="color:var(--muted);">n={{ summary.clv_sample }}</div>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div class="text-sm" style="color:var(--muted);">Stale Odds</div>
+            <div style="font-size:1.5rem;font-weight:700;{% if summary.stale_odds_count > 0 %}color:#e35d5d;{% endif %}">{{ summary.stale_odds_count }}</div>
+            <div class="text-sm" style="color:var(--muted);">Data: {{ summary.data_confidence_level }}</div>
+        </div>
+    </div>
+</div>
+
+{% comment %} Section 2 — Failure analysis (most important per spec) {% endcomment %}
+<div class="card mb-1" style="border-color:rgba(227,93,93,0.35);">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Loss Review</h2>
+    {% if report.loss_review %}
+        <ul style="margin:0;padding:0;list-style:none;">
+            {% for loss in report.loss_review %}
+            <li style="padding:8px 0;border-bottom:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                    <div>
+                        <strong>{{ loss.game }}</strong> · {{ loss.selection }}
+                        @ {% if loss.odds > 0 %}+{% endif %}{{ loss.odds }}
+                    </div>
+                    <div style="color:#e35d5d;font-weight:600;">${{ loss.profit_loss|floatformat:2 }}</div>
+                </div>
+                <div class="text-sm" style="color:var(--muted);margin-top:4px;">
+                    Edge: {% if loss.edge is not None %}{{ loss.edge|floatformat:1 }}pp{% else %}—{% endif %} ·
+                    Confidence: {% if loss.confidence is not None %}{{ loss.confidence|floatformat:1 }}%{% else %}—{% endif %} ·
+                    CLV: {{ loss.clv_direction|default:"n/a" }}
+                </div>
+                <div class="text-sm" style="margin-top:4px;">
+                    {% for cause in loss.causes %}
+                        <span style="display:inline-block;padding:2px 6px;margin:2px 4px 2px 0;border-radius:3px;background:rgba(227,93,93,0.12);color:#fbb;font-size:0.78rem;">{{ cause }}</span>
+                    {% endfor %}
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <div class="text-sm" style="color:var(--muted);">No losses in this range.</div>
+    {% endif %}
+</div>
+
+{% comment %} Section 3 — Bucket performance {% endcomment %}
+<div class="card mb-1">
+    <h2 class="text-md" style="margin:0 0 8px 0;">Bucket Performance</h2>
+    {% for bucket_title, bucket_rows in bucket_sections %}
+    <h3 class="text-sm" style="margin:10px 0 4px 0;color:var(--accent);">{{ bucket_title }}</h3>
+    <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:4px 6px;">Bucket</th>
+                    <th style="text-align:right;padding:4px 6px;">Bets</th>
+                    <th style="text-align:right;padding:4px 6px;">W-L</th>
+                    <th style="text-align:right;padding:4px 6px;">Win %</th>
+                    <th style="text-align:right;padding:4px 6px;">ROI</th>
+                    <th style="text-align:right;padding:4px 6px;">CLV+ %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in bucket_rows %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;">{{ row.label }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{{ row.bets }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{{ row.wins }}-{{ row.losses }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{{ row.win_rate|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:4px 6px;">{{ row.roi|floatformat:1 }}%</td>
+                    <td style="text-align:right;padding:4px 6px;">{{ row.positive_clv_rate|floatformat:1 }}% (n={{ row.clv_sample }})</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</div>
+
+{% comment %} Section 4 — Recommended bets detail (collapsible) {% endcomment %}
+<details class="card mb-1">
+    <summary style="cursor:pointer;font-weight:600;">Per-bet detail ({{ report.bets|length }} rows)</summary>
+    {% if report.bets %}
+    <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.8rem;white-space:nowrap;">
+            <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                    <th style="text-align:left;padding:4px 6px;">Game</th>
+                    <th style="text-align:left;padding:4px 6px;">Pick</th>
+                    <th style="text-align:right;padding:4px 6px;">Odds</th>
+                    <th style="text-align:right;padding:4px 6px;">Close</th>
+                    <th style="text-align:right;padding:4px 6px;">CLV</th>
+                    <th style="text-align:right;padding:4px 6px;">Model%</th>
+                    <th style="text-align:right;padding:4px 6px;">Market%</th>
+                    <th style="text-align:right;padding:4px 6px;">Edge</th>
+                    <th style="text-align:left;padding:4px 6px;">Tier</th>
+                    <th style="text-align:left;padding:4px 6px;">Result</th>
+                    <th style="text-align:right;padding:4px 6px;">P/L</th>
+                    <th style="text-align:left;padding:4px 6px;">Source</th>
+                    <th style="text-align:center;padding:4px 6px;">Stale</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in report.bets %}
+                <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:4px 6px;">{{ r.game }}</td>
+                    <td style="padding:4px 6px;">{{ r.selection }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.odds > 0 %}+{% endif %}{{ r.odds }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.closing_odds is not None %}{% if r.closing_odds > 0 %}+{% endif %}{{ r.closing_odds }}{% else %}—{% endif %}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.clv_cents is not None %}{{ r.clv_cents|floatformat:4 }}{% else %}—{% endif %}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.model_prob is not None %}{{ r.model_prob|floatformat:1 }}%{% else %}—{% endif %}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.market_prob is not None %}{{ r.market_prob|floatformat:1 }}%{% else %}—{% endif %}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.edge is not None %}{{ r.edge|floatformat:1 }}pp{% else %}—{% endif %}</td>
+                    <td style="padding:4px 6px;">{{ r.tier|default:"—" }}</td>
+                    <td style="padding:4px 6px;{% if r.result == 'win' %}color:#3ecf8e;{% elif r.result == 'loss' %}color:#e35d5d;{% endif %}">{{ r.result }}</td>
+                    <td style="text-align:right;padding:4px 6px;">{% if r.profit_loss is not None %}${{ r.profit_loss|floatformat:2 }}{% else %}—{% endif %}</td>
+                    <td style="padding:4px 6px;">{{ r.odds_source }}</td>
+                    <td style="text-align:center;padding:4px 6px;">{% if r.had_stale_capture %}⚠️{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="text-sm" style="color:var(--muted);">No bets in this range.</div>
+    {% endif %}
+</details>
+
+{% comment %} Section 5 — copy packet (the whole point) {% endcomment %}
+<div class="card mb-1" style="border-color:rgba(62,207,142,0.35);">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        <h2 class="text-md" style="margin:0;">Copy Evaluation Packet</h2>
+        <button type="button" id="copy-packet-btn" class="btn btn-primary" onclick="copyEvalPacket()" style="font-size:0.85rem;">Copy to Clipboard</button>
+    </div>
+    <div class="text-sm" style="color:var(--muted);margin-top:6px;">
+        Paste this into ChatGPT or Claude and ask "what should we change?"
+    </div>
+    <textarea id="eval-packet"
+              readonly
+              style="width:100%;min-height:240px;margin-top:10px;padding:10px;background:rgba(0,0,0,0.3);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.78rem;border:1px solid var(--border);border-radius:6px;">{{ report.packet_markdown }}</textarea>
+</div>
+
+<script>
+function copyEvalPacket() {
+    var ta = document.getElementById('eval-packet');
+    var btn = document.getElementById('copy-packet-btn');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(ta.value).then(function() {
+            var orig = btn.textContent;
+            btn.textContent = 'Copied ✓';
+            setTimeout(function() { btn.textContent = orig; }, 1500);
+        }).catch(function() { _fallback(ta, btn); });
+    } else {
+        _fallback(ta, btn);
+    }
+}
+function _fallback(ta, btn) {
+    ta.select();
+    try { document.execCommand('copy'); btn.textContent = 'Copied ✓'; }
+    catch (e) { btn.textContent = 'Copy failed'; }
+    setTimeout(function() { btn.textContent = 'Copy to Clipboard'; }, 1500);
+}
+</script>
+
+{% endwith %}
+{% endblock %}

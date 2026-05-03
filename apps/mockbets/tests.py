@@ -2532,3 +2532,369 @@ class MLBDiagnosticStaleColumnTests(TestCase):
         self.assertIn('is_stale', rows[0])
         # No snapshots → not stale.
         self.assertFalse(rows[0]['is_stale'])
+
+
+# =============================================================================
+# Moneyline Evaluation — slate post-mortem report.
+# =============================================================================
+
+class MoneylineEvaluationFiltersTests(TestCase):
+    """The report's queryset filters: bet_type='moneyline', date range
+    inclusive on both endpoints, is_system_generated=True by default."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('eval_user', password='x')
+
+    def _bet(self, *, bet_type='moneyline', placed_days_ago=1, result='loss',
+             is_system_generated=True, stake=Decimal('100'), payout=None,
+             odds=-110, edge=Decimal('5.0'), confidence=Decimal('60.0')):
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type=bet_type,
+            selection='X', odds_american=odds,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=stake,
+            simulated_payout=payout,
+            result=result,
+            is_system_generated=is_system_generated,
+            expected_edge=edge,
+            recommendation_status='recommended',
+            recommendation_tier='standard',
+            recommendation_confidence=confidence,
+        )
+        # Override placed_at so date-range filtering can be exercised.
+        bet.placed_at = timezone.now() - timedelta(days=placed_days_ago)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    def test_excludes_spread_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        self._bet(bet_type='moneyline', placed_days_ago=1)
+        self._bet(bet_type='spread', placed_days_ago=1)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=False,
+        )
+        self.assertEqual(report['executive_summary']['bets_count'], 1)
+        for bet_row in report['bets']:
+            self.assertNotEqual(bet_row['selection'].lower(), 'spread')
+
+    def test_excludes_total_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        self._bet(bet_type='moneyline', placed_days_ago=1)
+        self._bet(bet_type='total', placed_days_ago=1)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+        )
+        self.assertEqual(report['executive_summary']['bets_count'], 1)
+
+    def test_excludes_manual_bets_by_default(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        self._bet(is_system_generated=True, placed_days_ago=1)
+        self._bet(is_system_generated=False, placed_days_ago=1)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=False,
+        )
+        self.assertEqual(report['executive_summary']['bets_count'], 1)
+
+    def test_includes_manual_when_toggle_on(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        self._bet(is_system_generated=True, placed_days_ago=1)
+        self._bet(is_system_generated=False, placed_days_ago=1)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=True,
+        )
+        self.assertEqual(report['executive_summary']['bets_count'], 2)
+
+    def test_date_range_endpoints_inclusive(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        # Three bets across three consecutive days.
+        self._bet(placed_days_ago=2)
+        self._bet(placed_days_ago=1)
+        self._bet(placed_days_ago=0)
+        today = timezone.localdate()
+        # Range [today-1, today] should include exactly 2 bets.
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today,
+        )
+        self.assertEqual(report['executive_summary']['bets_count'], 2)
+
+
+class MoneylineEvaluationSummaryMathTests(TestCase):
+    """Executive summary numbers must match the underlying bets."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('eval_math', password='x')
+
+    def _bet(self, result, odds=-110, payout=None, stake=Decimal('100')):
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=odds,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=stake,
+            simulated_payout=payout,
+            result=result,
+            is_system_generated=True,
+            expected_edge=Decimal('5.0'),
+            recommendation_status='recommended',
+            recommendation_tier='standard',
+            recommendation_confidence=Decimal('60.0'),
+        )
+        bet.placed_at = timezone.now() - timedelta(days=1)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    def test_basic_counts_and_roi(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        # 2 wins (+91 each at -110), 1 loss (-100), 1 push.
+        self._bet('win', odds=-110, payout=Decimal('91'))
+        self._bet('win', odds=-110, payout=Decimal('91'))
+        self._bet('loss')
+        self._bet('push')
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+        )
+        s = report['executive_summary']
+        self.assertEqual(s['bets_count'], 4)
+        self.assertEqual(s['wins'], 2)
+        self.assertEqual(s['losses'], 1)
+        self.assertEqual(s['pushes'], 1)
+        # Net P/L = +91 + 91 - 100 + 0 = 82
+        self.assertAlmostEqual(s['net_pl'], 82.0, places=1)
+        # Total stake = 4 * 100 = 400 (pushes are still staked)
+        self.assertAlmostEqual(s['total_stake'], 400.0, places=1)
+
+
+class MoneylineEvaluationLossClassifierTests(TestCase):
+    """Per-cause rules in the multi-cause loss classifier."""
+
+    def _bet(self, **overrides):
+        from django.contrib.auth.models import User as DjangoUser
+        user = DjangoUser.objects.create_user(f'lc_{id(overrides)}', password='x')
+        defaults = dict(
+            user=user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            result='loss',
+            is_system_generated=True,
+            expected_edge=Decimal('5.0'),
+            recommendation_status='recommended',
+            recommendation_tier='standard',
+            recommendation_confidence=Decimal('60.0'),
+        )
+        defaults.update(overrides)
+        return MockBet.objects.create(**defaults)
+
+    def test_negative_clv_fires(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(clv_direction='negative', clv_cents=-0.05)
+        self.assertIn('negative_clv', _classify_loss_causes(b))
+
+    def test_stale_odds_fires_when_no_closing_capture(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        # Settled moneyline + closing_odds_american is None → stale
+        b = self._bet(closing_odds_american=None)
+        self.assertIn('stale_odds', _classify_loss_causes(b))
+
+    def test_thin_edge_fires_under_4pp(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(expected_edge=Decimal('3.5'))
+        self.assertIn('thin_edge', _classify_loss_causes(b))
+
+    def test_thin_edge_does_not_fire_at_4pp(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(expected_edge=Decimal('4.0'))
+        self.assertNotIn('thin_edge', _classify_loss_causes(b))
+
+    def test_heavy_juice_fires_at_minus_150(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(odds_american=-150)
+        self.assertIn('heavy_juice', _classify_loss_causes(b))
+
+    def test_low_confidence_fires_under_60(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(recommendation_confidence=Decimal('59.0'))
+        self.assertIn('low_confidence', _classify_loss_causes(b))
+
+    def test_market_moved_against_fires_from_engine_reason(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(loss_reason='market_movement')
+        self.assertIn('market_moved_against', _classify_loss_causes(b))
+
+    def test_variance_fires_from_engine_reason(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(loss_reason='variance')
+        self.assertIn('variance', _classify_loss_causes(b))
+
+    def test_unknown_when_nothing_fires(self):
+        """A clean bet (positive CLV, fresh odds, fat edge, +odds, high
+        confidence, no engine reason) that lost still gets 'unknown' so
+        the list is never empty."""
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(
+            clv_direction='positive', clv_cents=0.05,
+            closing_odds_american=110, odds_american=110,
+            expected_edge=Decimal('6.0'),
+            recommendation_confidence=Decimal('65.0'),
+        )
+        self.assertEqual(_classify_loss_causes(b), ['unknown'])
+
+    def test_multiple_causes_fire_simultaneously(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(
+            clv_direction='negative',
+            expected_edge=Decimal('3.0'),
+            odds_american=-200,
+        )
+        causes = _classify_loss_causes(b)
+        self.assertIn('negative_clv', causes)
+        self.assertIn('thin_edge', causes)
+        self.assertIn('heavy_juice', causes)
+        # Order: negative_clv first (most actionable per the spec'd order).
+        self.assertEqual(causes[0], 'negative_clv')
+
+    def test_non_loss_returns_empty_list(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_loss_causes
+        b = self._bet(result='win', simulated_payout=Decimal('91'))
+        self.assertEqual(_classify_loss_causes(b), [])
+
+
+class MoneylineEvaluationPacketTests(TestCase):
+    """The markdown packet must contain every spec'd section."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('packet_user', password='x')
+
+    def _bet(self, result='loss', placed_days_ago=1):
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('91') if result == 'win' else None,
+            result=result,
+            is_system_generated=True,
+            expected_edge=Decimal('5.0'),
+            recommendation_status='recommended',
+            recommendation_tier='standard',
+            recommendation_confidence=Decimal('60.0'),
+        )
+        bet.placed_at = timezone.now() - timedelta(days=placed_days_ago)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    def test_packet_contains_required_sections(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        self._bet(result='loss')
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+        )
+        packet = report['packet_markdown']
+        for header in (
+            '# Brother Willies Moneyline Evaluation Packet',
+            '## Date Range',
+            '## Executive Summary',
+            '## Recommended Bets',
+            '## Bucket Performance',
+            '### By Edge',
+            '### By Model Confidence',
+            '### By Odds Type',
+            '### By Source',
+            '## Loss Review',
+            '## Questions for Analysis',
+        ):
+            self.assertIn(header, packet, f'missing section: {header}')
+
+    def test_packet_renders_with_no_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import build_evaluation_report
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+        )
+        # Empty range still produces a packet (with the empty-state copy).
+        self.assertIn('# Brother Willies Moneyline Evaluation Packet', report['packet_markdown'])
+        self.assertIn('No bets in this range', report['packet_markdown'])
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MoneylineEvaluationAccessTests(TestCase):
+    """Staff-only — non-staff get 404, anon redirects to login."""
+
+    def setUp(self):
+        self.staff = User.objects.create_user('eval_staff', password='x', is_staff=True)
+        self.normal = User.objects.create_user('eval_normal', password='x')
+        self.client = Client()
+
+    def test_staff_can_load_page(self):
+        self.client.force_login(self.staff)
+        resp = self.client.get('/mockbets/moneyline-evaluation/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Moneyline Evaluation')
+        self.assertContains(resp, 'Copy Evaluation Packet')
+
+    def test_non_staff_gets_404(self):
+        self.client.force_login(self.normal)
+        resp = self.client.get('/mockbets/moneyline-evaluation/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_anon_redirected_to_login(self):
+        resp = self.client.get('/mockbets/moneyline-evaluation/')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.url)
+
+
+class MoneylineEvaluationOddsTypeClassifierTests(TestCase):
+    """Spec mandates 4 odds-type buckets with explicit boundaries."""
+
+    def test_underdog_at_plus_100(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
+        self.assertEqual(_classify_odds_type(100), 'underdog')
+        self.assertEqual(_classify_odds_type(150), 'underdog')
+
+    def test_short_favorite_in_pickem_zone(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
+        self.assertEqual(_classify_odds_type(99), 'short_favorite')
+        self.assertEqual(_classify_odds_type(-110), 'short_favorite')
+        self.assertEqual(_classify_odds_type(-149), 'short_favorite')
+
+    def test_favorite_band(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
+        self.assertEqual(_classify_odds_type(-150), 'favorite')
+        self.assertEqual(_classify_odds_type(-200), 'favorite')
+        self.assertEqual(_classify_odds_type(-300), 'favorite')
+
+    def test_heavy_favorite_below_minus_300(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
+        self.assertEqual(_classify_odds_type(-301), 'heavy_favorite')
+        self.assertEqual(_classify_odds_type(-500), 'heavy_favorite')
+
+    def test_none_input(self):
+        from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
+        self.assertIsNone(_classify_odds_type(None))

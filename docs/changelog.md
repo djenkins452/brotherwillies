@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-05-03 - Moneyline Evaluation page (staff-only)
+
+**Summary:** New staff diagnostic at `/mockbets/moneyline-evaluation/` for slate post-mortems. Pulls a date-bounded view of moneyline bets across ALL users (engine-performance evaluation, not user behavior) and produces a structured packet plus a copy-paste markdown blob ready for ChatGPT/Claude. Workflow: pick range → click Run Evaluation → copy packet → paste into chat.
+
+### Where the data comes from
+
+Every signal already lives on `MockBet` (snapshot fields populated at placement time): `expected_edge`, `recommendation_status/tier/confidence`, `status_reason`, `loss_reason`, `clv_cents`, `clv_direction`, `closing_odds_american`, `odds_source`, `is_system_generated`. The new service composes them; nothing is recomputed.
+
+### Architecture
+
+- **NEW** `apps/mockbets/services/moneyline_evaluation.py` — pure functions: `build_evaluation_report(bets_qs, date_from, date_to, include_manual)` returns `{ date_range, executive_summary, bets, buckets, loss_review, packet_markdown }`. Reuses `_group_stats` for ROI/CLV math, `compute_data_confidence` for sample-size band.
+- **NEW** view `moneyline_evaluation_view` (staff-only `Http404` gate) at `/mockbets/moneyline-evaluation/`.
+- **NEW** template `templates/mockbets/moneyline_evaluation.html` — minimal: filter bar, big executive-summary tiles, loss review (most prominent), bucket performance, collapsible per-bet detail, copy-packet button.
+- Profile dropdown (staff) + System Tuning header link.
+
+### Filters
+
+- Quick ranges: Yesterday (default) / Today / Last 7 / Last 30
+- Custom from/to date inputs
+- "Include manual" toggle (default OFF; only system-generated bets in scope by default)
+- Always: `bet_type='moneyline'`. Date semantics: **placement date** inclusive on both endpoints.
+
+### Bucket boundaries (chosen for engine-relevant thresholds)
+
+- **Edge:** 3-4 / 4-6 / 6-8 / 8+pp (engine `MIN_EDGE = 3.0`)
+- **Confidence:** 55-60 / 60-65 / 65-70 / 70+% (engine min prob = 0.55)
+- **Odds type:** underdog (≥+100) / short_favorite (-149..+99) / favorite (-300..-150) / heavy_favorite (≤-301)
+- **Source:** odds_api / espn / manual / unknown
+
+### Multi-cause loss classifier (deterministic, rule-based)
+
+For each lost bet, every firing rule is captured (not just the first), in actionability order:
+
+1. `negative_clv` — `clv_direction == 'negative'`
+2. `stale_odds` — settled bet with no `closing_odds_american` (proxy for stale data feed at game start)
+3. `thin_edge` — `expected_edge < 4.0`
+4. `heavy_juice` — `odds_american <= -150`
+5. `low_confidence` — `recommendation_confidence < 60`
+6. `market_moved_against` — engine `loss_reason == 'market_movement'`
+7. `variance` — engine `loss_reason == 'variance'`
+8. `unknown` — fallback when nothing fires
+
+Display: primary cause = first firing rule, secondary = remaining tags.
+
+### Markdown packet
+
+Single source of truth — same dicts feed the on-page render and the markdown. Pre-rendered server-side, exposed in a `<textarea readonly>`. JS one-liner uses `navigator.clipboard.writeText` with execCommand fallback. Sections: Date Range, Executive Summary, Recommended Bets (table), Bucket Performance (4 sub-tables), Loss Review (per-bet causes), Questions for Analysis.
+
+### Tests (27 new)
+
+Filter scope (moneyline-only, date-range inclusive endpoints, manual toggle), executive summary math, every loss-cause rule (one test per cause + a multi-cause test + a non-loss test that returns empty), packet contains every required section, packet renders with empty data, odds-type classifier boundaries (4 buckets at every transition), staff-only access (404 for non-staff, 302 for anon).
+
+Full app suite: 968/969 (only the pre-existing `feedback.tests` ImportError).
+
+### What this does NOT do
+
+- **No engine changes.** No threshold tuning, no automatic adjustments. Strictly an evaluation workflow.
+- **No new schema fields.** Every field used already existed on `MockBet`.
+- **No LLM.** All classification is rule-based and deterministic.
+
+---
+
 ## 2026-05-02 - MLB tile: persistent "MY PICK" row + ✓ Bet Placed button
 
 **Summary:** Restores instant per-tile feedback for the user's pending bets without requiring a click or hover. Bridges the gap left when the decision-first tile rewrite removed the legacy "Your Bet · selection (odds)" action chip.
