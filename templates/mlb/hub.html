@@ -208,8 +208,20 @@
   </script>
   {% endif %}
 
+  {% comment %}
+    Focus banner — anchored on a Recommended-status game only (2026-05-03
+    contract). When no recommended game is available we render a small
+    empty-state line in its place rather than silently hiding the slot,
+    so the user sees an explicit "no strong plays" state rather than
+    wondering whether the banner is missing.
+  {% endcomment %}
   {% if focus %}
     {% include "mlb/_focus_banner.html" with focus=focus %}
+  {% else %}
+    <div class="mlb-focus-empty" role="status" aria-live="polite">
+      <span class="mlb-focus-empty__icon" aria-hidden="true">🟡</span>
+      <span class="mlb-focus-empty__text">No strong plays right now</span>
+    </div>
   {% endif %}
 
   {% comment %}

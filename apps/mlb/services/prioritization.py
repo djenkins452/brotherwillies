@@ -329,13 +329,30 @@ def resolve_actions(s: 'GameSignals') -> list[dict]:
     """
     actions: list[dict] = []
 
-    # Best Bet eligibility
+    # Best Bet eligibility.
+    # 2026-05-03 contract tighten: "Best Bet" is reserved for games whose
+    # recommendation engine status is 'recommended'. Previously a tight
+    # spread or line-value signal alone was enough — that produced the
+    # contradiction where the same tile carried "Best Bet" while sitting
+    # in the Not Recommended section. Now the badge requires both the
+    # signal AND the engine's blessing. Games without a recommendation
+    # (no odds yet) or with status='not_recommended' / 'blocked' / 'value'
+    # never get the badge — they can still earn watch_now from live-game
+    # signals below.
     bb_reason = None
     odds = s.latest_odds
+    rec = s.recommendation
+    rec_is_recommended = (
+        rec is not None
+        and getattr(rec, 'status', '') == 'recommended'
+        and not getattr(rec, 'is_secondary', False)
+        and getattr(rec, 'tier', '') != 'blocked'
+    )
     if (
         odds is not None
         and s.pitchers_known
         and not s.is_blowout
+        and rec_is_recommended
     ):
         if 'line_value' in s.reasons:
             bb_reason = 'line_value'
@@ -621,17 +638,22 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
     Priority order (first hit wins):
       1. Highest-edge elite-tier recommendation (slate cap already applied).
       2. Highest-edge recommended-status recommendation.
-      3. Legacy fallback: primary action (best_bet > watch_now) above the
-         `_FOCUS_SIGNAL_FLOOR`. This covers games with signal-layer flags
-         (ace matchup, close spread) but no actionable decision — we don't
-         want Focus blank, but we also don't want a 20%-confidence game to
-         read as the headline.
+
+    Layer 3 — legacy signal-based fallback — was removed 2026-05-03. It
+    used to surface games with a `best_bet` or `watch_now` action above
+    the signal floor even when no recommendation existed; that produced
+    a contradiction where the "Focus Right Now" headline pointed to a
+    game classified as Not Recommended. Per spec: Focus is reserved for
+    games whose recommendation engine status is 'recommended'.
 
     Games where the user has already placed a bet are skipped at every
     layer — Focus exists to surface a *new* opportunity, not restate a
     user's action. Their bet is visible on the tile itself.
 
-    Returns None when nothing clears the bar; the banner is simply omitted.
+    Returns None when no recommended game is available — the hub template
+    renders a "No strong plays right now" empty state in place of the
+    banner. Post-condition asserted on return: the focused game's
+    recommendation status is always 'recommended'.
     """
     def _no_user_bet(s):
         return not getattr(s, 'has_user_bet', False) and not s.user_bet_id
@@ -664,10 +686,14 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
             str(s.game.id),
         )
 
-    # Layer 1 — elite-tier recommendation (slate cap already enforced upstream)
+    # Layer 1 — elite-tier recommendation (slate cap already enforced upstream).
+    # Note: 'elite' tier requires status='recommended' upstream — the
+    # disagreement-cap downgrade and value-tier reclassification only run
+    # AFTER status is set, so an elite tier here always implies recommended.
     elites = [s for s in signals_list
               if s.recommendation is not None
               and getattr(s.recommendation, 'tier', '') == 'elite'
+              and getattr(s.recommendation, 'status', '') == 'recommended'
               and _is_trusted_primary(s)
               and _no_user_bet(s)]
     if elites:
@@ -682,47 +708,22 @@ def get_focus_game(signals_list: list[GameSignals]) -> GameSignals | None:
                    and _no_user_bet(s)]
     if recommended:
         recommended.sort(key=_edge_key)
-        return recommended[0]
+        focus = recommended[0]
+        # Post-condition: a Focus banner can ONLY anchor on a game whose
+        # recommendation engine said 'recommended'. The legacy signal-
+        # based fallback (tight-spread / line-value with no recommendation)
+        # was removed 2026-05-03 because it produced the contradiction
+        # where the page-top "Focus Right Now" pointed to a game sitting
+        # in the Not Recommended section.
+        assert focus.recommendation is not None and \
+            focus.recommendation.status == 'recommended', \
+            'get_focus_game contract: returned game must be Recommended'
+        return focus
 
-    # Layer 3 — legacy fallback: primary actions above the signal floor. This
-    # keeps the old behavior alive for games with strong signals (ace matchup,
-    # tight spread) but lacking a Recommended-status pick. We still gate on
-    # the trust filter so a derived/blocked-rec game can never anchor Focus
-    # via the signal-based path either.
-    candidates = []
-    for s in signals_list:
-        # Block if the (possibly non-recommended) rec on this game is
-        # blocked or based on derived odds. Games with rec=None pass —
-        # the signal-based path is supposed to cover them.
-        if s.recommendation is not None and (
-            getattr(s.recommendation, 'tier', '') == 'blocked'
-            or getattr(s.recommendation, 'status_reason', '') == 'derived_odds'
-        ):
-            continue
-        primary = next((a for a in s.actions if a['strength'] == 'primary'), None)
-        if primary is None or primary['type'] == 'bet_placed':
-            continue
-        if s.confidence < _FOCUS_SIGNAL_FLOOR:
-            continue
-        candidates.append((s, primary))
-    if not candidates:
-        return None
-
-    type_rank = {'best_bet': 0, 'watch_now': 1}
-
-    def _legacy_key(pair):
-        s, primary = pair
-        is_live = getattr(s.game, 'status', '') == 'live'
-        return (
-            type_rank.get(primary['type'], 9),
-            -s.confidence,
-            -0.0001 if is_live else 0.0,
-            s.game.first_pitch,
-            str(s.game.id),
-        )
-
-    candidates.sort(key=_legacy_key)
-    return candidates[0][0]
+    # 2026-05-03: legacy Layer-3 fallback removed. When no recommended
+    # game is available the focus banner is suppressed. The hub template
+    # renders a "No strong plays right now" empty state in its place.
+    return None
 
 
 def sort_live(signals: list[GameSignals]) -> list[GameSignals]:

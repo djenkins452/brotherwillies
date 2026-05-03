@@ -660,11 +660,27 @@ class MLBActionResolverTests(TestCase):
         self.assertIn('watch_now', self._types(s.actions))
 
     def test_tight_spread_with_both_pitchers_gets_best_bet(self):
+        """2026-05-03 contract tighten: best_bet now requires recommendation
+        status='recommended' in addition to the tight-spread signal. We
+        configure rating gap + moneylines so the engine produces a
+        Recommended pick on the same game."""
         from apps.mlb.services.prioritization import build_signals
-        g = self._game(ext='tb')
-        self._add_odds(g, spread=1.0)
+        g = self._game(home_rating=90.0, away_rating=10.0, ext='tb')
+        self._add_odds(g, spread=1.0, ml_home=-110, ml_away=-110)
         s = build_signals(g)
         self.assertIn('best_bet', self._types(s.actions))
+
+    def test_tight_spread_without_recommendation_does_NOT_get_best_bet(self):
+        """Spec contract: best_bet ONLY fires when the recommendation
+        engine status is 'recommended'. A tight-spread signal alone
+        (without moneyline odds → no recommendation) should leave the
+        tile in the no-action state."""
+        from apps.mlb.services.prioritization import build_signals
+        g = self._game(ext='tbnr')
+        # Spread odds present but no moneyline → no recommendation possible.
+        self._add_odds(g, spread=1.0)
+        s = build_signals(g)
+        self.assertNotIn('best_bet', self._types(s.actions))
 
     def test_tbd_pitcher_never_gets_best_bet(self):
         from apps.mlb.services.prioritization import build_signals
@@ -683,13 +699,18 @@ class MLBActionResolverTests(TestCase):
         self.assertTrue(s.is_blowout)
 
     def test_best_bet_is_primary_when_both_fire(self):
+        """2026-05-03: best_bet now requires recommendation status; rating
+        gap + moneylines added so the engine produces a Recommended pick
+        on the same live tight-spread game."""
         from apps.mlb.services.prioritization import build_signals
-        # Ace live game + tight spread — both should fire, Best Bet primary.
+        # Ace live game + tight spread + recommended pick — all three fire,
+        # Best Bet remains primary.
         g = self._game(
             status='live', home_score=2, away_score=1,
             hp_rating=80.0, ap_rating=72.0, ext='bbprim',
+            home_rating=90.0, away_rating=10.0,
         )
-        self._add_odds(g, spread=1.0)
+        self._add_odds(g, spread=1.0, ml_home=-110, ml_away=-110)
         s = build_signals(g)
         primaries = [a for a in s.actions if a['strength'] == 'primary']
         self.assertEqual(len(primaries), 1)
@@ -1057,8 +1078,12 @@ class MLBLateGameProxyTests(TestCase):
 
 class MLBTopOpportunityTests(TestCase):
     def _make_best_bet_game(self, ext, spread=1.0, hp_rating=60.0):
-        home = _mk_team('TH' + ext, 50.0, 'th' + ext)
-        away = _mk_team('TA' + ext, 50.0, 'ta' + ext)
+        # 2026-05-03: best_bet now requires a Recommended pick. Bumped
+        # rating gap to 90/10 + added moneyline odds so each fixture
+        # produces a genuine engine recommendation, which in turn lets
+        # the best_bet action fire.
+        home = _mk_team('TH' + ext, 90.0, 'th' + ext)
+        away = _mk_team('TA' + ext, 10.0, 'ta' + ext)
         hp = _mk_pitcher(home, 'HP', hp_rating, 'thp' + ext)
         ap = _mk_pitcher(away, 'AP', 50.0, 'tap' + ext)
         g = Game.objects.create(
@@ -1071,6 +1096,7 @@ class MLBTopOpportunityTests(TestCase):
         OddsSnapshot.objects.create(
             game=g, captured_at=timezone.now(),
             market_home_win_prob=0.5, spread=spread,
+            moneyline_home=-110, moneyline_away=-110,
         )
         return g
 
@@ -1211,12 +1237,21 @@ class MLBConfidenceTests(TestCase):
         self.assertEqual(s.confidence_pct, int(round(s.confidence * 100)))
 
     def test_primary_action_carries_confidence(self):
+        """2026-05-03: best_bet now requires a Recommended pick. We need
+        a rating gap + moneyline odds so the engine emits one."""
         from apps.mlb.models import OddsSnapshot
         from apps.mlb.services.prioritization import build_signals
-        g = self._game('c6')
+        g = self._game('c6', hp=90.0, ap=10.0)
+        # Reset rating on the home team to a higher value so the model
+        # produces a Recommended pick.
+        g.home_team.rating = 90.0
+        g.home_team.save()
+        g.away_team.rating = 10.0
+        g.away_team.save()
         OddsSnapshot.objects.create(
             game=g, captured_at=timezone.now(),
             market_home_win_prob=0.5, spread=1.0,
+            moneyline_home=-110, moneyline_away=-110,
         )
         s = build_signals(g)
         primary = next(a for a in s.actions if a['strength'] == 'primary')
@@ -1224,9 +1259,18 @@ class MLBConfidenceTests(TestCase):
 
 
 class MLBFocusEngineTests(TestCase):
-    def _bb_game(self, ext, *, home_win_prob=0.5, spread=1.0):
-        home = _mk_team('FH' + ext, 50.0, 'fh' + ext)
-        away = _mk_team('FA' + ext, 50.0, 'fa' + ext)
+    def _bb_game(self, ext, *, home_win_prob=0.5, spread=1.0,
+                 home_rating=90.0, away_rating=10.0,
+                 ml_home=-110, ml_away=-110):
+        """2026-05-03: defaults updated so each game produces a
+        Recommended-status pick out of the box. Focus banner is now
+        anchored on Recommended only — tests that want a focus need
+        ratings + moneylines that clear the engine gates.
+
+        Override `home_rating` / `away_rating` to test the no-rec case.
+        """
+        home = _mk_team('FH' + ext, home_rating, 'fh' + ext)
+        away = _mk_team('FA' + ext, away_rating, 'fa' + ext)
         hp = _mk_pitcher(home, 'HP', 60.0, 'fhp' + ext)
         ap = _mk_pitcher(away, 'AP', 50.0, 'fap' + ext)
         g = Game.objects.create(
@@ -1239,6 +1283,7 @@ class MLBFocusEngineTests(TestCase):
         OddsSnapshot.objects.create(
             game=g, captured_at=timezone.now(),
             market_home_win_prob=home_win_prob, spread=spread,
+            moneyline_home=ml_home, moneyline_away=ml_away,
         )
         return g
 
@@ -1257,22 +1302,65 @@ class MLBFocusEngineTests(TestCase):
         self.assertIsNone(get_focus_game(signals))
 
     def test_picks_highest_confidence_best_bet(self):
+        """Focus picks the higher-edge recommended game. 2026-05-03:
+        previously this test relied on the legacy signal-layer fallback;
+        now it asserts the edge-DESC sort within the recommended pool."""
         from apps.mlb.services.prioritization import get_focus_game, prioritize
-        # weak: tight spread but market near model prob → no line_value signal
-        weak = self._bb_game('weak', home_win_prob=0.62, spread=1.5)
-        # strong: tight spread + huge line-value delta → saturated confidence
-        strong = self._bb_game('strong', home_win_prob=0.20, spread=1.0)
+        # Both games are recommended (90/10 default rating gap). 'strong'
+        # has a tighter rating contest (smaller pre-blend prob) but with
+        # market agreeing more, post-blend prob lands higher → bigger
+        # edge vs the 50/50 de-vigged market. We test that the focus
+        # engine picks by edge, not by which game has more "signals".
+        weak = self._bb_game('weak', home_win_prob=0.62,
+                             home_rating=70.0, away_rating=30.0)
+        strong = self._bb_game('strong', home_win_prob=0.62,
+                               home_rating=90.0, away_rating=10.0)
         signals = prioritize([weak, strong])
         focus = get_focus_game(signals)
         self.assertEqual(focus.game.external_id, 'strong')
 
+    def test_focus_is_none_when_no_recommended_games(self):
+        """2026-05-03 spec contract: when no game has status='recommended',
+        Focus banner is suppressed. The hub renders 'No strong plays
+        right now' in its place."""
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        # Equal-rating teams + balanced market = no recommendation. Tight
+        # spread alone (signal-layer) used to anchor Focus via the legacy
+        # Layer-3 fallback; that fallback has been removed.
+        g = self._bb_game(
+            'norec', home_win_prob=0.50, spread=1.0,
+            home_rating=50.0, away_rating=50.0,  # no model edge
+        )
+        signals = prioritize([g])
+        focus = get_focus_game(signals)
+        self.assertIsNone(focus)
+
+    def test_focus_post_condition_holds(self):
+        """get_focus_game's post-condition: returned game's recommendation
+        status is always 'recommended'. Mixed slate test — even when other
+        games have signals, focus only anchors on the recommended one."""
+        from apps.mlb.services.prioritization import get_focus_game, prioritize
+        # Game A: rated, recommended.
+        rec = self._bb_game('rec-game', home_win_prob=0.50)
+        # Game B: equal ratings → no recommendation. Tight spread present
+        # but it should NOT anchor focus.
+        non_rec = self._bb_game(
+            'sig-only', home_win_prob=0.50, spread=1.0,
+            home_rating=50.0, away_rating=50.0,
+        )
+        signals = prioritize([rec, non_rec])
+        focus = get_focus_game(signals)
+        self.assertIsNotNone(focus)
+        self.assertEqual(focus.game.external_id, 'rec-game')
+        self.assertEqual(focus.recommendation.status, 'recommended')
+
     def test_best_bet_preferred_over_watch_now(self):
         from apps.mlb.services.prioritization import get_focus_game, prioritize
-        # 2026-05-03 calibration tighten: default home_win_prob=0.5 with
-        # equal-rating teams produces ~0 edge under MIN_EDGE=5.0 → no
-        # Best Bet fires. Force a market that creates a meaningful
-        # moneyline edge to give this test a real Best Bet candidate.
-        bb = self._bb_game('bbf', home_win_prob=0.20)
+        # 2026-05-03 calibration + Best Bet contract tighten: this test
+        # needs a properly Recommended pick so it can be selected as
+        # focus. _bb_game defaults (90/10 ratings, ML -110/-110) produce
+        # exactly that — no need to override home_win_prob.
+        bb = self._bb_game('bbf')
         # Watch Now only: close live with no odds.
         home = _mk_team('WH', 50.0, 'wh')
         away = _mk_team('WA', 50.0, 'wa')
@@ -1319,8 +1407,11 @@ class MLBBetPlacedActionTests(TestCase):
         from apps.mockbets.models import MockBet
         User = get_user_model()
         u = User.objects.create_user(username='bp_user', password='x')
-        home = _mk_team('BPH', 50.0, 'bph')
-        away = _mk_team('BPA', 50.0, 'bpa')
+        # 2026-05-03: best_bet (the secondary action this test asserts)
+        # now requires a Recommended pick. Ratings + moneylines give the
+        # engine enough signal to produce one.
+        home = _mk_team('BPH', 90.0, 'bph')
+        away = _mk_team('BPA', 10.0, 'bpa')
         hp = _mk_pitcher(home, 'HP', 60.0, 'bphp')
         ap = _mk_pitcher(away, 'AP', 50.0, 'bpap')
         g = Game.objects.create(
@@ -1332,6 +1423,7 @@ class MLBBetPlacedActionTests(TestCase):
         OddsSnapshot.objects.create(
             game=g, captured_at=timezone.now(),
             market_home_win_prob=0.5, spread=1.0,
+            moneyline_home=-110, moneyline_away=-110,
         )
         bet = MockBet.objects.create(
             user=u, sport='mlb', mlb_game=g,
@@ -1972,33 +2064,28 @@ class FocusGameSelectionTests(TestCase):
         weak = self._fake_signal(confidence=0.2, primary_type='watch_now', rec=None)
         self.assertIsNone(get_focus_game([weak]))
 
-    def test_strong_signal_without_rec_still_focused(self):
-        """Legacy fallback — if a game has a strong signal (e.g. 50%) but
-        no actionable recommendation, it still gets surfaced."""
+    def test_strong_signal_without_rec_NO_LONGER_focused(self):
+        """2026-05-03 contract: 'Best Bet' / Focus is reserved for games
+        whose recommendation engine status is 'recommended'. Signal-layer
+        flags alone (tight spread, line value, ace matchup) no longer
+        promote a game to focus. The legacy Layer-3 fallback was removed
+        because it produced the contradiction where 'Focus Right Now'
+        pointed to games sitting in the Not Recommended section."""
         from apps.mlb.services.prioritization import get_focus_game
         s = self._fake_signal(confidence=0.5, primary_type='best_bet', rec=None)
-        self.assertIs(get_focus_game([s]), s)
+        self.assertIsNone(get_focus_game([s]))
 
     def test_not_recommended_rec_does_not_win_focus(self):
         """A game whose rec was DECLINED by the decision rules shouldn't take
-        the Focus slot — that would contradict the UI telling users "don't bet"."""
+        the Focus slot — that would contradict the UI telling users 'don't
+        bet'. Post-2026-05-03 the legacy Layer-3 fallback is gone, so this
+        rule applies regardless of signal-layer confidence."""
         from apps.mlb.services.prioritization import get_focus_game
         declined = self._fake_signal(
             game_id='d', confidence=0.5, primary_type='watch_now',
             rec=self._fake_rec(status='not_recommended', edge=3.0),
         )
-        # no other candidates qualify — legacy layer 3 falls back via watch_now
-        # floor=0.35, so 0.5 signal passes and declined gets focus via Layer 3.
-        # That's fine: at least the banner represents the actual strongest signal.
-        # The key assertion is the rec's status='not_recommended' didn't promote
-        # it via Layers 1 or 2. We verify that by isolating: single declined rec
-        # with LOW signal confidence → no focus (would have been focused if
-        # recs-with-not_recommended-status were picked up).
-        weak_declined = self._fake_signal(
-            game_id='weak', confidence=0.2, primary_type='watch_now',
-            rec=self._fake_rec(status='not_recommended', edge=3.0),
-        )
-        self.assertIsNone(get_focus_game([weak_declined]))
+        self.assertIsNone(get_focus_game([declined]))
 
 
 class DisplayConfidenceTests(TestCase):

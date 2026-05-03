@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-03 - Best Bet contract tighten: only Recommended games qualify
+
+**Summary:** Removes the contradiction where "Best Bet" / "Focus Right Now" could surface a game classified as Not Recommended. Two changes:
+
+1. **`resolve_actions`**: the `best_bet` action only fires when the underlying recommendation has `status == 'recommended'` AND is primary-source AND not blocked. Signal-layer flags (tight spread, line value) are now necessary but no longer sufficient.
+
+2. **`get_focus_game`**: legacy Layer-3 fallback removed. The function now returns either a Recommended game or `None`. Post-condition asserted: `focus is None or focus.recommendation.status == 'recommended'`.
+
+### UI
+
+- Hub template renders "🟡 No strong plays right now" in place of the focus banner when `get_focus_game()` returns `None`.
+- The empty-state line is muted, dashed-border — visually subordinate to the active focus banner.
+
+### Test updates
+
+| Test | Change |
+|---|---|
+| `test_strong_signal_without_rec_NO_LONGER_focused` | INVERTED — the legacy "signal alone is enough" behavior now correctly returns `None` |
+| `test_not_recommended_rec_does_not_win_focus` | simplified — the not_recommended rec with high signal confidence is now suppressed without the legacy-Layer-3 workaround |
+| `test_tight_spread_with_both_pitchers_gets_best_bet` | + moneylines + 90/10 ratings so the engine emits a recommendation |
+| `test_tight_spread_without_recommendation_does_NOT_get_best_bet` | NEW — explicit assertion that signal-only games no longer qualify |
+| `test_best_bet_is_primary_when_both_fire` | + moneylines + 90/10 ratings |
+| `test_picks_highest_confidence_best_bet` | restructured to test edge-DESC sort within the recommended pool |
+| `test_focus_is_none_when_no_recommended_games` | NEW — explicit assertion that focus is None on a slate with no recs |
+| `test_focus_post_condition_holds` | NEW — mixed slate, focus is the recommended game even when others have signals |
+| `test_primary_action_carries_confidence` | + moneylines + 90/10 ratings |
+| `test_pending_bet_makes_bet_placed_primary` | + moneylines + 90/10 ratings (so the secondary best_bet still surfaces) |
+| `test_only_one_top_opportunity_by_default` + `test_n_is_configurable` | `_make_best_bet_game` helper updated to produce real recommendations |
+| `_bb_game` helper defaults bumped 50/50 → 90/10 + ml -110/-110 | so focus-engine tests get real Recommended picks |
+
+Full app suite: 1019/1020 (only the pre-existing `feedback.tests` ImportError).
+
+### Honest caveats
+
+- **Test fixtures with rating gaps under ~80 points may now fail.** The 30% market blend + 0.60 probability gate combine to require a much bigger pre-blend rating gap than before. Tests adopting `_bb_game` defaults (90/10) get a Recommended pick out of the box.
+- **The `_FOCUS_SIGNAL_FLOOR` constant** (used by the removed Layer 3) is now dead code. Preserved in source for diff cleanliness; can be removed in a follow-up.
+
+---
+
 ## 2026-05-03 - Calibration tighten: heavier shrink, tighter thresholds, disagreement cap
 
 **Summary:** Engine calibration tune driven by yesterday's evaluation showing too many recommendations producing negative CLV. Three coordinated changes pull the model harder toward the de-vigged market and concentrate recommendations on higher-confidence picks. **Reversible:** every change is a constant flip — restoring the previous behavior is a one-line revert per file.
