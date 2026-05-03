@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-03 - Top nav: workflow refinement (ACT → TRACK → REVIEW → DIAGNOSE → IMPROVE)
+
+**Summary:** Top nav refined to match the actual system workflow with clearer labels, an added "My Bets" entry, and subtle icons. Five entries now read as: ⚾ MLB · 🎯 My Bets · 📊 Performance · 🔍 Evaluation · ⚙️ Tuning.
+
+### Changes from yesterday's bar
+
+| Position | Before | After | Why |
+|---|---|---|---|
+| 1 | Betting (`/mlb/`) | ⚾ MLB | More direct; matches the destination |
+| 2 | — | 🎯 My Bets (`/mockbets/`) | New — was buried in profile dropdown |
+| 3 | Analytics (`/mockbets/analytics/`) | 📊 Performance | "Performance" reads as the workflow step (review) |
+| 4 | Evaluation (staff) | 🔍 Evaluation (staff) | Unchanged |
+| 5 | System Tuning (staff) | ⚙️ Tuning (staff) | Shorter; same destination |
+
+### Active state
+
+- **MLB** is active on every sport hub: `/mlb/`, `/cfb/`, `/cbb/`, `/golf/` (matches the spec — the bottom nav handles which-sport, the top nav handles which-stage-of-workflow).
+- **My Bets** is active *only* on `/mockbets/` exactly. Important: a startswith match would incorrectly light up My Bets on `/mockbets/analytics/` etc. The exact-match rule prevents that.
+- **Performance / Evaluation / Tuning** match by path prefix.
+
+### Cleanup
+
+`My Mock Bets` removed from the profile dropdown (now in the top nav). MLB Diagnostic / Backtest Analytics / Command Center remain in the dropdown — those are deeper diagnostics that don't fit the primary workflow.
+
+### Tests (12 total, 5 added)
+
+Existing visibility / active-state tests updated for the new labels + added:
+- All 5 links present for staff; `My Bets` always present even for non-staff
+- Order assertion: MLB → My Bets → Performance → Evaluation → Tuning (left-to-right by source position)
+- MLB active on `/cfb/`, `/cbb/`, `/golf/` (cross-sport assertion)
+- My Bets active on `/mockbets/`, NOT active on `/mockbets/analytics/` (negative test for the exact-match rule)
+- "My Mock Bets" string absent from the profile dropdown
+
+Full app suite: 980/981 (only the pre-existing `feedback.tests` ImportError).
+
+---
+
 ## 2026-05-03 - Top nav: persistent Bet → Analyze bar
 
 **Summary:** New persistent text-only nav bar between the header and main content. Surfaces Analytics, Moneyline Evaluation, and System Tuning so staff can reach them in one click from anywhere. Distinct from the bottom nav (sport icons) so the page reads:

@@ -179,6 +179,13 @@ a:hover {
     color: var(--accent);
     box-shadow: inset 0 -2px 0 var(--accent);
 }
+.top-nav__icon {
+    display: inline-block;
+    margin-right: 2px;
+    font-size: 0.85em;
+    opacity: 0.85;
+    line-height: 1;
+}
 
 /* ========== Main Content ==========
    Top offset = header + top-nav. The 40px constant matches the rendered

@@ -54,7 +54,11 @@
                         <a href="/mlb/?diag=1" class="profile-dropdown-item">MLB Diagnostic</a>
                         <a href="/analytics/backtest/" class="profile-dropdown-item">Backtest Analytics</a>
                         {% endif %}
-                        <a href="/mockbets/" class="profile-dropdown-item">My Mock Bets</a>
+                        {% comment %}
+                          "My Mock Bets" moved to top nav as "My Bets" 2026-05-03.
+                          Removed here to keep the dropdown focused on
+                          user-account items (Profile / Preferences / docs / logout).
+                        {% endcomment %}
                         <a href="/profile/user-guide/" class="profile-dropdown-item">User Guide</a>
                         <a href="/profile/whats-new/" class="profile-dropdown-item">What's New</a>
                         {% if user.username == 'djenkins' or user.username == 'jsnyder' or user.username == 'msnyder' %}
@@ -89,23 +93,36 @@
       Active-state matching uses request.path with startswith semantics
       where appropriate (Betting matches any sport hub).
     {% endcomment %}
+    {% comment %}
+      Workflow order: ACT → TRACK → REVIEW → DIAGNOSE → IMPROVE.
+        MLB         act     → place bets on the slate
+        My Bets     track   → the bets you placed
+        Performance review  → ROI / win-rate / CLV trends
+        Evaluation  diagnose → slate post-mortem (staff)
+        Tuning      improve → engine health + advisory actions (staff)
+      Icons are subtle visual anchors only — labels carry the meaning.
+    {% endcomment %}
     <nav class="top-nav" aria-label="Primary navigation">
         <a href="/mlb/"
            class="top-nav__item{% if request.path == '/mlb/' or request.path == '/cfb/' or request.path == '/cbb/' or request.path == '/golf/' %} top-nav__item--active{% endif %}">
-            Betting
+            <span class="top-nav__icon" aria-hidden="true">⚾</span> MLB
+        </a>
+        <a href="/mockbets/"
+           class="top-nav__item{% if request.path == '/mockbets/' %} top-nav__item--active{% endif %}">
+            <span class="top-nav__icon" aria-hidden="true">🎯</span> My Bets
         </a>
         <a href="/mockbets/analytics/"
            class="top-nav__item{% if request.path|slice:':19' == '/mockbets/analytics' %} top-nav__item--active{% endif %}">
-            Analytics
+            <span class="top-nav__icon" aria-hidden="true">📊</span> Performance
         </a>
         {% if user.is_staff %}
         <a href="/mockbets/moneyline-evaluation/"
            class="top-nav__item{% if request.path|slice:':30' == '/mockbets/moneyline-evaluation' %} top-nav__item--active{% endif %}">
-            Evaluation
+            <span class="top-nav__icon" aria-hidden="true">🔍</span> Evaluation
         </a>
         <a href="/mockbets/system-tuning/"
            class="top-nav__item{% if request.path|slice:':23' == '/mockbets/system-tuning' %} top-nav__item--active{% endif %}">
-            System Tuning
+            <span class="top-nav__icon" aria-hidden="true">⚙️</span> Tuning
         </a>
         {% endif %}
     </nav>

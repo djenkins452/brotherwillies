@@ -1,9 +1,13 @@
 """Top-nav rendering tests.
 
-The persistent top-nav surfaces Betting + Analytics for everyone, plus
-Evaluation + System Tuning for staff. Active-state class is set based
-on request.path. These tests guard the discoverability contract — if a
-page rename or template refactor breaks the nav, this catches it.
+The persistent top-nav follows the workflow ACT → TRACK → REVIEW →
+DIAGNOSE → IMPROVE:
+
+    MLB | My Bets | Performance | Evaluation (staff) | Tuning (staff)
+
+Active-state class is set based on request.path. These tests guard
+the discoverability contract — if a page rename or template refactor
+breaks the nav, this catches it.
 """
 from django.contrib.auth.models import User
 from django.test import TestCase, Client, override_settings
@@ -23,18 +27,23 @@ class TopNavRenderTests(TestCase):
 
     # --- Link visibility per role ------------------------------------------
 
-    def test_staff_sees_all_four_links(self):
+    def test_staff_sees_all_five_links(self):
         c = Client()
         c.force_login(self.staff)
         resp = c.get('/mockbets/analytics/')
         body = resp.content.decode('utf-8')
-        # Bar present
         self.assertIn('class="top-nav"', body)
-        # All four links
+        # All five links present, in any order — order is asserted separately.
         self.assertIn('href="/mlb/"', body)
+        self.assertIn('href="/mockbets/"', body)
         self.assertIn('href="/mockbets/analytics/"', body)
         self.assertIn('href="/mockbets/moneyline-evaluation/"', body)
         self.assertIn('href="/mockbets/system-tuning/"', body)
+        # New labels, not the old ones.
+        self.assertIn('Performance', body)
+        self.assertIn('My Bets', body)
+        self.assertNotIn('>Betting<', body)  # old label gone
+        self.assertNotIn('>Analytics<', body)  # old label gone (the heading)
 
     def test_non_staff_sees_only_public_links(self):
         c = Client()
@@ -43,6 +52,7 @@ class TopNavRenderTests(TestCase):
         body = resp.content.decode('utf-8')
         self.assertIn('class="top-nav"', body)
         self.assertIn('href="/mlb/"', body)
+        self.assertIn('href="/mockbets/"', body)
         self.assertIn('href="/mockbets/analytics/"', body)
         # Staff-only links must NOT render — those pages 404 for non-staff,
         # so a visible link would just lead to a dead end.
@@ -50,48 +60,102 @@ class TopNavRenderTests(TestCase):
         self.assertNotIn('href="/mockbets/system-tuning/"', body)
 
     def test_anon_user_sees_public_links(self):
-        # Anonymous hitting the public lobby still gets the bar.
         c = Client()
         resp = c.get('/lobby/')
         body = resp.content.decode('utf-8')
         self.assertIn('class="top-nav"', body)
         self.assertIn('href="/mlb/"', body)
+        self.assertIn('href="/mockbets/"', body)
         self.assertNotIn('href="/mockbets/system-tuning/"', body)
+
+    # --- Order — spec mandates: MLB | My Bets | Performance | Eval | Tuning -
+
+    def test_link_order_is_workflow(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/analytics/').content.decode('utf-8')
+        # Ordered indices in the body — each must appear later than the
+        # previous one. assertLess gives a clear failure message if the
+        # nav drifts.
+        i_mlb       = body.find('href="/mlb/"')
+        i_mybets    = body.find('href="/mockbets/"')
+        i_perf      = body.find('href="/mockbets/analytics/"')
+        i_eval      = body.find('href="/mockbets/moneyline-evaluation/"')
+        i_tuning    = body.find('href="/mockbets/system-tuning/"')
+        self.assertLess(i_mlb, i_mybets, 'MLB must come before My Bets')
+        self.assertLess(i_mybets, i_perf, 'My Bets must come before Performance')
+        self.assertLess(i_perf, i_eval, 'Performance must come before Evaluation')
+        self.assertLess(i_eval, i_tuning, 'Evaluation must come before Tuning')
 
     # --- Active state -------------------------------------------------------
 
-    def test_analytics_link_active_on_analytics_page(self):
-        c = Client()
-        c.force_login(self.staff)
-        resp = c.get('/mockbets/analytics/')
-        body = resp.content.decode('utf-8')
-        # The Analytics anchor carries the --active modifier; the others
-        # don't. We assert by looking for the link's class string.
-        self.assertIn('href="/mockbets/analytics/"\n           class="top-nav__item top-nav__item--active"', body)
-
-    def test_betting_link_active_on_mlb_hub(self):
-        c = Client()
-        c.force_login(self.staff)
-        resp = c.get('/mlb/')
-        body = resp.content.decode('utf-8')
-        self.assertIn('href="/mlb/"\n           class="top-nav__item top-nav__item--active"', body)
-
-    def test_evaluation_link_active_on_evaluation_page(self):
-        c = Client()
-        c.force_login(self.staff)
-        resp = c.get('/mockbets/moneyline-evaluation/')
-        body = resp.content.decode('utf-8')
-        self.assertIn(
-            'href="/mockbets/moneyline-evaluation/"\n           class="top-nav__item top-nav__item--active"',
-            body,
+    def _expect_active(self, body, href):
+        marker = (
+            f'href="{href}"\n'
+            f'           class="top-nav__item top-nav__item--active"'
         )
+        self.assertIn(marker, body, f'expected --active class on link {href}')
 
-    def test_system_tuning_link_active_on_tuning_page(self):
+    def test_mlb_active_on_mlb_hub(self):
         c = Client()
         c.force_login(self.staff)
-        resp = c.get('/mockbets/system-tuning/')
-        body = resp.content.decode('utf-8')
-        self.assertIn(
-            'href="/mockbets/system-tuning/"\n           class="top-nav__item top-nav__item--active"',
+        body = c.get('/mlb/').content.decode('utf-8')
+        self._expect_active(body, '/mlb/')
+
+    def test_mlb_active_on_other_sport_hubs(self):
+        """Spec: MLB link is active on every sport hub page so the
+        user sees they're 'in the betting flow' regardless of which
+        sport they picked at the bottom."""
+        c = Client()
+        c.force_login(self.staff)
+        for path in ('/cfb/', '/cbb/', '/golf/'):
+            body = c.get(path).content.decode('utf-8')
+            self._expect_active(body, '/mlb/')
+
+    def test_my_bets_active_on_mockbets_root(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/').content.decode('utf-8')
+        self._expect_active(body, '/mockbets/')
+
+    def test_my_bets_NOT_active_on_analytics_page(self):
+        """A naive startswith match would also light up My Bets on
+        /mockbets/analytics/. The exact-match rule prevents that."""
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/analytics/').content.decode('utf-8')
+        # My Bets link present but NOT carrying --active
+        self.assertIn('href="/mockbets/"', body)
+        marker = 'href="/mockbets/"\n           class="top-nav__item top-nav__item--active"'
+        self.assertNotIn(marker, body)
+
+    def test_performance_active_on_analytics_page(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/analytics/').content.decode('utf-8')
+        self._expect_active(body, '/mockbets/analytics/')
+
+    def test_evaluation_active_on_evaluation_page(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/moneyline-evaluation/').content.decode('utf-8')
+        self._expect_active(body, '/mockbets/moneyline-evaluation/')
+
+    def test_tuning_active_on_tuning_page(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/system-tuning/').content.decode('utf-8')
+        self._expect_active(body, '/mockbets/system-tuning/')
+
+    # --- Cleanup ------------------------------------------------------------
+
+    def test_my_mock_bets_dropdown_link_removed(self):
+        """The duplicate 'My Mock Bets' entry was removed from the
+        profile dropdown when My Bets landed in the top nav."""
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/').content.decode('utf-8')
+        self.assertNotIn(
+            'class="profile-dropdown-item">My Mock Bets',
             body,
         )
