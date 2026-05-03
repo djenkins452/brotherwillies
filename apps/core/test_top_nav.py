@@ -118,14 +118,43 @@ class TopNavRenderTests(TestCase):
         body = c.get('/mockbets/').content.decode('utf-8')
         self._expect_active(body, '/mockbets/')
 
+    def test_my_bets_active_on_bet_detail_page(self):
+        """Bet detail pages live at /mockbets/<uuid>/ — they're a deep
+        slice of the user's bets, so they should highlight My Bets too."""
+        from decimal import Decimal
+        from apps.mockbets.models import MockBet
+        bet = MockBet.objects.create(
+            user=self.staff, sport='cfb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100.00'),
+        )
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get(f'/mockbets/{bet.id}/').content.decode('utf-8')
+        self._expect_active(body, '/mockbets/')
+
     def test_my_bets_NOT_active_on_analytics_page(self):
-        """A naive startswith match would also light up My Bets on
-        /mockbets/analytics/. The exact-match rule prevents that."""
+        """Sibling top-nav destinations under /mockbets/ must NOT
+        highlight My Bets — each is excluded explicitly in the rule."""
         c = Client()
         c.force_login(self.staff)
         body = c.get('/mockbets/analytics/').content.decode('utf-8')
-        # My Bets link present but NOT carrying --active
         self.assertIn('href="/mockbets/"', body)
+        marker = 'href="/mockbets/"\n           class="top-nav__item top-nav__item--active"'
+        self.assertNotIn(marker, body)
+
+    def test_my_bets_NOT_active_on_evaluation_page(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/moneyline-evaluation/').content.decode('utf-8')
+        marker = 'href="/mockbets/"\n           class="top-nav__item top-nav__item--active"'
+        self.assertNotIn(marker, body)
+
+    def test_my_bets_NOT_active_on_tuning_page(self):
+        c = Client()
+        c.force_login(self.staff)
+        body = c.get('/mockbets/system-tuning/').content.decode('utf-8')
         marker = 'href="/mockbets/"\n           class="top-nav__item top-nav__item--active"'
         self.assertNotIn(marker, body)
 

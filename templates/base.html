@@ -107,8 +107,15 @@
            class="top-nav__item{% if request.path == '/mlb/' or request.path == '/cfb/' or request.path == '/cbb/' or request.path == '/golf/' %} top-nav__item--active{% endif %}">
             <span class="top-nav__icon" aria-hidden="true">⚾</span> MLB
         </a>
+        {% comment %}
+          My Bets is active on /mockbets/ AND on /mockbets/<uuid>/ (bet
+          detail) — anywhere under /mockbets/ EXCEPT the sibling top-nav
+          destinations (analytics, moneyline-evaluation, system-tuning).
+          Each exclusion is checked with a slice prefix matching the
+          shortest unique discriminator of that sibling path.
+        {% endcomment %}
         <a href="/mockbets/"
-           class="top-nav__item{% if request.path == '/mockbets/' %} top-nav__item--active{% endif %}">
+           class="top-nav__item{% if request.path|slice:':10' == '/mockbets/' and request.path|slice:':19' != '/mockbets/analytics' and request.path|slice:':30' != '/mockbets/moneyline-evaluation' and request.path|slice:':23' != '/mockbets/system-tuning' %} top-nav__item--active{% endif %}">
             <span class="top-nav__icon" aria-hidden="true">🎯</span> My Bets
         </a>
         <a href="/mockbets/analytics/"

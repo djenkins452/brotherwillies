@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-03 - Top nav: My Bets active on bet-detail pages
+
+**Summary:** Tightening of the My Bets active-state rule. Was: exact match on `/mockbets/`. Now: any path under `/mockbets/` *except* the three sibling top-nav destinations (Performance, Evaluation, Tuning).
+
+### Why
+
+`/mockbets/<uuid>/` is the bet-detail page — semantically a deep slice of "My Bets". Under the old exact-match rule it left no nav item highlighted, which made the page feel orphaned. The new rule keeps the page anchored to the right workflow stage.
+
+### Rule
+
+```
+My Bets is active iff:
+  request.path starts with /mockbets/  AND
+    NOT starts with /mockbets/analytics  AND
+    NOT starts with /mockbets/moneyline-evaluation  AND
+    NOT starts with /mockbets/system-tuning
+```
+
+Each exclusion uses Django's `slice` filter at the shortest unique discriminator length.
+
+### Tests
+
+- 3 new positive/negative coverage:
+  - My Bets active on `/mockbets/<uuid>/` (real bet created in test)
+  - My Bets NOT active on `/mockbets/moneyline-evaluation/`
+  - My Bets NOT active on `/mockbets/system-tuning/`
+- Existing test that asserts My Bets NOT active on `/mockbets/analytics/` still passes (the explicit exclusion handles it).
+
+Top-nav suite: 15/15. Full app suite: 983/984 (only the pre-existing `feedback.tests` ImportError).
+
+---
+
 ## 2026-05-03 - Top nav: workflow refinement (ACT → TRACK → REVIEW → DIAGNOSE → IMPROVE)
 
 **Summary:** Top nav refined to match the actual system workflow with clearer labels, an added "My Bets" entry, and subtle icons. Five entries now read as: ⚾ MLB · 🎯 My Bets · 📊 Performance · 🔍 Evaluation · ⚙️ Tuning.
