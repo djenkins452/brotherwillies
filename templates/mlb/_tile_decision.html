@@ -26,18 +26,49 @@
     {% if s.has_user_bet %}<span class="mlb-bet-indicator" title="You have a pending mock bet on this game">🎯</span>{% endif %}
   </header>
 
-  <div class="mlb-tile__teams">
-    <div class="mlb-tile__team">
+  {% comment %}
+    Matchup context (2026-05-04). Record + streak per team, stacked
+    away-on-top / home-on-bottom. The data is already populated on
+    GameSignals by build_signals — we just surface it on the tile so
+    the user doesn't have to click into game-detail to see it.
+    Fallbacks:
+      - record missing → "Record unavailable"
+      - streak missing → omit
+  {% endcomment %}
+  <div class="mlb-tile__teams mlb-tile__teams--stacked">
+    <div class="mlb-tile__team-row">
       <span class="mlb-tile__abbr">{{ s.game.away_team.abbreviation|default:s.game.away_team.slug|upper }}</span>
       <span class="mlb-tile__name">{{ s.game.away_team.name }}</span>
+      <span class="mlb-tile__team-meta">
+        {% if s.away_record %}<span class="mlb-tile__record">{{ s.away_record }}</span>{% else %}<span class="mlb-tile__record mlb-tile__record--missing">Record unavailable</span>{% endif %}
+        {% if s.away_streak %}<span class="mlb-tile__streak mlb-tile__streak--{{ s.away_streak.kind|lower }}">{{ s.away_streak.label }}</span>{% endif %}
+      </span>
       {% if s.game.away_score is not None %}<span class="mlb-tile__score">{{ s.game.away_score }}</span>{% endif %}
     </div>
-    <div class="mlb-tile__vs">@</div>
-    <div class="mlb-tile__team">
+    <div class="mlb-tile__team-row">
       <span class="mlb-tile__abbr">{{ s.game.home_team.abbreviation|default:s.game.home_team.slug|upper }}</span>
       <span class="mlb-tile__name">{{ s.game.home_team.name }}</span>
+      <span class="mlb-tile__team-meta">
+        {% if s.home_record %}<span class="mlb-tile__record">{{ s.home_record }}</span>{% else %}<span class="mlb-tile__record mlb-tile__record--missing">Record unavailable</span>{% endif %}
+        {% if s.home_streak %}<span class="mlb-tile__streak mlb-tile__streak--{{ s.home_streak.kind|lower }}">{{ s.home_streak.label }}</span>{% endif %}
+      </span>
       {% if s.game.home_score is not None %}<span class="mlb-tile__score">{{ s.game.home_score }}</span>{% endif %}
     </div>
+  </div>
+
+  {% comment %}
+    Pitchers row. Names default to TBD when the FK is null. Records render
+    in parentheses next to the name when available; omitted otherwise.
+    Single line so the matchup reads "Sasaki (1-2) vs McGreevy (1-2)".
+  {% endcomment %}
+  <div class="mlb-tile__pitchers">
+    <span class="mlb-tile__pitcher">
+      {{ s.game.away_pitcher.name|default:"TBD" }}{% if s.away_pitcher_record %} <span class="mlb-tile__pitcher-record">({{ s.away_pitcher_record }})</span>{% endif %}
+    </span>
+    <span class="mlb-tile__pitcher-sep">vs</span>
+    <span class="mlb-tile__pitcher">
+      {{ s.game.home_pitcher.name|default:"TBD" }}{% if s.home_pitcher_record %} <span class="mlb-tile__pitcher-record">({{ s.home_pitcher_record }})</span>{% endif %}
+    </span>
   </div>
 
   {% comment %}

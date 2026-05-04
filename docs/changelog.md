@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-04 - MLB tile: matchup context restored
+
+**Summary:** Records, streaks, and starting-pitcher info now render directly on every MLB decision tile. The earlier decision-first rewrite collapsed this context onto the game-detail page; this brings it back to the tile so users can read the full matchup at a glance.
+
+### What renders on every tile
+
+```
+LAD  Los Angeles Dodgers     20-12  L3
+STL  St. Louis Cardinals     19-13  W5
+
+Roki Sasaki (1-2)  vs  Michael McGreevy (1-2)
+
+Pick: St. Louis Cardinals +116
+Model 71%  Market 45%  Edge +26.3pp
+```
+
+Stacked away-on-top / home-on-bottom layout; record + streak right-aligned in each row so the numbers seam-align across rows. Pitcher line is a single horizontal "vs" matchup. Decision panel (pick / odds / Model% / Market% / Edge) and the existing MY PICK + Bet Placed surfaces are unchanged.
+
+### Fallbacks (per spec)
+
+| Field | Missing-data behavior |
+|---|---|
+| Pitcher name | "TBD" |
+| Pitcher record | omit |
+| Team streak | omit |
+| Team record | "Record unavailable" (italic, muted) |
+
+### Underlying data — already plumbed
+
+`GameSignals` has carried `home_record`, `away_record`, `home_streak`, `away_streak`, `home_pitcher_record`, `away_pitcher_record` since the original prioritization layer. `build_signals` populates them from `format_record(team)` / `compute_streaks(...)` / `format_pitcher_record(pitcher)`. No service-layer changes needed.
+
+### Files
+
+- `templates/mlb/_tile_decision.html` — restructured teams block + new pitchers row
+- `static/css/mlb.css` — stacked-row styling + streak chip variants (W=green, L=red) + pitchers-row container
+
+### Tests (10 new in `MLBDecisionTileMatchupContextTests`)
+
+- Team records render when present
+- Team record falls back to "Record unavailable" when missing
+- Team streaks render with correct W/L variant classes
+- Team streaks omitted when missing
+- Pitcher names render with the "vs" separator
+- TBD when pitcher unknown
+- Pitcher records render in parentheses when present
+- Pitcher records omitted when missing
+- Decision panel (Model / Market / Edge) still renders alongside
+- End-to-end: every field from the spec example renders together on a single tile
+
+Tests render the partial directly via `render_to_string` so assertions are tightly scoped (no other tiles, no hub chrome).
+
+Full app suite: 1029/1030 (only the pre-existing `feedback.tests` ImportError).
+
+### Honest caveats
+
+- **The pitchers row uses a tinted background** (`rgba(0,0,0,0.18)`) to set it apart from the teams block. Subtle but visible. If it reads as too prominent in production, drop the background and rely on spacing alone.
+- **Stacked-row layout replaces the previous horizontal `away @ home`.** A small visual change but matches the spec layout exactly. The horizontal layout is preserved on the legacy `_tile_upcoming.html` partial used by the Upcoming Games section, which is unchanged.
+- **No noisy badges added.** Per spec: "Tight spread / duplicate model lean / excessive priority badges" stay omitted. The matchup-context additions are pure data, not signals.
+
+---
+
 ## 2026-05-03 - Best Bet contract tighten: only Recommended games qualify
 
 **Summary:** Removes the contradiction where "Best Bet" / "Focus Right Now" could surface a game classified as Not Recommended. Two changes:

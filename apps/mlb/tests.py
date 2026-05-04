@@ -575,6 +575,198 @@ class MLBHubUserPickTileTests(TestCase):
         self.assertIn('Mets', body)
 
 
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MLBDecisionTileMatchupContextTests(TestCase):
+    """Spec 2026-05-04: matchup context must render directly on the
+    tile — no click, no hover. Asserts records, streaks, pitcher names,
+    pitcher records, and the existing pick / model / market / edge data
+    all appear in the rendered template output.
+
+    Renders the partial directly via render_to_string so the assertions
+    are tightly scoped (no hub-page chrome, no other tiles to filter)."""
+
+    def _render(self, signal, section_kind='recommended'):
+        from django.template.loader import render_to_string
+        return render_to_string(
+            'mlb/_tile_decision.html',
+            {'s': signal, 'section_kind': section_kind},
+        )
+
+    def _build_signal(self, *, away_record='20-12', home_record='19-13',
+                     away_streak=None, home_streak=None,
+                     away_pitcher_name='Roki Sasaki', home_pitcher_name='Michael McGreevy',
+                     away_pitcher_record='1-2', home_pitcher_record='1-2'):
+        """Construct a real Game + StartingPitcher + OddsSnapshot fixture
+        and run prioritize() so GameSignals carries every field the tile
+        consumes. Streaks are passed via the streaks= kwarg so we don't
+        need to seed prior final games."""
+        from apps.mlb.models import (
+            Conference, Team, StartingPitcher, Game, OddsSnapshot,
+        )
+        from apps.mlb.services.prioritization import build_signals
+
+        # Parse "20-12" into wins/losses for Team fields.
+        def _split_record(rec):
+            if rec is None:
+                return None, None
+            w, l = rec.split('-')
+            return int(w), int(l)
+
+        a_w, a_l = _split_record(away_record)
+        h_w, h_l = _split_record(home_record)
+        ap_w, ap_l = _split_record(away_pitcher_record)
+        hp_w, hp_l = _split_record(home_pitcher_record)
+
+        conf = Conference.objects.create(name='Mat-Conf', slug='mat-conf')
+        away = Team.objects.create(
+            name='Los Angeles Dodgers', slug='mat-lad', abbreviation='LAD',
+            conference=conf, rating=90.0,
+            wins=a_w, losses=a_l,
+            source='mlb_stats_api', external_id='mat-lad',
+        )
+        home = Team.objects.create(
+            name='St. Louis Cardinals', slug='mat-stl', abbreviation='STL',
+            conference=conf, rating=10.0,
+            wins=h_w, losses=h_l,
+            source='mlb_stats_api', external_id='mat-stl',
+        )
+        ap = StartingPitcher.objects.create(
+            team=away, name=away_pitcher_name,
+            wins=ap_w, losses=ap_l,
+            source='mlb_stats_api', external_id='mat-ap',
+        ) if away_pitcher_name else None
+        hp = StartingPitcher.objects.create(
+            team=home, name=home_pitcher_name,
+            wins=hp_w, losses=hp_l,
+            source='mlb_stats_api', external_id='mat-hp',
+        ) if home_pitcher_name else None
+        g = Game.objects.create(
+            home_team=home, away_team=away,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            home_pitcher=hp, away_pitcher=ap, status='scheduled',
+            source='mlb_stats_api', external_id='mat-game',
+        )
+        OddsSnapshot.objects.create(
+            game=g, captured_at=timezone.now(),
+            market_home_win_prob=0.5,
+            moneyline_home=-110, moneyline_away=-110,
+        )
+        streaks = {}
+        if away_streak:
+            streaks[away.id] = away_streak
+        if home_streak:
+            streaks[home.id] = home_streak
+        return build_signals(g, streaks=streaks)
+
+    def test_team_records_render_when_present(self):
+        s = self._build_signal(away_record='20-12', home_record='19-13')
+        body = self._render(s)
+        self.assertIn('20-12', body)
+        self.assertIn('19-13', body)
+
+    def test_team_record_fallback_when_missing(self):
+        # Per spec: missing record → "Record unavailable"
+        s = self._build_signal(away_record=None, home_record='19-13')
+        body = self._render(s)
+        self.assertIn('Record unavailable', body)
+        self.assertIn('19-13', body)
+
+    def test_team_streak_renders_when_present(self):
+        s = self._build_signal(
+            away_streak={'kind': 'L', 'count': 3, 'label': 'L3'},
+            home_streak={'kind': 'W', 'count': 5, 'label': 'W5'},
+        )
+        body = self._render(s)
+        self.assertIn('L3', body)
+        self.assertIn('W5', body)
+        # Class variants drive the green/red coloring.
+        self.assertIn('mlb-tile__streak--l', body)
+        self.assertIn('mlb-tile__streak--w', body)
+
+    def test_team_streak_omitted_when_missing(self):
+        # Per spec: streak missing → omit (no "no streak" placeholder).
+        s = self._build_signal(away_streak=None, home_streak=None)
+        body = self._render(s)
+        self.assertNotIn('mlb-tile__streak', body)
+
+    def test_pitcher_names_render(self):
+        s = self._build_signal(
+            away_pitcher_name='Roki Sasaki', home_pitcher_name='Michael McGreevy',
+        )
+        body = self._render(s)
+        self.assertIn('Roki Sasaki', body)
+        self.assertIn('Michael McGreevy', body)
+        # The "vs" separator confirms they're rendered as a matchup, not separately.
+        self.assertIn('mlb-tile__pitcher-sep', body)
+
+    def test_tbd_pitcher_renders_as_TBD(self):
+        # Per spec: pitcher unknown → "TBD"
+        s = self._build_signal(away_pitcher_name=None, home_pitcher_name='Michael McGreevy')
+        body = self._render(s)
+        self.assertIn('TBD', body)
+        self.assertIn('Michael McGreevy', body)
+
+    def test_pitcher_records_render_when_present(self):
+        s = self._build_signal(
+            away_pitcher_record='1-2', home_pitcher_record='3-4',
+        )
+        body = self._render(s)
+        # Records are rendered in parentheses next to the pitcher name.
+        self.assertIn('(1-2)', body)
+        self.assertIn('(3-4)', body)
+
+    def test_pitcher_record_omitted_when_missing(self):
+        # Per spec: pitcher record missing → omit.
+        s = self._build_signal(
+            away_pitcher_record=None, home_pitcher_record=None,
+        )
+        body = self._render(s)
+        self.assertNotIn('mlb-tile__pitcher-record', body)
+
+    def test_existing_pick_model_market_edge_data_still_renders(self):
+        """The matchup-context additions don't displace the decision data
+        the tile already showed (pick, odds, model %, market %, edge)."""
+        s = self._build_signal()
+        body = self._render(s)
+        # Decision data hooks. The exact numbers depend on the engine but
+        # the structural classes confirm the panel still renders.
+        self.assertIn('mlb-tile__decision-pick', body)
+        self.assertIn('mlb-tile__decision-stat-label', body)
+        # Three stat labels: Model, Market, Edge.
+        self.assertIn('Model', body)
+        self.assertIn('Market', body)
+        self.assertIn('Edge', body)
+
+    def test_full_matchup_context_renders_in_one_pass(self):
+        """End-to-end: every field from the spec example renders together
+        on a single tile, in the section the spec defined."""
+        s = self._build_signal(
+            away_record='20-12', home_record='19-13',
+            away_streak={'kind': 'L', 'count': 3, 'label': 'L3'},
+            home_streak={'kind': 'W', 'count': 5, 'label': 'W5'},
+            away_pitcher_name='Roki Sasaki', away_pitcher_record='1-2',
+            home_pitcher_name='Michael McGreevy', home_pitcher_record='1-2',
+        )
+        body = self._render(s)
+        # Records
+        self.assertIn('20-12', body)
+        self.assertIn('19-13', body)
+        # Streaks
+        self.assertIn('L3', body)
+        self.assertIn('W5', body)
+        # Pitchers
+        self.assertIn('Roki Sasaki', body)
+        self.assertIn('Michael McGreevy', body)
+        # Pitcher records (parentheses)
+        self.assertIn('(1-2)', body)
+        # Decision panel still present
+        self.assertIn('Model', body)
+        self.assertIn('Edge', body)
+
+
 class MLBHubBucketAssignmentTests(TestCase):
     """Each game must land in exactly ONE of the 3 buckets — no double-
     counting between Recommended / Potential / Not Recommended."""

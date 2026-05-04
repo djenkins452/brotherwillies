@@ -418,6 +418,103 @@
     color: #a7f3d0;
 }
 
+/* Stacked teams + matchup context on decision tiles (2026-05-04).
+   Two rows: away on top, home on bottom. Each row carries abbr, name,
+   record, optional streak, and optional score (live games). The meta
+   block (record + streak) right-aligns so a vertical seam aligns the
+   numeric data across both rows for easy comparison. */
+.mlb-tile__teams--stacked {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0 8px;
+}
+.mlb-tile__team-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.92rem;
+    line-height: 1.3;
+    flex-wrap: wrap;
+}
+.mlb-tile__team-row .mlb-tile__abbr {
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+.mlb-tile__team-row .mlb-tile__name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.mlb-tile__team-meta {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 0.8rem;
+}
+.mlb-tile__record {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+.mlb-tile__record--missing {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.72rem;
+}
+.mlb-tile__streak {
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+.mlb-tile__streak--w {
+    background: rgba(62,207,142,0.15);
+    color: #6ee7b7;
+}
+.mlb-tile__streak--l {
+    background: rgba(227,93,93,0.15);
+    color: #fbb;
+}
+.mlb-tile__team-row .mlb-tile__score {
+    margin-left: 4px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Pitchers row — single horizontal line, matchup-style. */
+.mlb-tile__pitchers {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 4px 0 8px;
+    padding: 6px 8px;
+    background: rgba(0,0,0,0.18);
+    border-radius: 4px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+}
+.mlb-tile__pitcher {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.mlb-tile__pitcher-record {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+}
+.mlb-tile__pitcher-sep {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-transform: lowercase;
+}
+
 /* "✓ Bet Placed" pill — replaces "Bet This" once the user has a bet.
    Subtle green outline, not the gold/green high-contrast CTA fill —
    the bet is already in, no further action required. Click navigates
