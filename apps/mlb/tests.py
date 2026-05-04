@@ -952,7 +952,10 @@ class MLBPrefillTests(TestCase):
         self.assertEqual(data['selection'], 'Yankees')
         self.assertEqual(data['bet_type'], 'moneyline')
 
+    @override_settings(MONEYLINE_ONLY_MODE=False)
     def test_tight_spread_switches_to_spread_bet(self):
+        """Legacy behavior — when the master ML-only flag is OFF, a tight
+        spread on the snapshot prefills a spread bet."""
         from apps.mlb.services.prioritization import build_signals
         from apps.mockbets.services.prefill import prefill_from_signals
         g = self._setup(spread=-1.5)  # home favored by 1.5
@@ -961,6 +964,28 @@ class MLBPrefillTests(TestCase):
         # Home-POV spread -1.5 for home side → "Yankees -1.5"
         self.assertIn('Yankees', data['selection'])
         self.assertIn('-1.5', data['selection'])
+
+    @override_settings(MONEYLINE_ONLY_MODE=True)
+    def test_tight_spread_stays_on_moneyline_under_master_flag(self):
+        """2026-05-04 fix: when MONEYLINE_ONLY_MODE is on, the prefill
+        ignores tight-spread defaults and stays on moneyline. Without
+        this gate, the modal would pre-fill a spread selection that the
+        place_bet view rejects with 'Invalid bet type'."""
+        from apps.mlb.services.prioritization import build_signals
+        from apps.mockbets.services.prefill import prefill_from_signals
+        # Tight spread + moneylines both present; the snapshot would have
+        # triggered spread-default under the legacy code.
+        g = self._setup(spread=-1.5, ml_home=-140, ml_away=120)
+        data = prefill_from_signals(build_signals(g))
+        self.assertEqual(data['bet_type'], 'moneyline')
+        # Selection is the team name (not "Team -1.5") and odds are the ML.
+        self.assertEqual(data['selection'], 'Yankees')
+        self.assertEqual(data['odds'], -140)
+        # selections_by_type omits spread/total — even a stale client
+        # never sees a non-moneyline option from the prefill.
+        self.assertNotIn('spread', data['selections_by_type'])
+        self.assertNotIn('total', data['selections_by_type'])
+        self.assertIn('moneyline', data['selections_by_type'])
 
     def test_moneyline_propagates_from_snapshot(self):
         from apps.mlb.services.prioritization import build_signals
@@ -990,7 +1015,10 @@ class MLBPrefillTests(TestCase):
         labels = [o['label'] for o in ml]
         self.assertEqual(sorted(labels), ['Royals', 'Yankees'])
 
+    @override_settings(MONEYLINE_ONLY_MODE=False)
     def test_selections_include_spread_and_total_when_market_has_them(self):
+        """Legacy: when ML-only is OFF, the prefill exposes spread/total
+        selection options for the modal dropdown."""
         from apps.mlb.services.prioritization import build_signals
         from apps.mockbets.services.prefill import prefill_from_signals
         # home -1.5, total 8.5
@@ -1037,10 +1065,12 @@ class MLBPrefillTests(TestCase):
         self.assertEqual(by_label['Yankees'], -150)
         self.assertIsNone(by_label['Royals'])
 
+    @override_settings(MONEYLINE_ONLY_MODE=False)
     def test_spread_total_options_default_to_minus_110(self):
-        """Spread / total markets default to -110 standard pricing.
-        OddsSnapshot doesn't store per-side run-line / O-U prices yet;
-        the flat -110 default mirrors what bulk-bet placement uses."""
+        """Legacy (ML-only OFF): spread / total selection options default
+        to -110 standard pricing. OddsSnapshot doesn't store per-side
+        run-line / O-U prices yet; the flat -110 default mirrors what
+        bulk-bet placement uses."""
         from apps.mlb.services.prioritization import build_signals
         from apps.mockbets.services.prefill import prefill_from_signals
         from apps.mlb.models import OddsSnapshot

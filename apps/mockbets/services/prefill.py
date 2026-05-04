@@ -52,7 +52,7 @@ def _spread_selection(game, side: str, spread_home_pov: float) -> str:
 SPREAD_TOTAL_DEFAULT_ODDS = -110
 
 
-def _build_selections(game, odds) -> dict[str, list[dict]]:
+def _build_selections(game, odds, *, moneyline_only: bool = False) -> dict[str, list[dict]]:
     """Per-bet-type selection options for the modal dropdown.
 
     Shape: {bet_type: [{'value': str, 'label': str, 'odds': int|None}, ...]}.
@@ -64,6 +64,12 @@ def _build_selections(game, odds) -> dict[str, list[dict]]:
     to submit with the wrong number — or, worse, with a stale
     placeholder of "-110" that wasn't actually in form state, leading
     to validation rejection.
+
+    2026-05-04: when `moneyline_only` is True, the spread/total entries
+    are omitted from the dict regardless of snapshot data. Belt and
+    suspenders alongside the master switch's other gates — even if a
+    stale client retains an old selection list, server-side place_bet
+    enforcement is the final safety bar.
 
     Odds source per bet type:
         moneyline   → snapshot.moneyline_home / moneyline_away
@@ -96,7 +102,11 @@ def _build_selections(game, odds) -> dict[str, list[dict]]:
         ],
     }
 
-    if odds is not None and odds.spread is not None:
+    # Under MONEYLINE_ONLY_MODE the modal hides spread/total options at
+    # the template layer, but a stale client could still consume this
+    # list. Omitting the keys here means even a hand-crafted client
+    # never sees a spread/total selection from the prefill.
+    if not moneyline_only and odds is not None and odds.spread is not None:
         # OddsSnapshot.spread is home-POV (negative = home favored).
         home_num = odds.spread
         away_num = -odds.spread
@@ -109,7 +119,7 @@ def _build_selections(game, odds) -> dict[str, list[dict]]:
             {'value': home_sel, 'label': home_sel, 'odds': SPREAD_TOTAL_DEFAULT_ODDS},
         ]
 
-    if odds is not None and odds.total is not None:
+    if not moneyline_only and odds is not None and odds.total is not None:
         total = odds.total
         out['total'] = [
             {'value': f"Over {total:g}", 'label': f"Over {total:g}",
@@ -127,7 +137,16 @@ def prefill_from_signals(signals) -> dict[str, Any]:
     The returned shape is keyed to match the modal's existing contract
     (sport, game_id, bet_type, selection, odds) plus `selections_by_type`
     for the dynamic dropdown.
+
+    2026-05-04: under MONEYLINE_ONLY_MODE the prefill ALWAYS defaults to
+    a moneyline bet — the legacy "tight spread → prefer spread" branch
+    would otherwise pre-fill a spread selection that the place_bet view
+    rejects with `Invalid bet type`. The fix gates the spread-default at
+    the source rather than masking it at the form layer.
     """
+    from apps.core.config import is_moneyline_only_mode
+    moneyline_only = is_moneyline_only_mode()
+
     game = signals.game
     odds = signals.latest_odds
     side = _default_team_side(game, signals)
@@ -137,8 +156,14 @@ def prefill_from_signals(signals) -> dict[str, Any]:
     odds_american = None
 
     if odds is not None:
-        # Tight spread → prefer a spread bet; otherwise stay on moneyline.
-        if odds.spread is not None and abs(odds.spread) <= 1.5:
+        # Tight spread → prefer a spread bet — but only when the master
+        # ML-only flag is OFF. With ML-only on, we always stay on
+        # moneyline so the modal can submit cleanly.
+        if (
+            not moneyline_only
+            and odds.spread is not None
+            and abs(odds.spread) <= 1.5
+        ):
             bet_type = 'spread'
             selection = _spread_selection(game, side, odds.spread)
         else:
@@ -151,7 +176,7 @@ def prefill_from_signals(signals) -> dict[str, Any]:
         'game_id': str(game.id),
         'bet_type': bet_type,
         'selection': selection,
-        'selections_by_type': _build_selections(game, odds),
+        'selections_by_type': _build_selections(game, odds, moneyline_only=moneyline_only),
     }
     if odds_american is not None:
         result['odds'] = odds_american

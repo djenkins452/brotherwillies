@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-04 - Bet This prefill: respect MONEYLINE_ONLY_MODE
+
+**Bug:** Clicking "Bet This" on a moneyline tile sometimes opened the modal pre-filled with a SPREAD selection (e.g. "Miami Marlins +1.5") and an empty Odds field. Submitting failed with "Invalid bet type" because the master switch blocks spread bets.
+
+**Root cause:** `apps/mockbets/services/prefill.py::prefill_from_signals` had a legacy "tight spread → prefer spread bet" branch that fired whenever the snapshot had `|spread| <= 1.5`. The branch didn't know about `MONEYLINE_ONLY_MODE`, so it produced spread prefills even though the place_bet view rejects them.
+
+**Fix:** Two gates:
+1. **`prefill_from_signals`**: the spread-default branch is now gated on `not is_moneyline_only_mode()`. Under the master switch, the prefill always defaults to moneyline — selection = team name, odds = the moneyline price for that side.
+2. **`_build_selections`**: the `selections_by_type` dict omits the `'spread'` and `'total'` keys when `moneyline_only=True`. Belt and suspenders so a stale client never sees a non-moneyline option in the dropdown.
+
+### Tests
+
+- `test_tight_spread_stays_on_moneyline_under_master_flag` — NEW. Asserts under `MONEYLINE_ONLY_MODE=True`, a snapshot with tight spread + moneylines still produces `bet_type='moneyline'`, the team-name selection, and the ML odds. Also asserts spread/total are omitted from `selections_by_type`.
+- 2 existing legacy tests (`test_tight_spread_switches_to_spread_bet`, `test_selections_include_spread_and_total_when_market_has_them`, `test_spread_total_options_default_to_minus_110`) got `@override_settings(MONEYLINE_ONLY_MODE=False)` so they continue exercising the legacy contract.
+
+Full app suite: 1030/1031 (only the pre-existing `feedback.tests` ImportError).
+
+### Honest caveats
+
+- **The fix only addresses the prefill source.** If a stale client (browser tab open since before this deploy) submits an old prefill with `bet_type='spread'`, it'll still 400 at the place_bet view — that's correct, the master gate is doing its job. Refresh fixes it.
+- **No schema or engine logic changed.** This is a one-file behavior fix in the prefill helper.
+
+---
+
 ## 2026-05-04 - MLB tile: matchup context restored
 
 **Summary:** Records, streaks, and starting-pitcher info now render directly on every MLB decision tile. The earlier decision-first rewrite collapsed this context onto the game-detail page; this brings it back to the tile so users can read the full matchup at a glance.
