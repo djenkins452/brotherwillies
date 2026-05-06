@@ -231,6 +231,131 @@ class MockBet(models.Model):
     def is_settled(self):
         return self.result != 'pending'
 
+    # --- Pending-status detail (2026-05-06) ---------------------------------
+    # Replaces the generic "PENDING" badge with a contextual reason derived
+    # from the linked Game's state. Returns None for settled bets — the
+    # template renders the result badge in that case. The mapping reflects
+    # actual system state only (game.status + scores). It does not invent
+    # new state; if the underlying signals don't match any branch, the
+    # fallback is "Pending — status unknown" so the user sees something.
+    @property
+    def pending_status_detail(self):
+        """Per-bet contextual pending status. Returns dict with keys:
+            label  — user-facing copy
+            icon   — single emoji glyph
+            color  — token from {gray, red, yellow, orange, muted}
+                     used by the template to pick the badge variant
+            kind   — stable machine identifier for tests / analytics
+        Returns None when the bet is settled (caller should render the
+        win/loss/push badge instead).
+        """
+        if self.result != 'pending':
+            return None
+
+        # Golf is event-date based (no game.status). Bets settle when
+        # event.end_date passes — we mirror that here so the user sees
+        # the right reason while waiting.
+        if self.sport == 'golf':
+            return self._pending_status_for_golf()
+
+        game = self.game
+        if game is None:
+            return {
+                'label': 'Pending — status unknown',
+                'icon': '⚪',
+                'color': 'muted',
+                'kind': 'unknown',
+            }
+
+        status = getattr(game, 'status', None)
+        home_score = getattr(game, 'home_score', None)
+        away_score = getattr(game, 'away_score', None)
+
+        # Spec branch ordering — first match wins, top-down.
+        if status == 'scheduled':
+            return {
+                'label': 'Scheduled — Game has not started',
+                'icon': '🕒',
+                'color': 'gray',
+                'kind': 'scheduled',
+            }
+        if status == 'live':
+            return {
+                'label': 'Live — Game in progress',
+                'icon': '🔴',
+                'color': 'red',
+                'kind': 'live',
+            }
+        if status in ('postponed', 'cancelled'):
+            # Cancelled and Suspended/Postponed both end up here. Both
+            # mean "the game isn't happening as scheduled" — semantically
+            # the same user-facing concern.
+            return {
+                'label': 'Delayed — Game suspended or postponed',
+                'icon': '🟡',
+                'color': 'yellow',
+                'kind': 'delayed',
+            }
+        if status == 'final' and home_score is not None and away_score is not None:
+            # Diagnostic state — game is final and scored, but the
+            # settlement engine hasn't run yet (or hasn't run since the
+            # last finalization). Surfaces pipeline lag to the user.
+            return {
+                'label': 'Final — awaiting settlement',
+                'icon': '🟠',
+                'color': 'orange',
+                'kind': 'awaiting_settlement',
+            }
+        if status != 'final' and (home_score is None or away_score is None):
+            return {
+                'label': 'Awaiting final score',
+                'icon': '🟡',
+                'color': 'yellow',
+                'kind': 'awaiting_score',
+            }
+        return {
+            'label': 'Pending — status unknown',
+            'icon': '⚪',
+            'color': 'muted',
+            'kind': 'unknown',
+        }
+
+    def _pending_status_for_golf(self):
+        """Golf bets don't have game.status — they have event start/end
+        dates. Map similarly: scheduled, live (in tournament), delayed
+        when the event window has passed without resolution."""
+        from django.utils import timezone
+        event = self.golf_event
+        if event is None:
+            return {
+                'label': 'Pending — status unknown',
+                'icon': '⚪', 'color': 'muted', 'kind': 'unknown',
+            }
+        today = timezone.localdate()
+        start = getattr(event, 'start_date', None)
+        end = getattr(event, 'end_date', None)
+        if start and today < start:
+            return {
+                'label': 'Scheduled — Tournament has not started',
+                'icon': '🕒', 'color': 'gray', 'kind': 'scheduled',
+            }
+        if start and end and start <= today <= end:
+            return {
+                'label': 'Live — Tournament in progress',
+                'icon': '🔴', 'color': 'red', 'kind': 'live',
+            }
+        if end and today > end:
+            # Tournament ended; settlement engine will pick it up next
+            # cron pass. Same diagnostic value as team-sport awaiting_settlement.
+            return {
+                'label': 'Final — awaiting settlement',
+                'icon': '🟠', 'color': 'orange', 'kind': 'awaiting_settlement',
+            }
+        return {
+            'label': 'Pending — status unknown',
+            'icon': '⚪', 'color': 'muted', 'kind': 'unknown',
+        }
+
     def calculate_payout(self):
         """Calculate simulated payout based on result and odds."""
         if self.result == 'win':

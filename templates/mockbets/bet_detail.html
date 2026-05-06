@@ -15,7 +15,7 @@
         {% if bet.result == 'win' %}<span class="badge badge-green">Win</span>
         {% elif bet.result == 'loss' %}<span class="badge badge-red">Loss</span>
         {% elif bet.result == 'push' %}<span class="badge badge-gray">Push</span>
-        {% else %}<span class="badge badge-blue">Pending</span>{% endif %}
+        {% else %}{% with detail=bet.pending_status_detail %}<span class="badge badge-{{ detail.color }} bet-result-badge--{{ detail.kind }}" title="{{ detail.label }}">{{ detail.icon }} {{ detail.label }}</span>{% endwith %}{% endif %}
     </div>
 
     <div style="font-size:1.1rem;font-weight:700;">{{ bet.selection }}</div>

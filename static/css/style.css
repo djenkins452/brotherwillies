@@ -309,6 +309,11 @@ a:hover {
 .badge-yellow { background: rgba(234,179,8,0.2); color: var(--yellow); }
 .badge-blue { background: rgba(201,148,58,0.2); color: var(--accent); }
 .badge-gray { background: rgba(156,163,180,0.2); color: var(--text-secondary); }
+/* 2026-05-06 — pending-status badges on Mock Bets surfaces. The detail
+   property MockBet.pending_status_detail returns one of these color
+   tokens; the template maps token → badge class. */
+.badge-orange { background: rgba(249,115,22,0.2); color: var(--orange); }
+.badge-muted { background: rgba(156,163,180,0.12); color: var(--text-muted); }
 .badge-fav {
     background: rgba(234,179,8,0.15);
     color: var(--yellow);

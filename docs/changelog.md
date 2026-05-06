@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-06 - Mock Bets: contextual pending-status badge
+
+**Summary:** Replaces the generic "PENDING" badge on My Bets cards and the bet-detail page with a contextual reason derived from the linked Game's actual state. Six branches:
+
+| Game state | Badge |
+|---|---|
+| `status == 'scheduled'` | 🕒 Scheduled — Game has not started (gray) |
+| `status == 'live'` | 🔴 Live — Game in progress (red) |
+| `status in ('postponed', 'cancelled')` | 🟡 Delayed — Game suspended or postponed (yellow) |
+| `status == 'final'` + scores set | 🟠 Final — awaiting settlement (orange) |
+| status not in the above + scores null | 🟡 Awaiting final score (yellow) |
+| no game / final without scores / unknown | ⚪ Pending — status unknown (muted) |
+
+The "Final — awaiting settlement" branch surfaces pipeline lag — game finalized + scored but the settlement engine hasn't run yet. In normal operation `settle_user_pending_bets` runs on every My Bets render and resolves these immediately, so users will rarely see this state. When they DO see it, it's a cron-lag signal worth noting (the badge title attribute carries the same string for hover detail).
+
+### Implementation
+
+- `MockBet.pending_status_detail` property (`apps/mockbets/models.py`) returns `{label, icon, color, kind}` for pending bets; `None` for settled bets so the existing win/loss/push badge renders. Golf bets use a parallel branch keyed off `golf_event.start_date` / `end_date` since they have no `game.status`.
+- `templates/mockbets/my_bets.html` and `templates/mockbets/bet_detail.html` consume the property; both surfaces show the same label.
+- `static/css/style.css` adds `badge-orange` and `badge-muted` variants (the other tokens — gray/red/yellow — were already there).
+
+### Tests (11 new, all green)
+
+- One per spec branch: scheduled, live, postponed, cancelled (shares Delayed bucket), final-with-scores → awaiting_settlement, status-other-with-no-scores → awaiting_score, no game → unknown, final-without-scores → unknown
+- Settled-bet short-circuit: win/loss/push all return `None` from the property
+- Render tests: My Bets page shows the contextual label for scheduled + live games, generic uppercase `PENDING` is gone from the rendered HTML
+- Awaiting-settlement render test was deliberately omitted — the my_bets view's `settle_user_pending_bets()` on-load settles those bets before they reach the template, making the state unreachable from a rendered page. The property-level test covers the mapping.
+
+Full app suite: 1041/1042 (only the pre-existing `feedback.tests` ImportError).
+
+### Honest caveats
+
+- **The Mock Bet Analytics ledger row** at `templates/mockbets/analytics.html:558` still renders a plain `text-muted PENDING` cell. The spec scoped this to "bet cards", and the analytics page is a tabular row — different visual context. Easy follow-up if it becomes inconsistent.
+- **Cancelled and Postponed share the Delayed bucket.** Spec only named postponed; cancelled was added because the user-facing concern is the same ("this isn't happening as scheduled"). If you want a distinct "Cancelled — Game cancelled" branch, that's a one-line split.
+- **The badge label runs long on narrow viewports.** The existing CSS for `.bet-result-badge` truncates with the natural badge styling; mobile testing on iPhone SE (375px) is recommended before flagging as a problem.
+
+---
+
 ## 2026-05-04 - Bet This prefill: respect MONEYLINE_ONLY_MODE
 
 **Bug:** Clicking "Bet This" on a moneyline tile sometimes opened the modal pre-filled with a SPREAD selection (e.g. "Miami Marlins +1.5") and an empty Odds field. Submitting failed with "Invalid bet type" because the master switch blocks spread bets.

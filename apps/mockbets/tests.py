@@ -2906,3 +2906,205 @@ class MoneylineEvaluationOddsTypeClassifierTests(TestCase):
     def test_none_input(self):
         from apps.mockbets.services.moneyline_evaluation import _classify_odds_type
         self.assertIsNone(_classify_odds_type(None))
+
+
+# =============================================================================
+# Pending status detail — contextual reason a bet is still pending.
+# Replaces the generic PENDING badge with one of six branches keyed off
+# the linked Game's status + scores.
+# =============================================================================
+
+class MockBetPendingStatusDetailTests(TestCase):
+    """Each spec branch maps to a (label, icon, color, kind) tuple.
+    Tests cover every branch + the fallback + golf path + settled-bet
+    short-circuit."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        self.MLBGame = MLBGame
+        self.user = User.objects.create_user('pending_status_user', password='x')
+        conf = MLBConf.objects.create(name='AL-pen', slug='al-pen')
+        self.t1 = MLBTeam.objects.create(
+            name='Yankees', slug='pen-yankees', conference=conf, rating=70,
+            source='mlb_stats_api', external_id='pen-1',
+        )
+        self.t2 = MLBTeam.objects.create(
+            name='Rays', slug='pen-rays', conference=conf, rating=40,
+            source='mlb_stats_api', external_id='pen-2',
+        )
+
+    def _game(self, *, status='scheduled', home_score=None, away_score=None,
+              ext='pen-game'):
+        return self.MLBGame.objects.create(
+            home_team=self.t1, away_team=self.t2,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            status=status, home_score=home_score, away_score=away_score,
+            source='mlb_stats_api', external_id=ext,
+        )
+
+    def _bet(self, game, *, result='pending'):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', mlb_game=game,
+            bet_type='moneyline', selection='Yankees',
+            odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            result=result,
+        )
+
+    # --- Spec branch coverage -------------------------------------------------
+
+    def test_scheduled_game_renders_scheduled_status(self):
+        bet = self._bet(self._game(status='scheduled'))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'scheduled')
+        self.assertEqual(d['color'], 'gray')
+        self.assertIn('Scheduled', d['label'])
+        self.assertEqual(d['icon'], '🕒')
+
+    def test_live_game_renders_live_status(self):
+        bet = self._bet(self._game(status='live', home_score=2, away_score=1))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'live')
+        self.assertEqual(d['color'], 'red')
+        self.assertIn('Live', d['label'])
+
+    def test_postponed_game_renders_delayed(self):
+        bet = self._bet(self._game(status='postponed'))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'delayed')
+        self.assertEqual(d['color'], 'yellow')
+        self.assertIn('Delayed', d['label'])
+
+    def test_cancelled_game_renders_delayed(self):
+        """Cancelled games share the Delayed bucket — same user-facing
+        concern: 'this isn't happening as scheduled'."""
+        bet = self._bet(self._game(status='cancelled'))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'delayed')
+
+    def test_final_with_scores_renders_awaiting_settlement(self):
+        """Spec branch 5: pipeline-lag indicator. Game is final and scored
+        but the bet didn't settle yet (cron hasn't run, or last cron failed)."""
+        bet = self._bet(self._game(status='final', home_score=5, away_score=3))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'awaiting_settlement')
+        self.assertEqual(d['color'], 'orange')
+        self.assertIn('awaiting settlement', d['label'].lower())
+        self.assertEqual(d['icon'], '🟠')
+
+    def test_unknown_status_with_no_scores_falls_to_awaiting_score(self):
+        """Branch 4: status not in the recognized set + no scores."""
+        # Use a non-enum status to exercise branch 4. Real values come
+        # from STATUS_MAP in schedule_provider.py; 'delayed' isn't one
+        # of the model's choices, but the column accepts arbitrary
+        # strings so this exercises the fallthrough path.
+        bet = self._bet(self._game(status='delayed'))
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'awaiting_score')
+        self.assertEqual(d['color'], 'yellow')
+
+    def test_no_game_attached_falls_back_to_unknown(self):
+        """Branch 6: bet exists but the per-sport FK is None (e.g.,
+        legacy data, manual placement gone wrong). Render the unknown
+        fallback rather than crashing."""
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb',  # mlb but no mlb_game FK
+            bet_type='moneyline', selection='X', odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            result='pending',
+        )
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'unknown')
+        self.assertEqual(d['color'], 'muted')
+
+    def test_final_without_scores_falls_back_to_unknown(self):
+        """Edge: status='final' but scores are still None. Unusual but
+        possible with bad data. Branch 6 (unknown), not 5 (awaiting
+        settlement) — we don't have enough to show a final score."""
+        bet = self._bet(self._game(status='final'))  # both scores None
+        d = bet.pending_status_detail
+        self.assertEqual(d['kind'], 'unknown')
+
+    # --- Settled bets short-circuit -------------------------------------------
+
+    def test_settled_bet_returns_none(self):
+        """Win/loss/push bets render their own result badge — the
+        pending-status property must return None for them."""
+        for result in ('win', 'loss', 'push'):
+            bet = self._bet(
+                self._game(status='final', home_score=5, away_score=3,
+                           ext=f'pen-settled-{result}'),
+                result=result,
+            )
+            self.assertIsNone(
+                bet.pending_status_detail,
+                f'expected None for settled bet (result={result})',
+            )
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class MockBetPendingStatusRenderingTests(TestCase):
+    """End-to-end: the My Bets page renders the contextual pending
+    badge label, not the generic 'PENDING' string."""
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        self.MLBGame = MLBGame
+        self.user = User.objects.create_user('pen_render_user', password='x')
+        self.client = Client()
+        self.client.force_login(self.user)
+        conf = MLBConf.objects.create(name='AL-render', slug='al-render')
+        self.t1 = MLBTeam.objects.create(
+            name='Yankees', slug='render-yankees', conference=conf, rating=70,
+            source='mlb_stats_api', external_id='render-1',
+        )
+        self.t2 = MLBTeam.objects.create(
+            name='Rays', slug='render-rays', conference=conf, rating=40,
+            source='mlb_stats_api', external_id='render-2',
+        )
+
+    def _game_and_bet(self, **game_kwargs):
+        g = self.MLBGame.objects.create(
+            home_team=self.t1, away_team=self.t2,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            source='mlb_stats_api', external_id=game_kwargs.pop('ext', 'render-game'),
+            **game_kwargs,
+        )
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', mlb_game=g,
+            bet_type='moneyline', selection='Yankees',
+            odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            result='pending',
+        )
+
+    def test_my_bets_shows_scheduled_label_not_generic_pending(self):
+        self._game_and_bet(status='scheduled')
+        resp = self.client.get('/mockbets/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('Scheduled — Game has not started', body)
+        # The generic uppercase PENDING string should be gone.
+        self.assertNotIn('>PENDING<', body)
+
+    # Note: an integration test for the "awaiting_settlement" branch
+    # would be flaky here — the my_bets view calls
+    # settle_user_pending_bets() on entry, which immediately resolves
+    # any final-with-scores-still-pending bet to win/loss/push. The
+    # state is by-design unreachable from a rendered page. The property
+    # test (test_final_with_scores_renders_awaiting_settlement) covers
+    # the mapping; the integration coverage is intentionally limited
+    # to states that survive the on-load settlement pass.
+
+    def test_my_bets_shows_live_label_for_live_game(self):
+        self._game_and_bet(status='live', home_score=2, away_score=1,
+                           ext='render-live')
+        resp = self.client.get('/mockbets/')
+        body = resp.content.decode('utf-8')
+        self.assertIn('Live — Game in progress', body)
+        self.assertIn('badge-red', body)

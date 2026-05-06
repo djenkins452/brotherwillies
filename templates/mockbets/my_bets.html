@@ -71,7 +71,7 @@
             {% if bet.result == 'win' %}<span class="badge badge-green bet-result-badge">&check; WIN</span>
             {% elif bet.result == 'loss' %}<span class="badge badge-red bet-result-badge">&times; LOSS</span>
             {% elif bet.result == 'push' %}<span class="badge badge-gray bet-result-badge">PUSH</span>
-            {% else %}<span class="badge badge-blue bet-result-badge">PENDING</span>{% endif %}
+            {% else %}{% with detail=bet.pending_status_detail %}<span class="badge badge-{{ detail.color }} bet-result-badge bet-result-badge--pending bet-result-badge--{{ detail.kind }}" title="{{ detail.label }}">{{ detail.icon }} {{ detail.label }}</span>{% endwith %}{% endif %}
         </span>
     </div>
     <div class="game-meta mt-1">
