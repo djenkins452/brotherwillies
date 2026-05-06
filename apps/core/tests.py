@@ -107,7 +107,9 @@ class GetRecommendationTests(TestCase):
         self.assertEqual(rec.line, '+400')
 
     def test_confidence_score_matches_model_prob_for_picked_side(self):
-        game = _make_mlb_game(home_rating=70, away_rating=30)
+        # 2026-05-06: rating gap bumped 70/30 → 90/10 to clear the new
+        # 60% probability gate after the 0.40 market blend.
+        game = _make_mlb_game(home_rating=90, away_rating=10)
         OddsSnapshot.objects.create(
             game=game,
             captured_at=timezone.now(),
@@ -116,8 +118,9 @@ class GetRecommendationTests(TestCase):
             moneyline_away=-110,
         )
         rec = get_recommendation('mlb', game)
-        # confidence = model prob for the picked side; on a ratings gap of 40
-        # the sigmoid gives ~80%+ for home
+        # confidence = post-blend model prob for the picked side. With
+        # the new 0.40 weight against a 0.50 market, even an 80%+ raw
+        # prob compresses; we just need it above the gate.
         self.assertGreater(rec.confidence_score, 60.0)
         self.assertLess(rec.confidence_score, 99.01)
 
@@ -243,14 +246,17 @@ class DecisionRuleTests(TestCase):
         self.assertEqual(reason, '')
 
     def test_heavy_favorite_with_weak_edge_is_not_recommended(self):
-        """-200 odds + edge between MIN_EDGE and STRONG_EDGE → juice gate
-        rejects. Edge is 5.5pp (above the 5.0 MIN_EDGE under the 2026-05-03
-        calibration tighten, but below the 6.0 STRONG_EDGE that the juice
-        gate requires for heavy-favorite picks). |200| < 300 so the
-        longshot gate doesn't trip."""
+        """-200 odds + edge below MIN_EDGE → low_edge rejection.
+
+        2026-05-06: under the new MIN_EDGE = 6.0 (which now equals
+        STRONG_EDGE), the juice gate is dormant — any pick that clears
+        the edge gate also clears the strong-edge requirement.
+        We test that low edges still get rejected (low_edge), and
+        defer the juice-gate test to a future regime where MIN_EDGE
+        and STRONG_EDGE diverge again."""
         status, reason = compute_status(model_edge=5.5, odds_american=-200)
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
-        self.assertEqual(reason, 'high_juice')
+        self.assertEqual(reason, 'low_edge')
 
     def test_heavy_favorite_with_strong_edge_is_recommended(self):
         """-150 odds but edge clears STRONG_EDGE → juice gate skipped.
@@ -275,13 +281,15 @@ class DecisionRuleTests(TestCase):
         self.assertEqual(reason, 'longshot')
 
     def test_favorite_at_boundary_still_gated(self):
-        """Odds of exactly -150 (HEAVY_FAVORITE_ODDS) qualify as heavy favorite."""
+        """Odds of exactly -150 (HEAVY_FAVORITE_ODDS) qualify as heavy favorite.
+        2026-05-06: with MIN_EDGE=STRONG_EDGE=6.0 the juice gate is dormant;
+        the test asserts the edge gate still rejects sub-MIN_EDGE picks."""
         status, reason = compute_status(
             model_edge=5.0, odds_american=HEAVY_FAVORITE_ODDS,
             probability=0.62,
         )
         self.assertEqual(status, STATUS_NOT_RECOMMENDED)
-        self.assertEqual(reason, 'high_juice')
+        self.assertEqual(reason, 'low_edge')
 
     # ---- 2026-04-27 strict correction: new tests for the spec cases ----
 
@@ -298,10 +306,11 @@ class DecisionRuleTests(TestCase):
         self.assertEqual(reason, 'value')
 
     def test_correction_case2_strong_favorite_recommended(self):
-        """SPEC CASE 2: probability 62%, edge 5pp, odds -140, source=primary.
-        All gates clear → Recommended."""
+        """SPEC CASE 2: a strong-favorite pick clears every gate.
+        2026-05-06: bumped edge 5 → 7pp (above the new MIN_EDGE=6.0)
+        so the test still represents a recommendable pick."""
         status, reason = compute_status(
-            model_edge=5.0, odds_american=-140,
+            model_edge=7.0, odds_american=-140,
             probability=0.62, is_secondary=False,
         )
         self.assertEqual(status, STATUS_RECOMMENDED)

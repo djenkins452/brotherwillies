@@ -2,6 +2,90 @@
 
 ---
 
+## 2026-05-06 - Calibration second pass: heavier shrink, tighter edge, short-fav discipline
+
+**Summary:** 30-day evaluation showed CLV+ rate stuck near 31%, edge distribution skewed toward 8%+, short favorites losing money. This pass tightens calibration further while preserving full visibility (no game / bet is hidden — only classification changes).
+
+### Constants (post-flip values)
+
+| Constant | Before | After | Reason |
+|---|---|---|---|
+| `MARKET_BLEND_WEIGHT` | 0.30 | **0.40** | Heavier shrink to pull recommendations closer to consensus market |
+| `MARKET_BLEND_WEIGHT_CAP` | 0.30 | **0.40** | In lock-step |
+| `MIN_EDGE` (pp) | 5.0 | **6.0** | Concentrate recs on stronger edges |
+| `LANE_HARD_GATES_EDGE_MIN` (decimal) | 0.05 | **0.06** | Lane gate keeps lock-step with MIN_EDGE |
+| `EXTREME_DISAGREEMENT_GAP` (post-blend) | 0.105 | **0.12** | Relaxed from 15pp raw → 20pp raw; the 15pp threshold was firing on most recommendations and erasing tier signal |
+
+`STRONG_EDGE` and `ELITE_EDGE` unchanged (6.0 / 8.0). Note: with `MIN_EDGE = STRONG_EDGE = 6.0`, the heavy-favorite juice gate is currently dormant — any pick clearing the edge gate also clears the strong-edge requirement. Documented in the test for `test_heavy_favorite_with_weak_edge_is_not_recommended`.
+
+### New: short-favorite discipline (Task 3)
+
+Added a `short_fav_thin` risk flag in `_lane_compute_risk_flags`:
+
+```python
+if -149 <= odds_american <= 99 and edge_decimal < (STRONG_EDGE / 100):
+    short_fav_thin = True
+```
+
+Fires for picks in the short-favorite band (-149 to +99) when the de-vigged edge is below 6pp. The flag composes with the existing lane classifier — 1-2 flags drops the bet from `core` to `qualified` (Recommended → Potential in the MLB hub partition). The bet is **never removed** — it just falls out of Bet All and surfaces in the Potential section instead.
+
+**Note on current dormancy:** because `MIN_EDGE = STRONG_EDGE = 6.0`, any pick that clears the lane's edge floor (0.06) also satisfies `edge >= STRONG_EDGE / 100`, so `short_fav_thin` doesn't fire on bulk-eligible picks today. The flag is in place for when MIN_EDGE drops below STRONG_EDGE again (or STRONG_EDGE rises). Test `test_short_favorite_with_thin_edge_fires_flag` documents the rule.
+
+### Bug fix: CLV double-negative formatting (Task 5)
+
+`apps/mockbets/services/moneyline_evaluation.py::_fmt_clv` was prepending a sign character (`'-'` for negative direction) on top of the value's natural sign — producing `"--0.0162"` for negative CLVs in the evaluation packet. Replaced with `f'{clv:+.4f}'` which uses the value's natural sign. Format is now `+0.0774` / `-0.0162` / `—`.
+
+The `direction` arg is preserved in the function signature for API-compat with callers, but no longer drives output.
+
+### Snapshot fields (Task 6) — already present
+
+`Recommendation` dataclass + `BettingRecommendation` model carry `raw_model_prob`, `final_model_prob`, `market_prob`, `extreme_disagreement`. No schema change. `raw_model_prob` is still `None` in v1 (the sport services don't separately expose pre-calibration values; documented as a future plumbing follow-up).
+
+### Logging (Task 7) — already present
+
+`_moneyline_candidate` already logs `Calibration: sport=X game=Y side=Z final=0.687 market=0.500 edge=0.187` at INFO. Plus a second line on every disagreement-cap fire. The spec example asks for `raw=...` too — that's the same plumbing dependency as the snapshot field.
+
+### Tests
+
+- **22 new** in `apps/core/test_calibration_2026_05_06.py`:
+  - Constants check (5 tests)
+  - Blend math at 0.40 weight (2 tests)
+  - Short-favorite discipline (6 tests covering band edges, edge-strength edges, no-fire-outside-band)
+  - Disagreement cap fires/doesn't fire (2 integration tests)
+  - CLV format fix (5 tests covering negative, positive, zero, None, direction-arg-noop)
+  - Fewer-recommendations success criterion (2 tests at 5pp / 6pp boundary)
+- **6 existing tests updated** for new constant values:
+  - `test_default_weight_is_30_percent` → `test_default_weight_is_40_percent` (math + label)
+  - `test_blend_then_clamp_order_matters`, `test_blend_can_keep_in_range` (recomputed)
+  - `test_market_blend_weight_within_spec` (new constants)
+  - `test_constants_match_spec`, `test_final_prob_is_weighted_average`, `test_min_edge_bumped`, `test_cap_threshold_value` in 2026-05-03 file
+- **3 fixture rating bumps**:
+  - `_make_mlb_game(70, 30)` → `(90, 10)` in `test_confidence_score_matches_model_prob_for_picked_side`
+  - `BulkActionsTests.test_bulk_place_does_not_cap_count_per_slate` ratings 80/40 → 90/10
+- **3 decision-rule tests** updated to reflect MIN_EDGE = STRONG_EDGE alignment (heavy-juice gate dormant)
+- **2 lane-system fixtures** bumped from `edge=0.05` → `edge=0.07` to clear the new `LANE_HARD_GATES_EDGE_MIN = 0.06`
+
+Full app suite: **1063/1064** (only the pre-existing `feedback.tests` ImportError).
+
+### What this does NOT touch
+
+- UI layer — no template, view, or CSS changes
+- Existing signals — `Recommendation`, `BettingRecommendation`, `MockBet` schemas unchanged
+- Decision-rule structure — `compute_status` gates fire in the same order, only constant values shifted
+- Backtest pipeline — moneyline-only by design, unaffected
+
+### Reversibility
+
+To restore prior calibration: flip the constants back. Changes are all single-line edits in `probability_calibration.py` and `recommendations.py`. The `short_fav_thin` flag can be removed from `_lane_compute_risk_flags` cleanly — it composes additively with existing flags.
+
+### Honest caveats
+
+- **Heavy-juice gate is dormant** under `MIN_EDGE = STRONG_EDGE = 6.0`. If you want it live, bump `STRONG_EDGE` (say to 8.0) and the gate reactivates for picks in the (6.0, 8.0) edge band. Not done in this pass because the spec scoped to MIN_EDGE only.
+- **`short_fav_thin` is also functionally dormant today** for the same reason — a pick that fails `edge >= STRONG_EDGE / 100` also fails the lane's hard edge gate (0.06). The flag is in place so when MIN_EDGE and STRONG_EDGE diverge, the discipline is automatic. Documented in the dedicated test.
+- **`raw_model_prob` is still None in v1.** Plumbing it requires exposing the pre-calibration value from each sport's `compute_*_win_prob`. Documented as follow-up since 2026-05-03; out of scope for this calibration pass.
+
+---
+
 ## 2026-05-06 - Mock Bets: contextual pending-status badge
 
 **Summary:** Replaces the generic "PENDING" badge on My Bets cards and the bet-detail page with a contextual reason derived from the linked Game's actual state. Six branches:

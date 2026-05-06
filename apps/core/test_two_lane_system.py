@@ -39,9 +39,14 @@ class HardGatesPassTests(TestCase):
 
     def _passing(self):
         # Baseline that satisfies every gate.
+        # 2026-05-06: edge bumped 0.05 → 0.07 to clear the new lane edge
+        # gate (LANE_HARD_GATES_EDGE_MIN = 0.06). 0.07 keeps the fixture
+        # clearly above the floor without sitting exactly on it (the
+        # boundary-at-floor test below still uses LANE_HARD_GATES_EDGE_MIN
+        # explicitly, so it tracks the constant automatically).
         return dict(
             probability=0.60,
-            edge=0.05,
+            edge=0.07,
             odds_american=120,
             source_quality='primary',
         )
@@ -170,9 +175,12 @@ class LaneClassificationTests(TestCase):
 
     def _classify(self, **overrides):
         # Sensible defaults that pass hard gates with no flags.
+        # 2026-05-06: edge bumped 0.05 → 0.07 to clear the new lane
+        # edge gate (LANE_HARD_GATES_EDGE_MIN = 0.06). odds=120 keeps
+        # us out of the new short-fav band ([-149, 99]).
         kwargs = dict(
             probability=0.60,
-            edge_decimal=0.05,
+            edge_decimal=0.07,
             odds_american=120,
             source_quality='primary',
             movement_class=None,

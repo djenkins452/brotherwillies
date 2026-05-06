@@ -30,17 +30,17 @@ from apps.core.services.recommendations import (
 
 
 class ProbabilityShrinkTests(TestCase):
-    """Spec Task 1: model probability is shrunk toward market at 30% weight.
-    final_prob = model * 0.7 + market * 0.3"""
+    """Spec Task 1 (2026-05-06): weight bumped 0.30 → 0.40.
+    final_prob = model * 0.6 + market * 0.4"""
 
     def test_constants_match_spec(self):
-        self.assertEqual(MARKET_BLEND_WEIGHT, 0.30)
-        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.30)
+        self.assertEqual(MARKET_BLEND_WEIGHT, 0.40)
+        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.40)
 
     def test_final_prob_is_weighted_average(self):
-        # Spec: final_prob = model * 0.7 + market * 0.3
+        # Spec: final_prob = model * 0.6 + market * 0.4
         result = blend_with_market(0.80, 0.50)
-        self.assertAlmostEqual(result, 0.80 * 0.70 + 0.50 * 0.30, places=6)
+        self.assertAlmostEqual(result, 0.80 * 0.60 + 0.50 * 0.40, places=6)
 
     def test_final_prob_lies_between_model_and_market(self):
         for model, market in [(0.80, 0.50), (0.40, 0.55), (0.65, 0.65), (0.30, 0.45)]:
@@ -64,13 +64,14 @@ class ThresholdsTightenedTests(TestCase):
     lane while failing the recommendation-status gates."""
 
     def test_min_edge_bumped(self):
-        self.assertEqual(MIN_EDGE, 5.0)
+        # 2026-05-06: bumped 5.0 → 6.0.
+        self.assertEqual(MIN_EDGE, 6.0)
 
     def test_min_probability_bumped(self):
         self.assertEqual(MIN_PROBABILITY_FOR_RECOMMENDED, 0.60)
 
     def test_lane_edge_gate_matches_min_edge(self):
-        # Lane edge gate is decimal; MIN_EDGE is pp. 0.05 == 5pp.
+        # Lane edge gate is decimal; MIN_EDGE is pp. 0.06 == 6pp.
         self.assertAlmostEqual(LANE_HARD_GATES_EDGE_MIN * 100, MIN_EDGE)
 
     def test_lane_probability_gate_matches_min_probability(self):
@@ -80,13 +81,13 @@ class ThresholdsTightenedTests(TestCase):
 
 
 class DisagreementCapTests(TestCase):
-    """Spec Task 4: when |model - market| > 0.15 (raw), downgrade tier
-    but DO NOT block. Implemented as |final - market| > 0.105 post-blend
-    since the 30% blend compresses the raw gap by a factor of 0.70."""
+    """Spec Task 4: when |model - market| > 0.20 (raw), downgrade tier
+    but DO NOT block. 2026-05-06: relaxed from 0.15 → 0.20 raw under
+    the new 0.40 blend weight, post-blend = 0.20 * 0.60 = 0.12."""
 
     def test_cap_threshold_value(self):
-        # 0.15 * (1 - 0.30) = 0.105
-        self.assertAlmostEqual(EXTREME_DISAGREEMENT_GAP, 0.105, places=6)
+        # 0.20 * (1 - 0.40) = 0.12
+        self.assertAlmostEqual(EXTREME_DISAGREEMENT_GAP, 0.12, places=6)
 
     def test_cap_does_not_fire_inside_band(self):
         # Build a recommendation with a moderate model-market disagreement

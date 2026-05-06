@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # (STRONG_EDGE / ELITE_EDGE) unchanged — they're UI sort labels, not
 # decision gates. Edge alone is still not sufficient — the pick must also
 # clear probability + longshot + source gates.
-MIN_EDGE = 5.0      # 5 pp — minimum edge for any recommended bet (was 3.0)
+MIN_EDGE = 6.0      # 6 pp — minimum edge for any recommended bet (was 5.0)
 STRONG_EDGE = 6.0   # 6 pp — edge required to overcome heavy-favorite juice
 ELITE_EDGE = 8.0    # 8 pp — elite-tier marker for UI sorting (no longer
                     # overrides the probability/longshot/source gates)
@@ -59,15 +59,19 @@ MIN_PROBABILITY_FOR_RECOMMENDED = 0.60   # actual recommended threshold (was 0.5
 MAX_ABS_ODDS_FOR_RECOMMENDED = 300       # avoid extreme longshots / extreme favorites
                                           # (configurable; 300 keeps normal markets in range)
 
-# 2026-05-03 calibration tighten: extreme model-vs-market disagreement cap.
-# When the post-blend model and market diverge by more than this gap, the
-# recommendation is downgraded (elite/strong → standard) but NOT blocked.
-# The threshold is post-blend; under MARKET_BLEND_WEIGHT=0.30 a 15-point
-# raw disagreement compresses to 15 * (1 - 0.30) = 10.5 points after the
-# blend, which is what we gate on here. Spec: "if abs(model_prob -
-# market_prob) > 0.15: downgrade_confidence = True" — interpreted as the
-# raw-prob gap, mapped through the blend constant.
-EXTREME_DISAGREEMENT_GAP = 0.15 * (1.0 - 0.30)  # 0.105 post-blend
+# Extreme model-vs-market disagreement cap. Downgrades elite/strong tiers
+# to standard but NEVER blocks the bet — the user still sees it; it just
+# falls out of "Top Plays".
+#
+# Spec evolution:
+#   2026-05-03: cap fired at 15pp raw gap (= 10.5pp post-blend at 0.30 W).
+#   2026-05-06: relaxed to 20pp raw gap (= 12pp post-blend at 0.40 W) per
+#               eval feedback that the 15pp threshold was firing on most
+#               recommendations and erasing tier signal.
+# Threshold is computed at the post-blend layer because that's where
+# `confidence` lives in `_moneyline_candidate`. Math:
+#   gap_post_blend = (1 - MARKET_BLEND_WEIGHT) * gap_raw
+EXTREME_DISAGREEMENT_GAP = 0.20 * (1.0 - 0.40)  # 0.12 post-blend
 
 # ---------------------------------------------------------------------------
 # Two-Lane System (2026-04-28)
@@ -95,7 +99,7 @@ LANE_PASS = 'pass'
 # lane (eligible for Bet All) but fail the recommendation gates — leaving
 # automation surfacing picks that aren't actually recommended.
 LANE_HARD_GATES_PROBABILITY_MIN = 0.60   # decimal — confidence floor (was 0.55)
-LANE_HARD_GATES_EDGE_MIN = 0.05          # decimal — edge floor 5pp (was 0.03 / 3pp)
+LANE_HARD_GATES_EDGE_MIN = 0.06          # decimal — edge floor 6pp (was 0.05 / 5pp)
 LANE_HARD_GATES_MAX_ABS_ODDS = 300       # |american odds| ceiling
 LANE_RISK_FLAGS_MAX_FOR_QUALIFIED = 2    # >=3 flags drops the pick to 'pass'
 
@@ -535,6 +539,13 @@ def _lane_compute_risk_flags(
             Today insights are unstructured text and not reliably parsed
             for direction, so this is supplied by callers when known and
             defaults to False otherwise.
+      - short_fav_thin: 2026-05-06. Short-favorite picks (-149 to +99)
+            have historically underperformed when the de-vigged edge is
+            below STRONG_EDGE (6pp). 30-day eval showed the segment
+            losing money and dragging overall ROI. Flag downgrades the
+            lane from core → qualified, which routes the bet from the
+            Recommended section into Potential. The bet is NOT removed —
+            the user still sees it, it just falls out of Bet All.
     """
     market_conflict = (
         movement_class in ('strong', 'sharp')
@@ -556,11 +567,25 @@ def _lane_compute_risk_flags(
         # looked larger.
         thin_edge = (probability - raw_implied) < 0.04
 
+    # 2026-05-06 short-favorite discipline. Bucket boundary mirrors the
+    # Moneyline Evaluation report's odds-type classifier (odds in
+    # [-149, +99] is "short_favorite"). edge_decimal is the de-vigged
+    # edge in decimal — STRONG_EDGE is in pp, so divide by 100.
+    short_fav_thin = False
+    if (
+        odds_american is not None
+        and edge_decimal is not None
+        and -149 <= int(odds_american) <= 99
+        and edge_decimal < (STRONG_EDGE / 100.0)
+    ):
+        short_fav_thin = True
+
     return {
         'market_conflict': bool(market_conflict),
         'sanity_mismatch': bool(sanity_mismatch),
         'thin_edge': bool(thin_edge),
         'insight_conflict': bool(insight_conflicts),
+        'short_fav_thin': bool(short_fav_thin),
     }
 
 

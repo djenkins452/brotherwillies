@@ -1678,15 +1678,19 @@ class BulkActionsTests(TestCase):
         from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
         conf = MLBConf.objects.first()
 
+        # 2026-05-06 calibration tighten: rating gap bumped 80/40 → 90/10.
+        # The 0.40 market blend + 0.60 probability gate compresses model
+        # output more aggressively; 80/40 produces ~59.6% prob, just
+        # below the gate. 90/10 lands at ~66% — safely above.
         n_games = 7
         for i in range(n_games):
             home = MLBTeam.objects.create(
                 name=f'NoCapHome{i}', slug=f'no-cap-home-{i}', conference=conf,
-                rating=80, source='mlb_stats_api', external_id=f'no-cap-home-{i}',
+                rating=90, source='mlb_stats_api', external_id=f'no-cap-home-{i}',
             )
             away = MLBTeam.objects.create(
                 name=f'NoCapAway{i}', slug=f'no-cap-away-{i}', conference=conf,
-                rating=40, source='mlb_stats_api', external_id=f'no-cap-away-{i}',
+                rating=10, source='mlb_stats_api', external_id=f'no-cap-away-{i}',
             )
             g = self._game(hours_out=2, t1=home, t2=away,
                             ext=f'no-cap-game-{i}')

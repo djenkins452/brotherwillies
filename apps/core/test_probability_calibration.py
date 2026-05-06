@@ -24,12 +24,12 @@ class BlendWithMarketTests(TestCase):
         # No-odds slate: nothing to anchor to, model wins.
         self.assertAlmostEqual(blend_with_market(0.70, None), 0.70)
 
-    def test_default_weight_is_30_percent(self):
-        # 2026-05-03: weight bumped 0.15 → 0.30.
-        # 0.70 * 0.70 + 0.50 * 0.30 = 0.490 + 0.150 = 0.640
+    def test_default_weight_is_40_percent(self):
+        # 2026-05-06: weight bumped 0.30 → 0.40.
+        # 0.70 * 0.60 + 0.50 * 0.40 = 0.420 + 0.200 = 0.620
         self.assertAlmostEqual(
             blend_with_market(0.70, 0.50),
-            0.640,
+            0.620,
             places=4,
         )
 
@@ -100,11 +100,11 @@ class ClampProbabilityTests(TestCase):
 class FinalizeWinProbTests(TestCase):
 
     def test_blend_then_clamp_order_matters(self):
-        # 2026-05-03 (weight=0.30): blend 0.92*0.70 + 0.55*0.30 = 0.809.
-        # 0.809 is within [PROB_MIN, PROB_MAX] so the clamp leaves it
+        # 2026-05-06 (weight=0.40): blend 0.92*0.60 + 0.55*0.40 = 0.772.
+        # 0.772 is within [PROB_MIN, PROB_MAX] so the clamp leaves it
         # unchanged — proving the blend already pulled the prob in range
         # without needing the clamp to fire.
-        self.assertAlmostEqual(finalize_win_prob(0.92, 0.55), 0.809, places=4)
+        self.assertAlmostEqual(finalize_win_prob(0.92, 0.55), 0.772, places=4)
 
     def test_no_market_clamp_only(self):
         # Without market data the function reduces to clamp.
@@ -112,11 +112,11 @@ class FinalizeWinProbTests(TestCase):
         self.assertAlmostEqual(finalize_win_prob(0.05, None), 1.0 - PROB_MAX)
 
     def test_blend_can_keep_in_range(self):
-        # 2026-05-03 (weight=0.30): blend 0.86*0.70 + 0.55*0.30 = 0.767.
+        # 2026-05-06 (weight=0.40): blend 0.86*0.60 + 0.55*0.40 = 0.736.
         # Below MAX so no clamp applies — the blend alone pulled it back
         # into range.
         result = finalize_win_prob(0.86, 0.55)
-        self.assertAlmostEqual(result, 0.86 * 0.70 + 0.55 * 0.30, places=4)
+        self.assertAlmostEqual(result, 0.86 * 0.60 + 0.55 * 0.40, places=4)
         self.assertLess(result, PROB_MAX)
 
     def test_aligned_inputs_pass_through_in_range(self):
@@ -128,10 +128,10 @@ class ConstantsTests(TestCase):
     """Sanity-check the published constants match the spec."""
 
     def test_market_blend_weight_within_spec(self):
-        # 2026-05-03 calibration tighten: bumped 0.15 → 0.30.
-        self.assertEqual(MARKET_BLEND_WEIGHT, 0.30)
-        # 2026-05-03 calibration tighten: cap bumped 0.20 → 0.30.
-        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.30)
+        # 2026-05-06 calibration tighten: bumped 0.30 → 0.40.
+        self.assertEqual(MARKET_BLEND_WEIGHT, 0.40)
+        # 2026-05-06 calibration tighten: cap bumped 0.30 → 0.40.
+        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.40)
 
     def test_prob_bounds_within_spec(self):
         self.assertEqual(PROB_MIN, 0.52)

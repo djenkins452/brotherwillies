@@ -31,15 +31,13 @@ the lane system, or Elo update logic.
 from typing import Optional
 
 
-# Market anchor. 2026-05-03 calibration update: weight bumped 0.15 → 0.30
-# and the cap raised to match. Evaluation showed the engine producing too
-# many recommendations with negative CLV — pulling the model harder toward
-# the de-vigged market reduces extreme disagreement and should improve CLV
-# alignment over time. Single global control all four sports share via
-# finalize_win_prob. Reversible: drop the constants back to 0.15/0.20 to
-# restore the prior light-touch behavior.
-MARKET_BLEND_WEIGHT = 0.30
-MARKET_BLEND_WEIGHT_CAP = 0.30
+# Market anchor. 2026-05-03 bumped 0.15 → 0.30. 2026-05-06 bumped further
+# 0.30 → 0.40 after 30-day evaluation showed CLV+ rate stuck near 31% and
+# edge distribution still skewed toward 8%+ buckets. Heavier shrink should
+# pull the model closer to consensus on the picks where it disagrees most.
+# Reversible: drop back to 0.30 (or 0.15) to restore prior behavior.
+MARKET_BLEND_WEIGHT = 0.40
+MARKET_BLEND_WEIGHT_CAP = 0.40
 
 # Soft caps on the picked side's probability. Picked-side prob is
 # `max(home_prob, 1 - home_prob)`. From the home_prob perspective:

@@ -622,7 +622,13 @@ def _fmt_money(m):
 
 
 def _fmt_clv(clv, direction):
+    """Format CLV with an explicit sign. Bug-fix 2026-05-06: the prior
+    implementation prepended a sign char ('+' / '-') based on `direction`
+    on top of the value's natural sign, producing '--0.0200' for negative
+    CLVs. The `:+.4f` format spec already handles the sign, so we just
+    let it. `direction` is no longer needed for the output but kept in
+    the signature so callers don't break.
+    """
     if clv is None:
         return '—'
-    arrow = '+' if direction == 'positive' else ('-' if direction == 'negative' else '')
-    return f'{arrow}{clv:.4f}'
+    return f'{clv:+.4f}'
