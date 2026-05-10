@@ -846,13 +846,124 @@ def get_recommendation(sport: str, game, user=None) -> Optional[Recommendation]:
     return best
 
 
+def _build_shadow_alt_data(sport: str, game, user, active_mode: str) -> dict:
+    """Compute the alternate-mode recommendation snapshot for MLB.
+
+    Returns the alt-mode metrics dict (matching the documented shape on
+    BettingRecommendation.shadow_alt_data) or an empty dict when:
+      - the sport isn't MLB (Phase 1B is MLB-only),
+      - either team has no elo_rating set (meaningful comparison
+        requires Elo to be present; otherwise alt mode would fall back
+        to static and produce identical numbers).
+
+    Reads `force_use_dynamic` from elo_service to flip the active mode
+    for the duration of the alt computation only — does NOT change the
+    process-level setting. Safe to call inline; the outer
+    persist_recommendation has already finished its primary computation
+    by the time this runs.
+    """
+    if sport != 'mlb':
+        return {}
+
+    # Snapshot the team ratings BEFORE calling the alt-mode computation
+    # so the values reflect the moment of recommendation, not whatever
+    # the alt-mode call might trigger downstream.
+    home_static = float(game.home_team.rating)
+    away_static = float(game.away_team.rating)
+    home_elo = (
+        float(game.home_team.elo_rating)
+        if game.home_team.elo_rating is not None else None
+    )
+    away_elo = (
+        float(game.away_team.elo_rating)
+        if game.away_team.elo_rating is not None else None
+    )
+    elo_available = (home_elo is not None and away_elo is not None)
+
+    if not elo_available:
+        # Alt computation would silently fall back to static — same
+        # answer, no information. Record the team ratings so we can
+        # tell later that this was the reason.
+        return {
+            'pick': None, 'pick_side': None, 'pick_odds': None,
+            'final_prob': None, 'edge_pp': None, 'status': None,
+            'status_reason': None, 'tier': None, 'lane': None,
+            'home_static_rating': home_static,
+            'home_elo_rating': home_elo,
+            'away_static_rating': away_static,
+            'away_elo_rating': away_elo,
+            'elo_available': False,
+        }
+
+    # Flip the mode for the alt computation only.
+    from apps.core.services.elo_service import force_use_dynamic
+    alt_use_elo = (active_mode == 'static')  # alt is whichever the active wasn't
+
+    try:
+        with force_use_dynamic(alt_use_elo):
+            alt_rec = get_recommendation(sport, game, user)
+    except Exception:
+        # Defensive — never let shadow logging break the primary
+        # recommendation persistence path.
+        logger.exception('shadow_mode_compute_failed sport=%s game=%s', sport, getattr(game, 'id', '?'))
+        return {
+            'home_static_rating': home_static,
+            'home_elo_rating': home_elo,
+            'away_static_rating': away_static,
+            'away_elo_rating': away_elo,
+            'elo_available': elo_available,
+            'error': 'compute_failed',
+        }
+
+    if alt_rec is None:
+        return {
+            'pick': None, 'pick_side': None, 'pick_odds': None,
+            'final_prob': None, 'edge_pp': None, 'status': None,
+            'status_reason': None, 'tier': None, 'lane': None,
+            'home_static_rating': home_static,
+            'home_elo_rating': home_elo,
+            'away_static_rating': away_static,
+            'away_elo_rating': away_elo,
+            'elo_available': elo_available,
+            'no_alt_recommendation': True,
+        }
+
+    return {
+        'pick': alt_rec.pick,
+        # alt_rec.pick is the team name; pick_side is inferred from comparing.
+        'pick_side': 'home' if alt_rec.pick == game.home_team.name else 'away',
+        'pick_odds': alt_rec.odds_american,
+        'final_prob': alt_rec.final_model_prob,
+        'edge_pp': float(alt_rec.model_edge) if alt_rec.model_edge is not None else None,
+        'status': alt_rec.status,
+        'status_reason': alt_rec.status_reason,
+        'tier': alt_rec.tier,
+        'lane': alt_rec.lane,
+        'home_static_rating': home_static,
+        'home_elo_rating': home_elo,
+        'away_static_rating': away_static,
+        'away_elo_rating': away_elo,
+        'elo_available': True,
+    }
+
+
 def persist_recommendation(sport: str, game, user=None):
     """Compute and save a BettingRecommendation row. Returns the saved model or None."""
     from apps.core.models import BettingRecommendation
+    from apps.core.services.elo_service import is_dynamic_active
 
     rec = get_recommendation(sport, game, user)
     if rec is None:
         return None
+
+    # Phase 1B Elo shadow mode — capture both the active rating mode AND
+    # the alt-mode recommendation. For MLB only; other sports leave the
+    # fields blank/empty. Failure to compute the shadow alt MUST NOT
+    # block primary persistence — `_build_shadow_alt_data` swallows its
+    # own exceptions.
+    active_mode = 'elo' if is_dynamic_active() else 'static'
+    alt_mode = 'static' if active_mode == 'elo' else 'elo'
+    shadow_alt_data = _build_shadow_alt_data(sport, game, user, active_mode)
 
     game_fk_field = f"{sport}_game"
     return BettingRecommendation.objects.create(
@@ -882,5 +993,9 @@ def persist_recommendation(sport: str, game, user=None):
         final_model_prob=rec.final_model_prob,
         market_prob=rec.market_prob,
         extreme_disagreement=rec.extreme_disagreement,
+        # 2026-05-10 Elo shadow snapshot. Empty for non-MLB sports.
+        shadow_active_mode=active_mode if sport == 'mlb' else '',
+        shadow_alt_mode=alt_mode if sport == 'mlb' else '',
+        shadow_alt_data=shadow_alt_data,
         **{game_fk_field: game},
     )

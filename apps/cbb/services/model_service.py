@@ -6,6 +6,8 @@ HOUSE_WEIGHTS = {
     'rating': 1.0,
     'hfa': 1.0,
     'injury': 1.0,
+    # PHANTOMS — see apps/cfb/services/model_service.py for the same
+    # finding; CBB mirrors it. docs/feature_truth_audit_2026_05_10.md.
     'recent_form': 1.0,
     'conference': 1.0,
 }

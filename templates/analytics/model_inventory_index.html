@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Model Input Inventory | Brother Willies{% endblock %}
+
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <h1 style="margin-bottom: 0.4rem;">Model Input Inventory</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Staff diagnostic. For each MLB game in the current window,
+        click through to see exactly what the model consumes, how it
+        scores, how the recommendation engine arrives at its verdict,
+        and which gates fired. Read-only — running this page does not
+        mutate any state.
+    </p>
+
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 1rem;">
+        <a href="{% url 'analytics:backtest' %}" style="color: #6cb;">← Backtest Analytics</a>
+    </p>
+
+    {% if not games %}
+        <div style="padding: 1.5rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; text-align: center; color: #888;">
+            No MLB games in the ±36-hour window. Check back when today's
+            slate is loaded.
+        </div>
+    {% else %}
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                <thead>
+                    <tr style="background: #222; color: #aaa; text-align: left;">
+                        <th style="padding: 0.6rem 0.8rem;">First Pitch</th>
+                        <th style="padding: 0.6rem 0.8rem;">Matchup</th>
+                        <th style="padding: 0.6rem 0.8rem;">Status</th>
+                        <th style="padding: 0.6rem 0.8rem;">Pitchers</th>
+                        <th style="padding: 0.6rem 0.8rem;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for g in games %}
+                        <tr style="border-top: 1px solid #2a2a2a;">
+                            <td style="padding: 0.6rem 0.8rem; color: #ccc; white-space: nowrap;">
+                                {{ g.first_pitch|date:"M j" }} · {{ g.first_pitch|time:"g:i A" }}
+                            </td>
+                            <td style="padding: 0.6rem 0.8rem;">
+                                <strong>{{ g.away_team.name }}</strong> @ <strong>{{ g.home_team.name }}</strong>
+                            </td>
+                            <td style="padding: 0.6rem 0.8rem; color: #888; text-transform: capitalize;">
+                                {{ g.status }}
+                            </td>
+                            <td style="padding: 0.6rem 0.8rem; color: #888; font-size: 0.85rem;">
+                                {% if g.home_pitcher and g.away_pitcher %}
+                                    {{ g.away_pitcher.name }} vs {{ g.home_pitcher.name }}
+                                {% else %}
+                                    <span style="color: #c83;">TBD</span>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 0.6rem 0.8rem; text-align: right;">
+                                <a href="{% url 'analytics:model_inventory_detail' g.id %}"
+                                   style="color: #6cb; text-decoration: none;">Inspect →</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

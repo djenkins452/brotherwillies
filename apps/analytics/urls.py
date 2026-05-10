@@ -8,4 +8,24 @@ app_name = 'analytics'
 urlpatterns = [
     path('backtest/', views.backtest_analytics, name='backtest'),
     path('backtest/run/', views.trigger_backtest, name='trigger_backtest'),
+    # Phase 1A staff diagnostic — Model Input Inventory.
+    # Re-runs the live model + recommender for one game and shows the
+    # full input → score → calibration → edge → gate trace. Read-only.
+    path(
+        'model-inventory/',
+        views.model_inventory_index,
+        name='model_inventory_index',
+    ),
+    path(
+        'model-inventory/mlb/<uuid:game_id>/',
+        views.model_inventory_detail,
+        name='model_inventory_detail',
+    ),
+    # Phase 1B Elo shadow review — side-by-side active vs alt-mode
+    # comparison on recently-emitted MLB recommendations.
+    path(
+        'shadow-review/',
+        views.shadow_review,
+        name='shadow_review',
+    ),
 ]

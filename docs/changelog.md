@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-10 — Phase 1A + 1B: Truth instrumentation + Elo shadow mode
+
+**Summary:** Phase 1A truth-pass and Phase 1B MLB Elo shadow-mode wiring per the engineering report's roadmap. No live recommendation behavior changes — every move is either diagnostic (read-only inventory page, segment instrumentation, audit doc), code-honesty (phantom-weight comments + regression locks), or shadow-only (alt-mode comparison data captured alongside primary recommendations). Production behavior is bit-identical to the pre-commit codebase until `USE_DYNAMIC_RATINGS=True` is set in Railway env vars — and even then the rollback is one env-var change.
+
+### Phase 1A — Truth & Instrumentation
+
+**Task 1: Model Input Inventory (`/analytics/model-inventory/`)** — staff-only diagnostic surface. For any MLB game in the ±36-hour window, surfaces the full input → score → calibration → edge → gate trace:
+
+- Both static `Team.rating` AND `Team.elo_rating` (with projection onto legacy scale) per side, with rating-mode marker showing which is active.
+- Pitcher rating + ERA / WHIP / record per side, with `default — no stats yet` chip when rating == 50.0.
+- `_score()` breakdown: rating term, pitcher term, HFA term, total.
+- Calibration stages: raw sigmoid → market blend → soft clamp → final.
+- Edge math: raw implied / fair de-vig / pick side / edge in pp.
+- Recommendation outputs: status, status_reason, tier, lane, risk score.
+- Gate trace: each `compute_status` and lane-gate condition shown as `fired` / `—` so the binding constraint is unambiguous.
+
+Re-runs the live model + recommender against current DB state — does NOT mutate `ModelResultSnapshot`, `BettingRecommendation`, or `EloHistory`.
+
+Files: `apps/analytics/services/model_inventory.py`, `apps/analytics/views.py`, `apps/analytics/urls.py`, `templates/analytics/model_inventory_index.html`, `templates/analytics/model_inventory_detail.html`, `apps/analytics/test_model_inventory.py` (20 tests).
+
+**Task 2: Feature Truth Audit (`docs/feature_truth_audit_2026_05_10.md`)** — every weight key declared in HOUSE_WEIGHTS across the four sport `model_service` files audited against `_score()` body. Findings:
+
+- **MLB:** `injury` is a phantom — declared, never read by `_score`. Comment added in place.
+- **College Baseball:** mirror of MLB; same phantom; comment added.
+- **CFB:** `recent_form` and `conference` are phantoms; comments added.
+- **CBB:** mirror of CFB; same phantoms; comments added.
+- **`Team.rating`:** confirmed zero updaters in providers / management commands. The static field is set once at seed and never advances. This is the foundational issue Phase 1B fixes.
+- **`StartingPitcher.rating`:** updated by `apps/datahub/providers/mlb/pitcher_stats_provider.py`. Default 50.0 means stats not yet ingested.
+
+Phantom keys retained in `HOUSE_WEIGHTS` for backward-compat but commented inline so future readers see the truth immediately.
+
+**Lock:** `apps/core/test_feature_truth_audit.py` (18 tests). Each test perturbs one weight key and asserts the score does or doesn't change as documented. Adds a static-scan test that no `team.rating = ...` updater has been introduced into providers.
+
+**Task 3: Segment Instrumentation** — additive aggregator buckets in `apps/core/services/backtesting_service.py`. Three new top-level keys in the `BacktestRun.summary` JSON:
+
+- `by_fav_size` — six bands: `heavy_fav` (≤−200), `mid_fav` (−199..−150), `short_fav` (−149..+99), `short_dog` (+100..+150), `mid_dog` (+151..+250), `long_dog` (+251..+).
+- `by_pitcher_completeness` — five labels: `both_real`, `one_default`, `both_default`, `tbd`, `n_a` (non-baseball sport).
+- `by_starter_known` — coarse: `known` / `tbd` / `n_a`.
+
+`GameEvaluation` extended with `fav_size_bucket`, `pitcher_completeness`, `starter_known` fields populated in `evaluate_game`. Existing buckets unchanged. Lock: `apps/core/test_segment_instrumentation.py` (23 tests).
+
+**Task 4: Elo Validation Audit (`docs/elo_validation_audit_2026_05_10.md`)** — 11-section structural review of `apps/core/services/elo_service.py` against the engineering report's "dead code" framing. Verdict: **the Elo service is NOT dead code**. It is dormant infrastructure held behind `USE_DYNAMIC_RATINGS=False`. Constants are deliberate; tests are passing; integration is single-point; rollback is clean.
+
+### Phase 1B — MLB Elo Shadow Mode
+
+**Task 5: Shadow-mode logging on `BettingRecommendation`** — three new fields, all additive:
+
+- `shadow_active_mode` — `'static'` / `'elo'` / `''` for non-MLB.
+- `shadow_alt_mode` — opposite of active.
+- `shadow_alt_data` — JSONField with the alt-mode recommendation snapshot: pick, pick_side, pick_odds, final_prob, edge_pp, status, status_reason, tier, lane, plus team static AND Elo ratings, plus `elo_available` flag.
+
+`persist_recommendation` computes the alt-mode recommendation under `force_use_dynamic` and stores the result alongside the primary. **Failure inside the alt compute is swallowed and logged — primary persistence is never blocked by shadow logging.** MLB-only per spec.
+
+Migration: `apps/core/migrations/0008_bettingrecommendation_shadow_active_mode_and_more.py`. Lock: `apps/core/test_shadow_mode.py` (11 tests).
+
+**Task 6: Historical backfill (`docs/elo_backfill_runbook_2026_05_10.md`)** — runbook covering deterministic / reproducible / idempotent properties, defaults, regression strategy (none, Phase 2 follow-up), initial backfill (`python manage.py rebuild_elo_ratings --sport mlb`), ongoing maintenance (`update_elo_ratings` now wired into `refresh_data` cron after `resolve_outcomes`), verification queries, rollback procedure, cutover procedure.
+
+`update_elo_ratings` runs every cron cycle regardless of `USE_DYNAMIC_RATINGS`:
+- Flag-OFF: ratings accumulate silently in the background; no UI/recommendation change.
+- Flag-ON: ratings are already current; no startup gap during which the model would see only-default Elo values.
+
+**Task 7: Calibration Impact Review (`docs/calibration_impact_review_2026_05_10.md`)** — analytical framework for the cutover decision. Mathematical first principles for each axis (probability distribution, edge distribution, recommendation count, CLV expectation), direct answers to "does Elo reduce fake giant edges, short-favorite leakage, stale-team problems WITHOUT additional threshold tightening?", empirical questions for the backtest pair + shadow review, decision criteria.
+
+**Live tooling (`/analytics/shadow-review/`):** new staff diagnostic surface that aggregates `BettingRecommendation` rows with shadow data populated. Reports active-vs-alt distributions, pick agreement, status flips, lane flips, tier breakdown, first 5 disagreement examples. Files: `apps/analytics/services/shadow_review.py`, `templates/analytics/shadow_review.html`, `apps/analytics/test_shadow_review.py` (10 tests).
+
+**Task 8: Production-Readiness Recommendation (`docs/elo_production_readiness_2026_05_10.md`)** — verdict: **GO conditional on the §7 evidence checklist passing**. Cutover procedure: set `USE_DYNAMIC_RATINGS=True` in Railway env vars. Effective immediately. Rollback: same env var to `False`. No DB migration. No code change. No restart needed.
+
+### Test totals
+
+- 915 tests passing across the touched apps (5 new test modules + locks added in this commit; 0 regressions).
+- `python manage.py check` passes.
+
+### Next steps (out of scope for this commit)
+
+The cutover itself is a Railway operation — set `USE_DYNAMIC_RATINGS=True` after running through the checklist in `docs/elo_production_readiness_2026_05_10.md` §7. Phase 1C (real injury term, pitcher recent form) follows the cutover; Phase 1D (calibration retune if needed) follows Phase 1C empirics.
+
+---
+
 ## 2026-05-06 - Calibration second pass: heavier shrink, tighter edge, short-fav discipline
 
 **Summary:** 30-day evaluation showed CLV+ rate stuck near 31%, edge distribution skewed toward 8%+, short favorites losing money. This pass tightens calibration further while preserving full visibility (no game / bet is hidden — only classification changes).

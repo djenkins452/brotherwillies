@@ -163,6 +163,42 @@ class BettingRecommendation(models.Model):
     market_prob = models.FloatField(null=True, blank=True)
     extreme_disagreement = models.BooleanField(default=False, db_index=True)
 
+    # Phase 1B Elo shadow mode (2026-05-10). Captured at recommendation
+    # time so a future cutover decision can be made on apples-to-apples
+    # data: "what would this row have looked like under the OTHER rating
+    # mode?". Populated for MLB only at present; other sports leave the
+    # fields null. shadow_alt_data is a JSON blob with the alt-mode
+    # metrics — keys are stable but flexible (no schema migration cost
+    # to add a new metric mid-experiment). All shadow plumbing is
+    # additive: if it's null, behavior is identical to the pre-shadow
+    # codebase.
+    SHADOW_MODE_CHOICES = [
+        ('', ''),
+        ('static', 'Static (team.rating)'),
+        ('elo', 'Dynamic Elo'),
+    ]
+    shadow_active_mode = models.CharField(
+        max_length=10, choices=SHADOW_MODE_CHOICES, blank=True, default='',
+        help_text='Rating mode active when this row was persisted.',
+    )
+    shadow_alt_mode = models.CharField(
+        max_length=10, choices=SHADOW_MODE_CHOICES, blank=True, default='',
+        help_text='Rating mode the shadow_alt_data represents.',
+    )
+    # Stored shape (when populated):
+    #   {
+    #     'pick': 'Yankees', 'pick_side': 'home', 'pick_odds': -150,
+    #     'final_prob': 0.6312, 'edge_pp': 4.8, 'status': 'recommended',
+    #     'status_reason': '', 'tier': 'standard', 'lane': 'qualified',
+    #     'home_static_rating': 70.0, 'home_elo_rating': 1620.5,
+    #     'away_static_rating': 40.0, 'away_elo_rating': 1450.0,
+    #     'elo_available': True,
+    #   }
+    # `elo_available=False` means at least one team had no elo_rating set
+    # at recommendation time — comparison is degenerate (alt would have
+    # fallen back to static).
+    shadow_alt_data = models.JSONField(default=dict, blank=True)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

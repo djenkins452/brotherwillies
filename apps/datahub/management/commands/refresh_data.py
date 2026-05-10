@@ -149,6 +149,26 @@ class Command(BaseCommand):
             _emit(f'settle_mockbets failed: {e}')
             sport_failures.append(('settle_mockbets', str(e)))
 
+        # Phase 1B Elo shadow mode (2026-05-10) — incrementally update
+        # elo_rating for any final games this cycle. Idempotent: only
+        # touches games not yet in TeamEloHistory. Runs every cycle
+        # regardless of USE_DYNAMIC_RATINGS so:
+        #   1. While flag is OFF → elo_rating accumulates silently in
+        #      the background; no UI/recommendation change. Shadow-mode
+        #      comparison data on BettingRecommendation rows reflects
+        #      the *latest* Elo state, which is the right comparison
+        #      number to make a cutover decision.
+        #   2. When flag is FLIPPED ON → ratings are already current,
+        #      no startup gap during which the model sees only-default
+        #      Elo values.
+        # Failures here are intentionally non-fatal: shadow data is
+        # informational, not load-bearing for the recommendation engine.
+        try:
+            call_command('update_elo_ratings', stdout=self.stdout)
+        except Exception as e:
+            _emit(f'update_elo_ratings failed: {e}')
+            sport_failures.append(('update_elo_ratings', str(e)))
+
         # Prune old raw OddsSnapshot rows. Cheap when there's nothing to
         # delete; protects the DB from runaway growth as we now keep
         # every API pull (not just one per day per game).

@@ -26,6 +26,11 @@ HOUSE_WEIGHTS = {
     'rating': 1.0,
     'pitcher': 1.0,
     'hfa': 1.0,
+    # PHANTOM — _score() does not read this key. Retained for backward
+    # compatibility with admin/serialization callers; the phantom is
+    # documented in docs/feature_truth_audit_2026_05_10.md and locked
+    # by apps/core/test_feature_truth_audit.py. Wiring an actual
+    # injury term is Phase 1C.
     'injury': 1.0,
 }
 

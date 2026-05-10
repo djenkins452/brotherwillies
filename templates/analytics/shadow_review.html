@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Elo Shadow Review | Brother Willies{% endblock %}
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <a href="{% url 'analytics:backtest' %}" style="color: #6cb;">← Backtest Analytics</a>
+        ·
+        <a href="{% url 'analytics:model_inventory_index' %}" style="color: #6cb;">Model Input Inventory</a>
+    </p>
+
+    <h1 style="margin-bottom: 0.4rem;">Elo Shadow Review</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.25rem;">
+        Side-by-side comparison of the <strong>active</strong> rating mode vs the
+        <strong>alt</strong> mode on MLB recommendations from the last
+        <strong>{{ days }} days</strong>. Read-only; this page does not run the model.
+        Returns empty until the recommendation persistence path has captured shadow
+        data — see <code>BettingRecommendation.shadow_alt_data</code>.
+    </p>
+
+    {% if review.sample == 0 %}
+        <div style="padding: 1.5rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; text-align: center; color: #888;">
+            No usable shadow data yet
+            ({{ review.sample_total }} row{{ review.sample_total|pluralize }} scanned;
+            none had <code>elo_available=True</code>).
+            Either run the Elo backfill or wait for new MLB recommendations
+            to be persisted with both team Elos populated.
+        </div>
+    {% else %}
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin-bottom: 1.25rem;">
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem;">
+                <div style="color: #888; font-size: 0.78rem; text-transform: uppercase;">Sample</div>
+                <div style="font-size: 1.4rem; margin-top: 0.3rem;"><strong>{{ review.sample }}</strong></div>
+                <div style="color: #888; font-size: 0.78rem;">of {{ review.sample_total }} total rows</div>
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem;">
+                <div style="color: #888; font-size: 0.78rem; text-transform: uppercase;">Active mode</div>
+                <div style="font-size: 1.4rem; margin-top: 0.3rem;"><strong>{{ review.active_mode|default:"—" }}</strong></div>
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem;">
+                <div style="color: #888; font-size: 0.78rem; text-transform: uppercase;">Pick agreement</div>
+                <div style="font-size: 1.4rem; margin-top: 0.3rem;">
+                    <strong>{% if review.pick_agreement_rate is not None %}{{ review.pick_agreement_rate|floatformat:3 }}{% else %}—{% endif %}</strong>
+                </div>
+                <div style="color: #888; font-size: 0.78rem;">
+                    {{ review.pick_same_side }} same · {{ review.pick_different_side }} different
+                </div>
+            </div>
+        </div>
+
+        <h2 style="font-size: 1rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Distributions</h2>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr style="color: #888;"><td></td><td style="text-align: right;">n</td><td style="text-align: right;">mean</td><td style="text-align: right;">min</td><td style="text-align: right;">max</td></tr>
+                <tr><td style="color: #aaa;">final_prob (active)</td><td style="text-align: right;">{{ review.active_final_prob.n }}</td><td style="text-align: right;">{{ review.active_final_prob.mean|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.active_final_prob.min_val|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.active_final_prob.max_val|default_if_none:"—" }}</td></tr>
+                <tr><td style="color: #6cb;">final_prob (alt)</td><td style="text-align: right;">{{ review.alt_final_prob.n }}</td><td style="text-align: right;">{{ review.alt_final_prob.mean|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.alt_final_prob.min_val|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.alt_final_prob.max_val|default_if_none:"—" }}</td></tr>
+                <tr><td style="color: #aaa;">edge_pp (active)</td><td style="text-align: right;">{{ review.active_edge_pp.n }}</td><td style="text-align: right;">{{ review.active_edge_pp.mean|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.active_edge_pp.min_val|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.active_edge_pp.max_val|default_if_none:"—" }}</td></tr>
+                <tr><td style="color: #6cb;">edge_pp (alt)</td><td style="text-align: right;">{{ review.alt_edge_pp.n }}</td><td style="text-align: right;">{{ review.alt_edge_pp.mean|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.alt_edge_pp.min_val|default_if_none:"—" }}</td><td style="text-align: right;">{{ review.alt_edge_pp.max_val|default_if_none:"—" }}</td></tr>
+            </table>
+        </div>
+
+        <h2 style="font-size: 1rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Recommendation Status Flips</h2>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr><td style="color: #aaa;">Both modes recommend</td><td style="text-align: right;">{{ review.status_recommended_both }}</td></tr>
+                <tr><td style="color: #c83;">Active only</td><td style="text-align: right;">{{ review.status_recommended_active_only }}</td></tr>
+                <tr><td style="color: #6cb;">Alt only</td><td style="text-align: right;">{{ review.status_recommended_alt_only }}</td></tr>
+                <tr><td style="color: #888;">Neither</td><td style="text-align: right;">{{ review.status_recommended_neither }}</td></tr>
+            </table>
+        </div>
+
+        <h2 style="font-size: 1rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Lane Flips (core eligibility)</h2>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr><td style="color: #aaa;">Both modes core</td><td style="text-align: right;">{{ review.lane_core_both }}</td></tr>
+                <tr><td style="color: #c83;">Active only core</td><td style="text-align: right;">{{ review.lane_core_active_only }}</td></tr>
+                <tr><td style="color: #6cb;">Alt only core</td><td style="text-align: right;">{{ review.lane_core_alt_only }}</td></tr>
+            </table>
+        </div>
+
+        {% if review.disagreement_examples %}
+            <h2 style="font-size: 1rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Pick-Side Disagreements (first 5)</h2>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.83rem;">
+                {% for ex in review.disagreement_examples %}
+                    <div style="padding: 0.4rem 0; border-bottom: 1px solid #222;">
+                        <div style="color: #ccc;">{{ ex.game_label }}</div>
+                        <div style="color: #888; margin-top: 0.2rem;">
+                            active: <span style="color: #c83;">{{ ex.active_pick }}</span> ({{ ex.active_pick_side }}, edge {{ ex.active_edge_pp }})
+                            ·
+                            alt: <span style="color: #6cb;">{{ ex.alt_pick }}</span> ({{ ex.alt_pick_side }}, edge {{ ex.alt_edge_pp }})
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endif %}
+
+    <p style="color: #666; font-size: 0.78rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
+        Diagnostic only. Reading this page does not modify any recommendation.
+        Source: <code>BettingRecommendation</code> rows with
+        <code>shadow_active_mode</code> populated and
+        <code>shadow_alt_data.elo_available=True</code>.
+    </p>
+</div>
+{% endblock %}

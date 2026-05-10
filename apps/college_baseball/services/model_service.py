@@ -20,6 +20,8 @@ HOUSE_WEIGHTS = {
     'rating': 1.0,
     'pitcher': 1.0,
     'hfa': 1.0,
+    # PHANTOM — _score() does not read this key. Mirror of MLB; same
+    # follow-up applies. See docs/feature_truth_audit_2026_05_10.md.
     'injury': 1.0,
 }
 

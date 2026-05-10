@@ -11,6 +11,12 @@ HOUSE_WEIGHTS = {
     'rating': 1.0,
     'hfa': 1.0,
     'injury': 1.0,
+    # PHANTOMS — _compute_win_prob() does not read either of the
+    # following keys. They map to UserModelConfig.recent_form_weight
+    # and UserModelConfig.conference_weight which exist on disk and
+    # render as sliders on the My Model page; the sliders currently
+    # have no effect on CFB output. See
+    # docs/feature_truth_audit_2026_05_10.md.
     'recent_form': 1.0,
     'conference': 1.0,
 }

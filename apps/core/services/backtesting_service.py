@@ -162,6 +162,103 @@ def _edge_intel_bucket(edge: float) -> str:
     return EDGE_INTEL_BUCKET_LABELS[0]  # negative edges → '0-2'
 
 
+# ---------------------------------------------------------------------------
+# Phase 1A — Segment Instrumentation (2026-05-10)
+#
+# Adds three new breakdowns alongside the existing Phase 1 / Phase 2 ones,
+# all additive. The recommendation engine is NOT touched — these are
+# measurement-only buckets so eval can answer:
+#   - "How does the model perform per favorite-size band?"
+#   - "How does it perform when both starters are real (non-default
+#     ratings) vs when one or both are at the seed-default 50.0?"
+#   - "How does the engine fare on TBD-pitcher games?"
+#
+# Favorite-size bucket boundaries match the moneyline-evaluation report
+# odds-type classifier so segment numbers align across surfaces. The
+# short-favorite band (-149..+99) is the one called out in the engineering
+# report as the model's danger zone.
+FAV_SIZE_BUCKET_LABELS = [
+    'heavy_fav',     # ≤ -200
+    'mid_fav',       # -199..-150
+    'short_fav',     # -149..+99
+    'short_dog',     # +100..+150
+    'mid_dog',       # +151..+250
+    'long_dog',      # +251..+
+]
+
+
+def _fav_size_bucket(american_odds) -> str:
+    """Map a closing-odds American int to a favorite-size band.
+
+    None / 0 fall into 'short_fav' as the safest neutral default — but
+    in practice evaluate_game never produces a row without odds.
+    """
+    if american_odds is None:
+        return 'short_fav'
+    o = int(american_odds)
+    if o <= -200:
+        return 'heavy_fav'
+    if -199 <= o <= -150:
+        return 'mid_fav'
+    if -149 <= o <= 99:
+        return 'short_fav'
+    if 100 <= o <= 150:
+        return 'short_dog'
+    if 151 <= o <= 250:
+        return 'mid_dog'
+    return 'long_dog'
+
+
+# Pitcher-data completeness — only meaningful for the baseball sports
+# (mlb / college_baseball). Other sports report 'n_a' so they're cleanly
+# excluded from the breakdown.
+PITCHER_COMPLETENESS_LABELS = [
+    'both_real',       # both starters known, neither at default rating
+    'one_default',     # both known but at least one rating == 50.0
+    'both_default',    # both known but both at default rating (suggests no stats)
+    'tbd',             # at least one starter unknown / unset
+    'n_a',             # non-baseball sport
+]
+
+
+_BASEBALL_SPORTS = {'mlb', 'college_baseball'}
+_PITCHER_DEFAULT_RATING = 50.0
+
+
+def _pitcher_completeness(sport: str, game) -> str:
+    """Classify the game's pitcher-data state.
+
+    Reads `home_pitcher` / `away_pitcher` directly. For non-baseball
+    sports the attributes don't exist; we short-circuit to 'n_a'.
+    """
+    if sport not in _BASEBALL_SPORTS:
+        return 'n_a'
+    hp = getattr(game, 'home_pitcher', None)
+    ap = getattr(game, 'away_pitcher', None)
+    if hp is None or ap is None:
+        return 'tbd'
+    h_default = float(getattr(hp, 'rating', _PITCHER_DEFAULT_RATING)) == _PITCHER_DEFAULT_RATING
+    a_default = float(getattr(ap, 'rating', _PITCHER_DEFAULT_RATING)) == _PITCHER_DEFAULT_RATING
+    if h_default and a_default:
+        return 'both_default'
+    if h_default or a_default:
+        return 'one_default'
+    return 'both_real'
+
+
+# Starter-known is a coarser slice of the same data — useful as a single
+# flag for plotting. Maps directly off pitcher_completeness.
+STARTER_KNOWN_LABELS = ['known', 'tbd', 'n_a']
+
+
+def _starter_known_label(pitcher_completeness: str) -> str:
+    if pitcher_completeness == 'n_a':
+        return 'n_a'
+    if pitcher_completeness == 'tbd':
+        return 'tbd'
+    return 'known'
+
+
 # System verdict thresholds (decimal — match the rest of the service).
 VERDICT_STRONG_CLV_RATE = 0.5
 VERDICT_LABELS = ['STRONG', 'NEUTRAL', 'WEAK']
@@ -224,6 +321,11 @@ class GameEvaluation:
     # since we can't classify a bet's quality without a trustworthy line
     # movement signal. Set in evaluate_game().
     decision_quality: Optional[str] = None
+    # Phase 1A segment instrumentation (2026-05-10). All three are
+    # observable-at-game-time inputs; populated in evaluate_game().
+    fav_size_bucket: str = 'short_fav'             # see FAV_SIZE_BUCKET_LABELS
+    pitcher_completeness: str = 'n_a'              # baseball-only signal
+    starter_known: str = 'n_a'                     # coarse known/tbd/n_a
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +468,18 @@ class _BacktestAggregator:
             (label, _BucketAccumulator()) for label in DECISION_QUALITY_LABELS
         )
 
+        # Phase 1A segment instrumentation. Same accumulator type so the
+        # ROI/CLV/win-rate metrics come out of the box.
+        self.by_fav_size = OrderedDict(
+            (label, _BucketAccumulator()) for label in FAV_SIZE_BUCKET_LABELS
+        )
+        self.by_pitcher_completeness = OrderedDict(
+            (label, _BucketAccumulator()) for label in PITCHER_COMPLETENESS_LABELS
+        )
+        self.by_starter_known = OrderedDict(
+            (label, _BucketAccumulator()) for label in STARTER_KNOWN_LABELS
+        )
+
         self._seen_keys = set()
         self.total = 0
         self.duplicates = 0
@@ -407,6 +521,17 @@ class _BacktestAggregator:
         self.by_edge_intel[_edge_intel_bucket(ev.edge)].add(ev)
         if ev.decision_quality and ev.decision_quality in self.decision_quality:
             self.decision_quality[ev.decision_quality].add(ev)
+
+        # Phase 1A segment instrumentation. Defensive .get-style access
+        # via `if ... in` guards against any caller that constructs a
+        # GameEvaluation with an unrecognized bucket label (e.g. an
+        # older snapshot replayed through a newer aggregator).
+        if ev.fav_size_bucket in self.by_fav_size:
+            self.by_fav_size[ev.fav_size_bucket].add(ev)
+        if ev.pitcher_completeness in self.by_pitcher_completeness:
+            self.by_pitcher_completeness[ev.pitcher_completeness].add(ev)
+        if ev.starter_known in self.by_starter_known:
+            self.by_starter_known[ev.starter_known].add(ev)
 
     def to_summary(self) -> dict:
         """Build the persisted JSON. Shape is stable across runs.
@@ -451,6 +576,17 @@ class _BacktestAggregator:
             'decision_quality': {k: v.to_dict() for k, v in self.decision_quality.items()},
             'clv_metrics': clv_metrics,
             'system_verdict': verdict,
+            # ---- Phase 1A segment instrumentation (2026-05-10) ----
+            # Strictly additive — pre-existing keys above are unchanged.
+            # These breakdowns answer the engineering report's open
+            # questions about which model segments leak edge.
+            'by_fav_size': {k: v.to_dict() for k, v in self.by_fav_size.items()},
+            'by_pitcher_completeness': {
+                k: v.to_dict() for k, v in self.by_pitcher_completeness.items()
+            },
+            'by_starter_known': {
+                k: v.to_dict() for k, v in self.by_starter_known.items()
+            },
         }
 
 
@@ -655,6 +791,14 @@ def evaluate_game(sport: str, game) -> Optional[GameEvaluation]:
 
     label = f"{game.away_team.name} @ {game.home_team.name}"
 
+    # Phase 1A segment instrumentation — derived purely from observable
+    # at-game-time inputs (closing odds + game pitcher fields), so they
+    # share the same "no future leakage" property as the rest of this
+    # function.
+    fav_size = _fav_size_bucket(pick_closing_odds)
+    pitcher_completeness = _pitcher_completeness(sport, game)
+    starter_known = _starter_known_label(pitcher_completeness)
+
     return GameEvaluation(
         sport=sport,
         game_id=str(game.id),
@@ -677,6 +821,9 @@ def evaluate_game(sport: str, game) -> Optional[GameEvaluation]:
         is_favorite=pick_closing_odds < 0,
         is_home_pick=pick_is_home,
         decision_quality=_decision_quality(won, clv_decimal),
+        fav_size_bucket=fav_size,
+        pitcher_completeness=pitcher_completeness,
+        starter_known=starter_known,
     )
 
 

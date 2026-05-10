@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Inventory: {{ inventory.game_label }} | Brother Willies{% endblock %}
+
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <a href="{% url 'analytics:model_inventory_index' %}" style="color: #6cb;">← Inventory Index</a>
+    </p>
+
+    <h1 style="margin-bottom: 0.2rem;">{{ inventory.game_label }}</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        First pitch: {{ game.first_pitch|date:"M j Y" }} · {{ game.first_pitch|time:"g:i A" }} ·
+        {% if inventory.neutral_site %}
+            <span style="color: #c93;">Neutral site (HFA disabled)</span>
+        {% else %}
+            HFA active
+        {% endif %}
+        ·
+        Status: <strong style="text-transform: capitalize;">{{ game.status }}</strong>
+    </p>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# 1. INPUTS — what the model actually consumes #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">
+        1. Inputs
+    </h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+        {% for side, team in side_pairs %}
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem;">
+                <div style="color: #888; font-size: 0.8rem; text-transform: uppercase; margin-bottom: 0.4rem;">{{ side }}</div>
+                <div style="font-size: 1.05rem; margin-bottom: 0.6rem;"><strong>{{ team.name }}</strong> ({{ team.abbreviation }})</div>
+                <table style="width: 100%; font-size: 0.85rem;">
+                    <tr><td style="color: #888; padding: 0.15rem 0;">Static rating</td><td style="text-align: right;">{{ team.static_rating|floatformat:2 }}{% if team.is_default_rating %} <span style="color: #c83;">(default — likely seeded)</span>{% endif %}</td></tr>
+                    <tr><td style="color: #888; padding: 0.15rem 0;">Elo rating</td><td style="text-align: right;">{% if team.elo_rating %}{{ team.elo_rating|floatformat:1 }}{% else %}<span style="color: #888;">—</span>{% endif %}</td></tr>
+                    <tr><td style="color: #888; padding: 0.15rem 0;">Elo last updated</td><td style="text-align: right; color: #aaa; font-size: 0.8rem;">{{ team.elo_last_updated|default:"—" }}</td></tr>
+                    <tr><td style="color: #888; padding: 0.15rem 0;">Elo → legacy projection</td><td style="text-align: right;">{% if team.elo_projected_legacy %}{{ team.elo_projected_legacy|floatformat:2 }}{% else %}<span style="color: #888;">—</span>{% endif %}</td></tr>
+                    <tr style="border-top: 1px solid #2a2a2a;"><td style="color: #6cb; padding: 0.3rem 0;">Rating used now</td><td style="text-align: right; color: #6cb;"><strong>{{ team.rating_used_now|floatformat:2 }}</strong> ({{ team.rating_mode_active }})</td></tr>
+                    <tr><td style="color: #888; padding: 0.15rem 0;">Season record</td><td style="text-align: right;">{{ team.season_record|default:"—" }}</td></tr>
+                </table>
+            </div>
+        {% endfor %}
+    </div>
+
+    {# Pitchers #}
+    <h3 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.5rem;">Starting Pitchers</h3>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+        {% for side, p in pitcher_pairs %}
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem;">
+                <div style="color: #888; font-size: 0.8rem; text-transform: uppercase; margin-bottom: 0.4rem;">{{ side }}</div>
+                {% if p.name %}
+                    <div style="font-size: 1rem; margin-bottom: 0.4rem;"><strong>{{ p.name }}</strong></div>
+                    <table style="width: 100%; font-size: 0.85rem;">
+                        <tr><td style="color: #888; padding: 0.15rem 0;">Rating</td><td style="text-align: right;">{{ p.rating|floatformat:2 }}{% if p.is_default_rating %} <span style="color: #c83;">(default — no stats yet)</span>{% endif %}</td></tr>
+                        <tr><td style="color: #888; padding: 0.15rem 0;">ERA</td><td style="text-align: right;">{{ p.era|default:"—" }}</td></tr>
+                        <tr><td style="color: #888; padding: 0.15rem 0;">WHIP</td><td style="text-align: right;">{{ p.whip|default:"—" }}</td></tr>
+                        <tr><td style="color: #888; padding: 0.15rem 0;">Record</td><td style="text-align: right;">{{ p.record|default:"—" }}</td></tr>
+                    </table>
+                {% else %}
+                    <div style="color: #c83;">TBD — pitcher term forced to 0; confidence dropped to 'low'.</div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    </div>
+
+    {# Market #}
+    <h3 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.5rem;">Market Snapshot</h3>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem;">
+        {% if inventory.edge %}
+            <table style="width: 100%; font-size: 0.85rem;">
+                <tr><td style="color: #888; padding: 0.15rem 0;">Source</td><td style="text-align: right;">{{ inventory.odds_source }} ({{ inventory.odds_source_quality }}){% if inventory.odds_is_derived %} · <span style="color: #c33;">derived</span>{% endif %}</td></tr>
+                <tr><td style="color: #888; padding: 0.15rem 0;">Captured</td><td style="text-align: right; color: #aaa; font-size: 0.8rem;">{{ inventory.odds_captured_at_iso }}</td></tr>
+                <tr><td style="color: #888; padding: 0.15rem 0;">Home moneyline</td><td style="text-align: right;">{{ inventory.edge.moneyline_home }}</td></tr>
+                <tr><td style="color: #888; padding: 0.15rem 0;">Away moneyline</td><td style="text-align: right;">{{ inventory.edge.moneyline_away }}</td></tr>
+                <tr><td style="color: #888; padding: 0.15rem 0;">Market home win prob</td><td style="text-align: right;">{{ inventory.calibration.market_home_prob|floatformat:4 }}</td></tr>
+            </table>
+        {% else %}
+            <div style="color: #888;">No usable odds snapshot — recommendation engine will not produce a pick.</div>
+        {% endif %}
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# 2. SCORE BREAKDOWN — _score() #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">
+        2. Score Breakdown
+    </h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem;">
+        <div style="color: #888; margin-bottom: 0.4rem;">Formula: rating_diff × 0.35 × W_rating + pitcher_diff × 0.65 × W_pitcher + HFA × W_hfa</div>
+        <table style="width: 100%;">
+            <tr><td style="color: #888; padding: 0.2rem 0;">W_rating · W_pitcher · W_hfa</td><td style="text-align: right;">{{ inventory.score.rating_weight }} · {{ inventory.score.pitcher_weight }} · {{ inventory.score.hfa_weight }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">rating_diff (home − away, legacy scale)</td><td style="text-align: right;">{{ inventory.score.rating_diff_legacy }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">→ rating term</td><td style="text-align: right; color: #6cb;">{{ inventory.score.rating_term }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">pitcher_diff (home − away)</td><td style="text-align: right;">{{ inventory.score.pitcher_diff }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">→ pitcher term</td><td style="text-align: right; color: #6cb;">{{ inventory.score.pitcher_term }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">→ HFA term</td><td style="text-align: right; color: #6cb;">{{ inventory.score.hfa_term }}{% if not inventory.score.hfa_used %} <span style="color: #888;">(neutral site)</span>{% endif %}</td></tr>
+            <tr style="border-top: 1px solid #2a2a2a;"><td style="color: #aaa; padding: 0.3rem 0;"><strong>total score</strong></td><td style="text-align: right;"><strong>{{ inventory.score.total_score }}</strong></td></tr>
+        </table>
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# 3. CALIBRATION STAGES — sigmoid → blend → clamp #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">
+        3. Calibration
+    </h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem;">
+        <table style="width: 100%;">
+            <tr><td style="color: #888; padding: 0.2rem 0;">raw home prob (sigmoid divisor 25, clamped 0.01–0.99)</td><td style="text-align: right;">{{ inventory.calibration.raw_home_prob }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">market home prob</td><td style="text-align: right;">{{ inventory.calibration.market_home_prob|default:"—" }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">blend weight (capped at 0.40)</td><td style="text-align: right;">{{ inventory.calibration.blend_weight }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">→ blended home prob</td><td style="text-align: right; color: #6cb;">{{ inventory.calibration.blended_home_prob }}</td></tr>
+            <tr><td style="color: #888; padding: 0.2rem 0;">soft clamp [{{ inventory.calibration.clamp_min }}, {{ inventory.calibration.clamp_max }}]</td><td style="text-align: right;"></td></tr>
+            <tr style="border-top: 1px solid #2a2a2a;"><td style="color: #aaa; padding: 0.3rem 0;"><strong>final home prob</strong></td><td style="text-align: right;"><strong>{{ inventory.calibration.final_home_prob }}</strong></td></tr>
+        </table>
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# 4. EDGE MATH #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">
+        4. Edge Math
+    </h2>
+    {% if inventory.edge %}
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr><td style="color: #888; padding: 0.2rem 0;">raw implied (vig included): home / away</td><td style="text-align: right;">{{ inventory.edge.raw_home_implied }} / {{ inventory.edge.raw_away_implied }}</td></tr>
+                <tr><td style="color: #888; padding: 0.2rem 0;">de-vigged (fair): home / away</td><td style="text-align: right;">{{ inventory.edge.fair_home_prob }} / {{ inventory.edge.fair_away_prob }}</td></tr>
+                <tr><td style="color: #888; padding: 0.2rem 0;">home edge (final − fair)</td><td style="text-align: right;">{{ inventory.edge.home_edge }}</td></tr>
+                <tr><td style="color: #888; padding: 0.2rem 0;">away edge</td><td style="text-align: right;">{{ inventory.edge.away_edge }}</td></tr>
+                <tr style="border-top: 1px solid #2a2a2a;"><td style="color: #aaa; padding: 0.3rem 0;"><strong>pick side · edge (pp)</strong></td><td style="text-align: right;"><strong>{{ inventory.edge.pick_side }} · +{{ inventory.edge.pick_edge_pp }}</strong></td></tr>
+            </table>
+        </div>
+    {% else %}
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; color: #888;">
+            No edge math — odds snapshot missing or incomplete.
+        </div>
+    {% endif %}
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# 5. RECOMMENDATION + GATES #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">
+        5. Recommendation Outputs
+    </h2>
+    {% if inventory.status %}
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; font-size: 0.9rem;">
+                <div><span style="color: #888;">Pick:</span> <strong>{{ inventory.pick_label }} {{ inventory.pick_odds_display }}</strong></div>
+                <div><span style="color: #888;">Status:</span> <strong style="color: {% if inventory.status == 'recommended' %}#22c55e{% else %}#c83{% endif %};">{{ inventory.status }}</strong>{% if inventory.status_reason %} ({{ inventory.status_reason }}){% endif %}</div>
+                <div><span style="color: #888;">Tier · Lane:</span> <strong>{{ inventory.tier }} · {{ inventory.lane }}</strong></div>
+                <div><span style="color: #888;">Confidence:</span> {{ inventory.confidence_score_pct|floatformat:1 }}%</div>
+                <div><span style="color: #888;">Edge:</span> {{ inventory.model_edge_pp|floatformat:1 }} pp</div>
+                <div><span style="color: #888;">Market implied:</span> {% if inventory.market_implied_pct is not None %}{{ inventory.market_implied_pct|floatformat:1 }}%{% else %}—{% endif %}</div>
+                <div><span style="color: #888;">Risk score:</span> {{ inventory.risk_score }}</div>
+            </div>
+        </div>
+
+        {% if inventory.gates %}
+            <h3 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.5rem;">Gate Trace</h3>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem;">
+                <table style="width: 100%;">
+                    {% for label, fired, kind in gate_rows %}
+                        <tr>
+                            <td style="color: #888; padding: 0.18rem 0;">{{ label }}</td>
+                            <td style="text-align: right; color: {% if fired %}{% if kind == 'lane' %}#c83{% else %}#c33{% endif %}{% else %}#888{% endif %};">
+                                {% if fired %}fired{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            </div>
+
+            {% if inventory.gates.risk_flags %}
+                <h3 style="font-size: 0.95rem; color: #aaa; margin-bottom: 0.5rem;">Risk Flags</h3>
+                <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem;">
+                    <table style="width: 100%;">
+                        {% for flag, fired in inventory.gates.risk_flags.items %}
+                            <tr>
+                                <td style="color: #888; padding: 0.18rem 0;">{{ flag }}</td>
+                                <td style="text-align: right; color: {% if fired %}#c83{% else %}#888{% endif %};">{% if fired %}fired{% else %}—{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            {% endif %}
+        {% endif %}
+    {% else %}
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; color: #888;">
+            No recommendation produced (no usable odds snapshot).
+        </div>
+    {% endif %}
+
+    <p style="color: #666; font-size: 0.8rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
+        Diagnostic only. Re-running this page does not write any new
+        ModelResultSnapshot, BettingRecommendation, or EloHistory rows.
+        Constants surfaced here are read live from
+        <code>apps.mlb.services.model_service</code>,
+        <code>apps.core.services.probability_calibration</code>, and
+        <code>apps.core.services.recommendations</code> — if a number
+        looks wrong, it reflects what the production code is actually
+        using.
+    </p>
+</div>
+{% endblock %}

@@ -168,3 +168,114 @@ def _run_backtest_in_background(run_id: str, use_elo: bool, sport: str):
             # run. The traceback is logged above; the row stays in
             # 'running' until manually cleaned up.
             logger.exception('backtest_run_failed_save run_id=%s', run_id)
+
+
+# ---------------------------------------------------------------------------
+# Model Input Inventory (Phase 1A — staff diagnostic)
+#
+# Surface that answers "what is the model actually consuming for this game,
+# and which gate is binding the recommendation?". Re-runs the live pipeline
+# (no persisted state mutated) so it always reflects current DB + settings.
+# Wired to the same _staff_required guard as the backtest page.
+
+def model_inventory_index(request):
+    """Slate picker — choose an MLB game to inspect."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from apps.analytics.services.model_inventory import todays_mlb_games
+
+    games = todays_mlb_games()
+    return render(request, 'analytics/model_inventory_index.html', {
+        'games': games,
+        'nav_active': '',
+    })
+
+
+def model_inventory_detail(request, game_id: str):
+    """Full input/score/calibration/edge/gate trace for one MLB game."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from django.shortcuts import get_object_or_404
+
+    from apps.analytics.services.model_inventory import build_mlb_inventory
+    from apps.mlb.models import Game as MLBGame
+
+    game = get_object_or_404(
+        MLBGame.objects.select_related(
+            'home_team', 'away_team', 'home_pitcher', 'away_pitcher',
+        ),
+        id=game_id,
+    )
+    inventory = build_mlb_inventory(game)
+
+    # Template-friendly orderings. Pairing into tuples keeps the template
+    # body small (one for-loop per side instead of two near-duplicate
+    # blocks). Gate rows carry a 'kind' so the template can colour
+    # compute_status gates differently from lane gates without exposing
+    # the underlying dataclass structure to template logic.
+    side_pairs = [('Home', inventory.home), ('Away', inventory.away)]
+    pitcher_pairs = [
+        ('Home Pitcher', inventory.home_pitcher),
+        ('Away Pitcher', inventory.away_pitcher),
+    ]
+    gate_rows = []
+    if inventory.gates is not None:
+        g = inventory.gates
+        gate_rows = [
+            ('hard_min_probability (< HARD_MIN_PROBABILITY)', g.hard_min_probability_failed, 'status'),
+            ('longshot (|odds| > MAX_ABS_ODDS_FOR_RECOMMENDED)', g.longshot_failed, 'status'),
+            ('secondary_source (ESPN fallback)', g.secondary_source_failed, 'status'),
+            ('recommended_probability (< MIN_PROBABILITY_FOR_RECOMMENDED)', g.recommended_probability_failed, 'status'),
+            ('min_edge (< MIN_EDGE)', g.min_edge_failed, 'status'),
+            ('heavy_favorite_juice (odds ≤ HEAVY_FAVORITE_ODDS, edge < STRONG_EDGE)', g.heavy_favorite_juice_failed, 'status'),
+            ('extreme_disagreement (|final − fair| > EXTREME_DISAGREEMENT_GAP)', g.extreme_disagreement_fired, 'status'),
+            ('lane: probability (< LANE_HARD_GATES_PROBABILITY_MIN)', g.lane_probability_failed, 'lane'),
+            ('lane: edge (< LANE_HARD_GATES_EDGE_MIN)', g.lane_edge_failed, 'lane'),
+            ('lane: odds (|odds| > LANE_HARD_GATES_MAX_ABS_ODDS)', g.lane_odds_failed, 'lane'),
+            ('lane: source quality != primary', g.lane_source_failed, 'lane'),
+        ]
+
+    return render(request, 'analytics/model_inventory_detail.html', {
+        'inventory': inventory,
+        'game': game,
+        'side_pairs': side_pairs,
+        'pitcher_pairs': pitcher_pairs,
+        'gate_rows': gate_rows,
+        'nav_active': '',
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 1B Elo shadow-mode review (staff diagnostic)
+
+
+def shadow_review(request):
+    """Side-by-side: how does the active rating mode differ from the alt
+    on the recently-emitted MLB recommendation slate?
+
+    Cheap real-time complement to the backtest harness — works the
+    moment shadow data is captured (no need for games to settle).
+    """
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from apps.analytics.services.shadow_review import recent_mlb_shadow_review
+
+    days = 14
+    try:
+        days = int(request.GET.get('days', '14'))
+    except (TypeError, ValueError):
+        pass
+    days = max(1, min(days, 90))
+
+    review = recent_mlb_shadow_review(days=days)
+    return render(request, 'analytics/shadow_review.html', {
+        'review': review,
+        'days': days,
+        'nav_active': '',
+    })
