@@ -204,3 +204,106 @@ class TeamEloHistory(models.Model):
             or self.mlb_team or self.college_baseball_team
         )
         return f"EloHistory({self.sport}, {team}, {self.pre_rating:.1f} → {self.post_rating:.1f})"
+
+
+# ---------------------------------------------------------------------------
+# Recommendation Health Score snapshots (2026-05-14)
+#
+# Persists the composite Health Score plus its component breakdown each
+# time `capture_health_snapshot` runs (typically: daily cron, before
+# major model changes for baseline comparison, after major changes for
+# regression detection).
+#
+# THIS MODEL CANNOT INFLUENCE RECOMMENDATIONS. It is a read-only
+# governance ledger. The recommendation engine does not query it; the
+# Health Score service writes to it; analytics surfaces read from it.
+#
+# Decoupled from BacktestRun by design: BacktestRun is "what would have
+# happened if we replayed history under this rating mode" — synthetic
+# but authoritative for outcomes. RecommendationHealthSnapshot is
+# "what is the live engine looking like right now" — current state,
+# cheap to compute, dense over time.
+#
+# Schema:
+#   - overall_score: 0-100, weighted composite.
+#   - dimension_scores: per-dimension JSON, stable keys defined by the
+#     scoring service. Easy to extend without migrations.
+#   - supporting_data: the raw aggregations used to compute scores.
+#     Auditable — operator can re-derive a score from this blob alone.
+#   - rating_mode_active: 'static' or 'elo'. Lets pre/post-Elo
+#     comparisons be done against the actual state at capture time.
+#   - calibration_state: snapshot of the calibration constants at
+#     capture time (sigmoid divisor, blend weight, clamp bounds,
+#     MIN_EDGE, etc.). Future calibration changes can be reasoned
+#     about against historical snapshots that captured the prior state.
+#   - notes: operator-supplied free text. Optional. Used for tagging
+#     "pre-Elo baseline" or "after Phase 2C edge compression".
+
+class RecommendationHealthSnapshot(models.Model):
+    """Captured Health Score + component breakdown at a moment in time.
+
+    Read-only from the recommendation engine's perspective. The engine
+    never queries this table; analytics surfaces do.
+    """
+    BAND_CHOICES = [
+        ('strong', 'Strong (≥75)'),
+        ('healthy', 'Healthy (50–74)'),
+        ('watch', 'Watch (25–49)'),
+        ('intervene', 'Intervene (<25)'),
+    ]
+    RATING_MODE_CHOICES = [
+        ('static', 'Static (team.rating)'),
+        ('elo', 'Dynamic Elo'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    captured_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    overall_score = models.FloatField(db_index=True)
+    band = models.CharField(
+        max_length=10, choices=BAND_CHOICES, db_index=True,
+        help_text='Derived from overall_score at capture time.',
+    )
+    # JSON blob with one key per dimension:
+    #   {
+    #     'clv_trend': {'score': 78.5, 'value': 0.52, 'sample': 84, 'status': 'strong'},
+    #     'calibration': {'score': 62.0, 'brier': 0.225, 'sample': 84, 'status': 'healthy'},
+    #     ...
+    #   }
+    # Keys + sub-shape locked by the scoring service's tests.
+    dimension_scores = models.JSONField(default=dict)
+    # JSON blob with the raw aggregations the scores were computed from
+    # (per-bucket counts, CLV+ rate, mean disagreement, etc.). Lets the
+    # operator re-derive a score from a snapshot without re-running the
+    # scoring service.
+    supporting_data = models.JSONField(default=dict)
+    # Active rating mode at capture time. Reads is_dynamic_active().
+    rating_mode_active = models.CharField(
+        max_length=10, choices=RATING_MODE_CHOICES, default='static',
+    )
+    # Snapshot of the calibration constants at capture time. Stable
+    # shape:
+    #   {
+    #     'market_blend_weight': 0.40,
+    #     'prob_min': 0.52, 'prob_max': 0.85,
+    #     'min_edge': 6.0, 'min_probability': 0.60,
+    #     'extreme_disagreement_gap': 0.12,
+    #   }
+    calibration_state = models.JSONField(default=dict)
+    # Free-text tag. Recommended uses:
+    #   - 'pre-elo baseline'
+    #   - 'post-elo cutover, day 1'
+    #   - 'after calibration retune 2026-XX-XX'
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-captured_at']
+        indexes = [
+            models.Index(fields=['-captured_at', 'rating_mode_active']),
+            models.Index(fields=['band', '-captured_at']),
+        ]
+
+    def __str__(self):
+        return (
+            f"HealthSnapshot({self.captured_at:%Y-%m-%d %H:%M} "
+            f"score={self.overall_score:.1f} band={self.band})"
+        )

@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Recommendation Health Score | Brother Willies{% endblock %}
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <a href="{% url 'analytics:backtest' %}" style="color: #6cb;">← Backtest</a>
+        ·
+        <a href="{% url 'analytics:shadow_review' %}" style="color: #6cb;">Shadow Review</a>
+        ·
+        <a href="{% url 'analytics:model_inventory_index' %}" style="color: #6cb;">Model Inventory</a>
+    </p>
+
+    <h1 style="margin-bottom: 0.4rem;">Recommendation Health Score</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Composite 0–100 score across seven dimensions over the last
+        <strong>{{ days }} days</strong>. <strong>Cannot influence
+        recommendations.</strong> Governance tool, not a betting predictor.
+        Read <code>docs/recommendation_quality_framework.md</code> for
+        the scoring formulas and the band → action policy.
+    </p>
+
+    {# ──────────────────────────────────────────────────────────────── #}
+    {# Headline score + band                                              #}
+    {# ──────────────────────────────────────────────────────────────── #}
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1.5rem; margin-bottom: 1.5rem; text-align: center;">
+        {% if health.overall_score is None %}
+            <div style="font-size: 2.5rem; font-weight: bold; color: #888;">—</div>
+            <div style="color: #888; font-size: 0.9rem; margin-top: 0.3rem;">Insufficient data across all dimensions.</div>
+        {% else %}
+            <div style="font-size: 3.5rem; font-weight: bold; color:
+                {% if health.band == 'strong' %}#22c55e
+                {% elif health.band == 'healthy' %}#6cb
+                {% elif health.band == 'watch' %}#c83
+                {% else %}#c33{% endif %};">
+                {{ health.overall_score|floatformat:1 }}
+            </div>
+            <div style="color: #aaa; font-size: 1rem; margin-top: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em;">
+                {{ health.band }}
+            </div>
+            <div style="color: #888; font-size: 0.82rem; margin-top: 0.6rem;">
+                rating mode: <strong style="color: #aaa;">{{ health.rating_mode_active }}</strong>
+                · window: <strong style="color: #aaa;">{{ health.window_days }}d</strong>
+            </div>
+        {% endif %}
+    </div>
+
+    {# ──────────────────────────────────────────────────────────────── #}
+    {# Warnings — surface specific danger bands above-the-fold              #}
+    {# ──────────────────────────────────────────────────────────────── #}
+    {% if warnings %}
+        <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Warnings ({{ warnings|length }})</h2>
+        <div style="margin-bottom: 1.5rem;">
+            {% for w in warnings %}
+                <div style="background: #1a1a1a; border-left: 3px solid
+                    {% if w.severity == 'critical' %}#c33{% else %}#c83{% endif %};
+                    border-radius: 4px; padding: 0.7rem 0.9rem; margin-bottom: 0.4rem;">
+                    <strong style="color:
+                        {% if w.severity == 'critical' %}#c33{% else %}#c83{% endif %};
+                        text-transform: uppercase; font-size: 0.78rem;">{{ w.severity }}</strong>
+                    <span style="color: #aaa; font-size: 0.85rem; margin-left: 0.4rem;">{{ w.dimension }}</span>
+                    <div style="color: #ccc; font-size: 0.88rem; margin-top: 0.2rem;">{{ w.message }}</div>
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {# ──────────────────────────────────────────────────────────────── #}
+    {# Per-dimension breakdown                                            #}
+    {# ──────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Dimension Breakdown</h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.5rem; margin-bottom: 1.5rem;">
+        <table style="width: 100%; font-size: 0.88rem; border-collapse: collapse;">
+            <thead>
+                <tr style="color: #888; text-align: left;">
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Dimension</th>
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a; text-align: right;">Weight</th>
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a; text-align: right;">Score</th>
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a; text-align: right;">Value</th>
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Status</th>
+                    <th style="padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2a2a; color: #666;">Healthy</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in ordered_dimensions %}
+                <tr style="border-bottom: 1px solid #1f1f1f;">
+                    <td style="padding: 0.5rem 0.7rem; color: #ccc;">{{ d.label }}</td>
+                    <td style="padding: 0.5rem 0.7rem; text-align: right; color: #888;">{{ d.weight|floatformat:2 }}</td>
+                    <td style="padding: 0.5rem 0.7rem; text-align: right; color:
+                        {% if d.info.status == 'strong' %}#22c55e
+                        {% elif d.info.status == 'healthy' %}#6cb
+                        {% elif d.info.status == 'watch' %}#c83
+                        {% elif d.info.status == 'intervene' %}#c33
+                        {% else %}#666{% endif %}; font-weight: 600;">
+                        {% if d.info.score is None %}—{% else %}{{ d.info.score|floatformat:1 }}{% endif %}
+                    </td>
+                    <td style="padding: 0.5rem 0.7rem; text-align: right; color: #aaa; font-family: monospace;">
+                        {% if d.info.value is None %}—{% else %}{{ d.info.value|floatformat:4 }}{% endif %}
+                    </td>
+                    <td style="padding: 0.5rem 0.7rem; color:
+                        {% if d.info.status == 'strong' %}#22c55e
+                        {% elif d.info.status == 'healthy' %}#6cb
+                        {% elif d.info.status == 'watch' %}#c83
+                        {% elif d.info.status == 'intervene' %}#c33
+                        {% else %}#666{% endif %};">
+                        {{ d.info.status }}
+                    </td>
+                    <td style="padding: 0.5rem 0.7rem; color: #666; font-size: 0.78rem;">
+                        {{ d.info.healthy_range|default:"—" }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {# ──────────────────────────────────────────────────────────────── #}
+    {# Calibration state at capture time                                  #}
+    {# ──────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Calibration State</h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.82rem;">
+        <table style="width: 100%;">
+            {% for key, value in health.calibration_state.items %}
+                <tr><td style="color: #888; padding: 0.18rem 0;">{{ key }}</td><td style="text-align: right; color: #aaa;">{{ value }}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    {# ──────────────────────────────────────────────────────────────── #}
+    {# History — recent snapshots                                          #}
+    {# ──────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Snapshot History</h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.5rem; margin-bottom: 1.5rem;">
+        {% if not history %}
+            <div style="color: #888; padding: 0.7rem; text-align: center;">
+                No snapshots yet. Run <code>python manage.py capture_health_snapshot</code>
+                to capture the current state.
+            </div>
+        {% else %}
+            <table style="width: 100%; font-size: 0.85rem; border-collapse: collapse;">
+                <thead>
+                    <tr style="color: #888; text-align: left;">
+                        <th style="padding: 0.4rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Captured</th>
+                        <th style="padding: 0.4rem 0.7rem; border-bottom: 1px solid #2a2a2a; text-align: right;">Score</th>
+                        <th style="padding: 0.4rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Band</th>
+                        <th style="padding: 0.4rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Mode</th>
+                        <th style="padding: 0.4rem 0.7rem; border-bottom: 1px solid #2a2a2a;">Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in history %}
+                    <tr style="border-bottom: 1px solid #1f1f1f;">
+                        <td style="padding: 0.4rem 0.7rem; color: #ccc; font-family: monospace; font-size: 0.78rem;">
+                            {{ s.captured_at|date:"Y-m-d H:i" }}
+                        </td>
+                        <td style="padding: 0.4rem 0.7rem; text-align: right; color: #aaa;">{{ s.overall_score|floatformat:1 }}</td>
+                        <td style="padding: 0.4rem 0.7rem; color:
+                            {% if s.band == 'strong' %}#22c55e
+                            {% elif s.band == 'healthy' %}#6cb
+                            {% elif s.band == 'watch' %}#c83
+                            {% else %}#c33{% endif %};">
+                            {{ s.band|default:"—" }}
+                        </td>
+                        <td style="padding: 0.4rem 0.7rem; color: #888;">{{ s.rating_mode_active }}</td>
+                        <td style="padding: 0.4rem 0.7rem; color: #aaa; font-size: 0.82rem;">{{ s.notes|default:"—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
+
+    <p style="color: #666; font-size: 0.78rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
+        Diagnostic only. This page does not modify any recommendation,
+        threshold, or calibration constant. Capturing a snapshot persists
+        the current state to the governance ledger for historical comparison.
+        Per <code>docs/architecture_laws.md</code> Law 4, scores in
+        <strong>STRONG</strong> or <strong>HEALTHY</strong> bands do NOT justify
+        constant changes regardless of individual segment fluctuation.
+    </p>
+</div>
+{% endblock %}

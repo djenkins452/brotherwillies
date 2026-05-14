@@ -279,3 +279,56 @@ def shadow_review(request):
         'days': days,
         'nav_active': '',
     })
+
+
+# ---------------------------------------------------------------------------
+# Recommendation Health Score — staff diagnostic
+#
+# Single composite score (0–100) across seven dimensions answering "is
+# the engine behaving like a disciplined predictive system?". Designed
+# to prevent emotional tuning and threshold churn — see
+# docs/recommendation_quality_framework.md.
+
+def health_score(request):
+    """Composite Health Score + dimension breakdown + warnings + history."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from apps.analytics.services.health_score import (
+        DIMENSION_LABELS, DIMENSION_ORDER, DIMENSION_WEIGHTS,
+        compute_health_score, detect_warnings,
+    )
+    from apps.analytics.services.health_snapshot import recent_snapshots
+
+    days = 14
+    try:
+        days = int(request.GET.get('days', '14'))
+    except (TypeError, ValueError):
+        pass
+    days = max(1, min(days, 90))
+
+    health = compute_health_score(window_days=days)
+    warnings = detect_warnings(health)
+
+    # Order the dimensions for display per DIMENSION_ORDER.
+    ordered_dimensions = []
+    for key in DIMENSION_ORDER:
+        info = health.dimension_scores.get(key, {})
+        ordered_dimensions.append({
+            'key': key,
+            'label': DIMENSION_LABELS[key],
+            'weight': DIMENSION_WEIGHTS[key],
+            'info': info,
+        })
+
+    history = recent_snapshots(limit=20)
+
+    return render(request, 'analytics/health_score.html', {
+        'health': health,
+        'warnings': warnings,
+        'ordered_dimensions': ordered_dimensions,
+        'history': history,
+        'days': days,
+        'nav_active': '',
+    })

@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-05-14 — Recommendation Health Score system
+
+**Implements §3 of `docs/recommendation_quality_framework.md`** — the composite 0–100 score that turns "is the engine behaving rationally?" from a felt question into a measurable one. Zero recommendation behavior changes; zero calibration constant changes; zero Elo activation; pure observability/governance layer.
+
+### Architecture
+
+The Health Score is **structurally isolated** from recommendation generation. The scoring service is pure functions over read-only queries. The snapshot service is append-only. The recommendation engine never queries the snapshot table; analytics surfaces do. By design, the score cannot influence what bets are recommended — it exists exclusively to inform operator decisions about *whether to tune anything at all*.
+
+The score is the **Law 4 gate** referenced in `docs/architecture_laws.md` — STRONG / HEALTHY scores do not justify constant changes regardless of individual segment fluctuation.
+
+### What ships
+
+**`apps/analytics/models.py`** — new `RecommendationHealthSnapshot` model. UUID PK, append-only governance ledger. Captures `overall_score`, `band`, `dimension_scores` JSON, `supporting_data` JSON (raw aggregations the score was derived from), `rating_mode_active`, `calibration_state` JSON (snapshot of every tuning constant at capture time), and operator-supplied `notes`. Migration `0007_recommendationhealthsnapshot`.
+
+**`apps/analytics/services/health_score.py`** — pure scoring service:
+- `compute_health_score(window_days=14)` → returns a `HealthScore` dataclass with composite + per-dimension breakdown + raw supporting data + captured calibration state.
+- Per-dimension scoring functions for all seven dimensions from §3.1 of the framework: `score_clv_trend`, `score_calibration`, `score_edge_realism`, `score_recommendation_stability`, `score_market_alignment`, `score_stale_odds`, `score_volume_vs_target`. Each is a documented piecewise linear function with named inputs and named bounded outputs. No black-box transforms.
+- `compute_composite(...)` weighted average with re-normalization for missing dimensions (None dimension is excluded from both numerator AND weight denominator, keeping the score in [0, 100] regardless of which dimensions have data).
+- `classify_band(...)` → `strong` (≥75) / `healthy` (50–74) / `watch` (25–49) / `intervene` (<25).
+- `detect_warnings(...)` → categorical alerts for specific dimension danger bands (critical CLV < 35%, edge-realism perverse outperformance, etc.). Surface independently of composite band — a HEALTHY composite can still carry a critical warning on a specific dimension.
+- Zero-activity guard on volume-derived dimensions (recommendation_stability and volume_vs_target return `no_data` when all weekly volumes are zero, rather than scoring 100 for "perfectly stable at zero").
+
+**`apps/analytics/services/health_snapshot.py`** — snapshot persistence helpers:
+- `capture_snapshot(notes='', health=None)` → write a `RecommendationHealthSnapshot` row. Caller can pass a pre-computed `HealthScore` to avoid duplicate computation.
+- `recent_snapshots(limit=30)`, `latest_snapshot()` for read access.
+
+**`apps/datahub/management/commands/capture_health_snapshot.py`** — operator-facing capture command:
+- `python manage.py capture_health_snapshot` — standard capture (14-day window, no notes).
+- `--window 30` — custom window.
+- `--notes "pre-elo baseline"` — tag the snapshot.
+- `--dry-run` — compute and print without persisting. Used for "is the score reasonable today before I commit a snapshot?".
+- Idempotent (append-only). Safe to run on any cadence. ~100ms cost.
+
+**`apps/analytics/views.py` + `apps/analytics/urls.py`** — new staff-only view at `/analytics/health-score/`. Renders:
+- Headline score + band with band-colored typography.
+- Warnings panel (above-the-fold; only present when warnings exist).
+- Per-dimension breakdown table (weight, score, value, status, healthy range).
+- Calibration state at capture time (every tuning constant visible).
+- Recent snapshot history (most recent 20).
+
+**`templates/analytics/health_score.html`** — diagnostic-only page; documents in its footer that the score cannot modify recommendations, thresholds, or calibration constants. Per Law 4 reminder rendered at the bottom.
+
+**`apps/analytics/test_health_score.py`** — 56 tests across 11 test classes:
+- `BandClassificationTests` — boundary correctness at 25/50/75.
+- `DimensionWeightsTests` — weights sum to 1.0 (architecture invariant); DIMENSION_ORDER matches DIMENSION_WEIGHTS.
+- 7 per-dimension scoring test classes — boundaries, monotonicity, clamping, no-data handling, sample-size guards.
+- `CompositeMathTests` — re-normalization math for partial-None dimensions; all-None returns None.
+- `ComputeHealthScoreEmptyTests` — empty DB yields no_data dimensions (no false-100 scoring); calibration state always captured.
+- `ComputeHealthScoreWithBetsTests` — service correctly populates from MockBet rows.
+- `WarningTests` — categorical alerts fire at correct thresholds; require minimum samples.
+- `SnapshotPersistenceTests` — capture writes; append-only; empty-state persists with band=''.
+- `ManagementCommandTests` — default capture persists; --dry-run does not; --notes tags correctly.
+- `ViewAccessTests` — anonymous redirected, non-staff 403, staff renders.
+- `DeterminismTests` — same DB state → same score.
+- `IsolationTests` — service is purely read-only; cannot influence the recommendation engine.
+
+**`docs/health_score_operations.md`** — operator manual:
+- What the score is (and is NOT).
+- The four bands and what each authorizes.
+- The seven dimensions and what each tells you.
+- How operators should use it daily / weekly / before tuning commits / before major model changes.
+- The "when you should NOT touch anything" decision table.
+- Management command usage (cron, baselines, dry runs).
+- Compliance checklist for every tuning commit.
+- FAQ covering "score is high but we lost money", "two dimensions in intervene but composite healthy", "should this include win rate" (no), etc.
+
+### What this commit does NOT do
+
+- ❌ No recommendation behavior changes.
+- ❌ No threshold / gate / calibration changes.
+- ❌ No Elo activation. `USE_DYNAMIC_RATINGS` stays `False`.
+- ❌ No new predictive signals.
+- ❌ No auto-tuning. The Health Score is one-directional read-only.
+
+### Test totals
+
+- 468 tests passing across analytics + core + mockbets + datahub Phase-relevant modules. Zero regressions.
+- `python manage.py check` clean.
+- New migration applied locally without errors.
+
+### Phase 2A status
+
+Task 4 (Elo activation GO/NO-GO) still paused. Now has the right infrastructure to be made evidence-driven: pre-Elo baseline snapshot, post-Elo monitoring snapshots, and the Health Score as the gate that says whether the cutover is performing in its design envelope.
+
+---
+
 ## 2026-05-14 — Recommendation Quality Framework + Laws 3 & 4
 
 **Scope:** scientific governance design. No code changes. No constant changes. No recommendation behavior modifications. This commit codifies the operating discipline that prevents Brother Willies from destabilizing through reflexive tuning.

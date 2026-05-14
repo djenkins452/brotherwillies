@@ -28,4 +28,12 @@ urlpatterns = [
         views.shadow_review,
         name='shadow_review',
     ),
+    # Recommendation Health Score (2026-05-14) — composite 0-100 score
+    # across seven dimensions. Governance / observability surface;
+    # cannot influence recommendation behavior.
+    path(
+        'health-score/',
+        views.health_score,
+        name='health_score',
+    ),
 ]
