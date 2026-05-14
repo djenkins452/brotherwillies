@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-14 — Phase 2A Task 3: Shadow review realism diagnostics
+
+**Scope:** Phase 2A Task 3 only — observation + analysis. No tuning, no signals, no calibration changes. `USE_DYNAMIC_RATINGS` stays `False`. Strict variable isolation continues.
+
+### What ships
+
+**Extended `apps/analytics/services/shadow_review.py`** with the specific aggregations Task 3 needs to answer its seven questions:
+
+- **Giant-edge frequency** — active vs alt counts at `edge ≥ 6 / 8 / 10 pp` (Q1: did fake giant edges shrink?).
+- **Overconfidence frequency** — active vs alt counts at `final_prob ≥ 0.60 / 0.70 / 0.80 / 0.85` (Q3, Q6: did overconfidence compress; specifically the 0.85 clamp-ceiling band).
+- **Market-disagreement bands** — mean `|final_prob − fair_market|` for active vs alt, plus counts at `> 5 / 10 / 15 / 20 pp` thresholds (Q5: did market alignment improve?).
+- **Short-favorite scoped review** — full distribution + agreement + recommendation count restricted to picks with `odds_american ∈ [−149, +99]` (Q4: did short-favorite aggressiveness reduce?).
+
+All additions are strictly additive — every pre-existing `ShadowReview` field is unchanged. Five new sections on `/analytics/shadow-review/` render the numbers automatically from production data.
+
+**Lock:** `apps/analytics/test_shadow_review.py` — 8 new tests covering empty-state defaults, threshold inclusivity, market disagreement floating-point precision, and the short-favorite scoped review. Total 18 tests in the module; 197 across Phase-relevant test modules.
+
+### Analysis deliverable
+
+`docs/phase_2a_task3_shadow_analysis_2026_05_14.md` — hybrid methodology + framework reasoning + empirical placeholders. Covers all seven Task 3 questions:
+
+1. **Methodology** — data source, what we compute, what we don't (explicitly excludes ROI / win-rate / settled CLV per direction).
+2. **Framework-level reasoning** — first-principles answer to each question before any data is consulted. The "Elo reduces overconfidence naturally" claim is grounded in mechanism replacement (frozen rating → live rating), not in additional damping rules.
+3. **Empirical findings template** — tables the operator fills in from `/analytics/shadow-review/` on production. Each table includes the expected direction so deviations are flagged immediately.
+4. **Findings without empirical data** — three structural findings (framework works as designed; realism mechanism is structurally addressed; the evidence is cheap to produce).
+5. **Risks** — five, ranked by severity. Sample-size is the top risk; structural backfill correctness is locked by `RebuildIdempotenceTests`.
+6. **Weaknesses still remaining** — six things Elo alone doesn't address (pitcher form, team form, bullpen, injuries, pre-cutover calibration constants, CLV time-series). All explicitly deferred per direction.
+7. **Material-realism verdict** — structurally yes; empirically pending three specific confirmations.
+8. **Activation justification** — conditional GO; the §3 empirical confirmations are the gate.
+9. **Recommended next step** — operator opens `/analytics/shadow-review/?days=14`, confirms `sample ≥ 30` and the three structural confirmations, returns with "go for Task 4" or "investigate <specific band>".
+
+### What is NOT in this commit
+
+- `USE_DYNAMIC_RATINGS` remains `False`. Flag not flipped.
+- No new predictive signals (pitcher form, team form, bullpen).
+- No calibration retunes (sigmoid divisor, clamp, blend weight).
+- No edge realism compression.
+- No changes to recommendation behavior, decision gates, lane classification, or any other live-path code.
+
+The only behavior change in this commit is: the `/analytics/shadow-review/` page now renders five additional diagnostic sections when shadow data exists. Empty state behavior is unchanged.
+
+### Phase 2A roadmap status
+
+1. ✅ Task 1 — production-safe backfill hook (committed 2026-05-14).
+2. ✅ Task 2 — shadow data collection (active in production now).
+3. ✅ Task 3 — analysis methodology + tooling + framework reasoning (this commit). Empirical fill-in pending operator review of production data.
+4. ⏳ Task 4 — GO/NO-GO recommendation. Gated on operator transcribing §3 numbers and confirming the three structural tests.
+
+---
+
 ## 2026-05-14 — Phase 2A Task 1: Production-safe Elo backfill hook + architecture laws
 
 **Scope:** Phase 2A Task 1 only per user direction (strict variable isolation). Production hook for the MLB Elo backfill, idempotent and deploy-safe. `USE_DYNAMIC_RATINGS` remains `False` — no live behavior change. Two permanent architecture laws codified.

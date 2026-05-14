@@ -47,6 +47,33 @@ class _StatTuple:
 
 
 @dataclass
+class _BandCounts:
+    """Active vs alt counts for a boolean predicate (e.g., 'final_prob >= 0.85')."""
+    active: int
+    alt: int
+
+
+@dataclass
+class _SegmentReview:
+    """Scoped review for a subset of recommendations (e.g., short-fav band).
+
+    Same shape as the top-level distributions but restricted to a slice.
+    sample is the count of rows that fell into the segment AND had
+    usable shadow data.
+    """
+    sample: int
+    active_final_prob: _StatTuple
+    alt_final_prob: _StatTuple
+    active_edge_pp: _StatTuple
+    alt_edge_pp: _StatTuple
+    pick_same_side: int
+    pick_different_side: int
+    pick_agreement_rate: Optional[float]
+    status_recommended_active: int
+    status_recommended_alt: int
+
+
+@dataclass
 class ShadowReview:
     sample: int                      # rows with usable shadow data (elo_available=True)
     sample_total: int                # rows scanned (incl. elo_available=False)
@@ -74,6 +101,48 @@ class ShadowReview:
     lane_core_both: int
     # Disagreement examples — first ~5 rows where modes disagree on side
     disagreement_examples: list
+
+    # --- Phase 2A Task 3 extensions (2026-05-14) --------------------------
+    # Each addition is strictly additive — pre-existing fields above are
+    # unchanged. The extensions answer specific Task 3 questions:
+    #
+    #   - giant-edge frequency: "did 8%+ edges shrink?" (Q1)
+    #   - overconfidence frequency: "did unrealistic 70%+ / 80%+ /
+    #     clamp-ceiling probabilities decrease?" (Q3, Q6)
+    #   - market-disagreement bands: "did model/market alignment improve?" (Q5)
+    #   - short-favorite scoped review: "did short-favorite aggressiveness
+    #     reduce in the -149..+99 band specifically?" (Q4)
+
+    # Giant-edge frequency — picks whose edge clears these thresholds.
+    # In a healthy state Elo should produce FEWER 8+ pp edges than static
+    # because the fake-edge mechanism is staleness; Elo removes it.
+    edge_ge_6pp: _BandCounts = None          # > MIN_EDGE
+    edge_ge_8pp: _BandCounts = None          # > ELITE_EDGE — the "giant" bucket
+    edge_ge_10pp: _BandCounts = None         # extreme; should be very rare under Elo
+
+    # Overconfidence frequency — picks whose final_prob clears these
+    # thresholds. The 0.85 bucket is the soft-clamp ceiling; piling up
+    # there is overconfidence by clamp.
+    prob_ge_60: _BandCounts = None
+    prob_ge_70: _BandCounts = None
+    prob_ge_80: _BandCounts = None
+    prob_ge_85: _BandCounts = None           # clamp ceiling
+
+    # Market disagreement bands — abs(final_prob - fair_market_prob).
+    # Lower = closer to market consensus = better calibration.
+    # Counts of rows where the gap exceeds each threshold.
+    disagreement_gt_5pp: _BandCounts = None
+    disagreement_gt_10pp: _BandCounts = None
+    disagreement_gt_15pp: _BandCounts = None
+    disagreement_gt_20pp: _BandCounts = None
+    # Mean abs disagreement for active vs alt.
+    avg_disagreement_active: Optional[float] = None
+    avg_disagreement_alt: Optional[float] = None
+
+    # Short-favorite scoped review — picks whose odds fall in [-149, +99].
+    # This is the engineered-report-flagged "danger band" where
+    # staleness has historically caused leakage.
+    short_fav: Optional[_SegmentReview] = None
 
     def to_dict(self):
         d = asdict(self)
@@ -132,6 +201,14 @@ def build_shadow_review(qs: QuerySet) -> ShadowReview:
         # Empty shape — every field present so the template never has to
         # defensively .get().
         empty = _StatTuple(n=0, mean=None, min_val=None, max_val=None)
+        empty_bands = _BandCounts(active=0, alt=0)
+        empty_segment = _SegmentReview(
+            sample=0,
+            active_final_prob=empty, alt_final_prob=empty,
+            active_edge_pp=empty, alt_edge_pp=empty,
+            pick_same_side=0, pick_different_side=0, pick_agreement_rate=None,
+            status_recommended_active=0, status_recommended_alt=0,
+        )
         return ShadowReview(
             sample=0, sample_total=sample_total, active_mode=None,
             active_final_prob=empty, alt_final_prob=empty,
@@ -142,6 +219,13 @@ def build_shadow_review(qs: QuerySet) -> ShadowReview:
             tier_counts_active={}, tier_counts_alt={},
             lane_core_active_only=0, lane_core_alt_only=0, lane_core_both=0,
             disagreement_examples=[],
+            edge_ge_6pp=empty_bands, edge_ge_8pp=empty_bands, edge_ge_10pp=empty_bands,
+            prob_ge_60=empty_bands, prob_ge_70=empty_bands,
+            prob_ge_80=empty_bands, prob_ge_85=empty_bands,
+            disagreement_gt_5pp=empty_bands, disagreement_gt_10pp=empty_bands,
+            disagreement_gt_15pp=empty_bands, disagreement_gt_20pp=empty_bands,
+            avg_disagreement_active=None, avg_disagreement_alt=None,
+            short_fav=empty_segment,
         )
 
     # Determine active mode (rows can be a mix if the flag was flipped
@@ -225,6 +309,169 @@ def build_shadow_review(qs: QuerySet) -> ShadowReview:
         elif x_core and not a_core:
             lane_core_alt_only += 1
 
+    # ------------------------------------------------------------------
+    # Phase 2A Task 3 extensions
+    # ------------------------------------------------------------------
+
+    # Giant-edge frequency. Each band counts rows where the absolute
+    # picked-side edge crosses the threshold. Edge is stored as pp on
+    # both sides (active model_edge as Decimal; alt edge_pp as float).
+    def _ge_threshold_count(values, threshold):
+        return sum(1 for v in values if v is not None and float(v) >= threshold)
+
+    edge_ge_6pp = _BandCounts(
+        active=_ge_threshold_count(active_edges, 6.0),
+        alt=_ge_threshold_count(alt_edges, 6.0),
+    )
+    edge_ge_8pp = _BandCounts(
+        active=_ge_threshold_count(active_edges, 8.0),
+        alt=_ge_threshold_count(alt_edges, 8.0),
+    )
+    edge_ge_10pp = _BandCounts(
+        active=_ge_threshold_count(active_edges, 10.0),
+        alt=_ge_threshold_count(alt_edges, 10.0),
+    )
+
+    # Overconfidence frequency. Active probs are decimal 0..1 (already
+    # converted above); alt probs are decimal too. The 0.85 band is the
+    # soft-clamp ceiling; piling up there is overconfidence by clamp.
+    prob_ge_60 = _BandCounts(
+        active=_ge_threshold_count(active_probs, 0.60),
+        alt=_ge_threshold_count(alt_probs, 0.60),
+    )
+    prob_ge_70 = _BandCounts(
+        active=_ge_threshold_count(active_probs, 0.70),
+        alt=_ge_threshold_count(alt_probs, 0.70),
+    )
+    prob_ge_80 = _BandCounts(
+        active=_ge_threshold_count(active_probs, 0.80),
+        alt=_ge_threshold_count(alt_probs, 0.80),
+    )
+    prob_ge_85 = _BandCounts(
+        active=_ge_threshold_count(active_probs, 0.85),
+        alt=_ge_threshold_count(alt_probs, 0.85),
+    )
+
+    # Market-disagreement bands. Disagreement = |final_prob − market_prob|
+    # in decimal probability space. We compare the PICKED-side prob to
+    # the PICKED-side de-vigged market — but market_prob on the row is
+    # already stored as the picked-side de-vigged prob (set in
+    # _moneyline_candidate), so we use it directly. For the alt row,
+    # we use the alt final_prob and compare to the SAME market_prob —
+    # the market didn't change between the two modes' computations.
+    active_disagreements = []
+    alt_disagreements = []
+    for r in usable:
+        market = r.market_prob
+        if market is None:
+            continue
+        a_prob = float(r.confidence_score) / 100.0
+        # Active stored confidence_score is the picked-side prob.
+        active_disagreements.append(abs(a_prob - float(market)))
+        # Alt: pick_side may differ. If alt picked the same side, the
+        # comparison is direct. If alt picked the other side, the
+        # market_prob is on the OPPOSITE side from alt's final_prob, so
+        # we need market_prob_other = 1 - market_prob.
+        alt_side = r.shadow_alt_data.get('pick_side')
+        active_side = _pick_side_from_rec(r)
+        alt_prob = r.shadow_alt_data.get('final_prob')
+        if alt_prob is None or alt_side is None or active_side is None:
+            continue
+        if alt_side == active_side:
+            alt_disagreements.append(abs(alt_prob - float(market)))
+        else:
+            alt_disagreements.append(abs(alt_prob - (1.0 - float(market))))
+
+    def _gt_threshold_count(values, threshold):
+        return sum(1 for v in values if v > threshold)
+
+    disagreement_gt_5pp = _BandCounts(
+        active=_gt_threshold_count(active_disagreements, 0.05),
+        alt=_gt_threshold_count(alt_disagreements, 0.05),
+    )
+    disagreement_gt_10pp = _BandCounts(
+        active=_gt_threshold_count(active_disagreements, 0.10),
+        alt=_gt_threshold_count(alt_disagreements, 0.10),
+    )
+    disagreement_gt_15pp = _BandCounts(
+        active=_gt_threshold_count(active_disagreements, 0.15),
+        alt=_gt_threshold_count(alt_disagreements, 0.15),
+    )
+    disagreement_gt_20pp = _BandCounts(
+        active=_gt_threshold_count(active_disagreements, 0.20),
+        alt=_gt_threshold_count(alt_disagreements, 0.20),
+    )
+    avg_dis_active = (
+        round(sum(active_disagreements) / len(active_disagreements), 4)
+        if active_disagreements else None
+    )
+    avg_dis_alt = (
+        round(sum(alt_disagreements) / len(alt_disagreements), 4)
+        if alt_disagreements else None
+    )
+
+    # Short-favorite scoped review — picks whose ACTIVE pick_odds fall
+    # in [-149, +99]. Same boundary as the moneyline-evaluation
+    # short_fav band and the Phase 1A `by_fav_size` bucket. The slice
+    # is on the active row; the alt comparison reads the alt fields
+    # from the same rows.
+    short_fav_rows = [
+        r for r in usable
+        if r.odds_american is not None and -149 <= int(r.odds_american) <= 99
+    ]
+    if not short_fav_rows:
+        empty = _StatTuple(n=0, mean=None, min_val=None, max_val=None)
+        short_fav = _SegmentReview(
+            sample=0,
+            active_final_prob=empty, alt_final_prob=empty,
+            active_edge_pp=empty, alt_edge_pp=empty,
+            pick_same_side=0, pick_different_side=0, pick_agreement_rate=None,
+            status_recommended_active=0, status_recommended_alt=0,
+        )
+    else:
+        sf_active_probs = [float(r.confidence_score) / 100.0 for r in short_fav_rows]
+        sf_alt_probs = [
+            r.shadow_alt_data.get('final_prob') for r in short_fav_rows
+        ]
+        sf_active_edges = [float(r.model_edge) for r in short_fav_rows]
+        sf_alt_edges = [
+            r.shadow_alt_data.get('edge_pp') for r in short_fav_rows
+        ]
+
+        sf_same = sf_diff = 0
+        for r in short_fav_rows:
+            a_side = _pick_side_from_rec(r)
+            x_side = r.shadow_alt_data.get('pick_side')
+            if a_side is None or x_side is None:
+                continue
+            if a_side == x_side:
+                sf_same += 1
+            else:
+                sf_diff += 1
+        sf_total = sf_same + sf_diff
+        sf_rate = round(sf_same / sf_total, 4) if sf_total else None
+
+        sf_rec_active = sum(
+            1 for r in short_fav_rows if r.status == 'recommended'
+        )
+        sf_rec_alt = sum(
+            1 for r in short_fav_rows
+            if r.shadow_alt_data.get('status') == 'recommended'
+        )
+
+        short_fav = _SegmentReview(
+            sample=len(short_fav_rows),
+            active_final_prob=_stat(sf_active_probs),
+            alt_final_prob=_stat(sf_alt_probs),
+            active_edge_pp=_stat(sf_active_edges),
+            alt_edge_pp=_stat(sf_alt_edges),
+            pick_same_side=sf_same,
+            pick_different_side=sf_diff,
+            pick_agreement_rate=sf_rate,
+            status_recommended_active=sf_rec_active,
+            status_recommended_alt=sf_rec_alt,
+        )
+
     return ShadowReview(
         sample=sample,
         sample_total=sample_total,
@@ -246,6 +493,21 @@ def build_shadow_review(qs: QuerySet) -> ShadowReview:
         lane_core_alt_only=lane_core_alt_only,
         lane_core_both=lane_core_both,
         disagreement_examples=disagreement_examples,
+        # Phase 2A Task 3 extensions (all populated above):
+        edge_ge_6pp=edge_ge_6pp,
+        edge_ge_8pp=edge_ge_8pp,
+        edge_ge_10pp=edge_ge_10pp,
+        prob_ge_60=prob_ge_60,
+        prob_ge_70=prob_ge_70,
+        prob_ge_80=prob_ge_80,
+        prob_ge_85=prob_ge_85,
+        disagreement_gt_5pp=disagreement_gt_5pp,
+        disagreement_gt_10pp=disagreement_gt_10pp,
+        disagreement_gt_15pp=disagreement_gt_15pp,
+        disagreement_gt_20pp=disagreement_gt_20pp,
+        avg_disagreement_active=avg_dis_active,
+        avg_disagreement_alt=avg_dis_alt,
+        short_fav=short_fav,
     )
 
 

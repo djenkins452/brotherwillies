@@ -92,6 +92,66 @@
                 {% endfor %}
             </div>
         {% endif %}
+
+        {# ──────────────────────────────────────────────────────────────── #}
+        {# Phase 2A Task 3 — Realism diagnostics                              #}
+        {# ──────────────────────────────────────────────────────────────── #}
+        <h2 style="font-size: 1rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem; margin-top: 1.5rem;">Realism Diagnostics (Phase 2A Task 3)</h2>
+        <p style="color: #888; font-size: 0.82rem; margin-bottom: 0.75rem;">
+            <strong>Healthy direction:</strong> if Elo is the alt mode (active=static),
+            the <span style="color: #6cb;">alt</span> column should show
+            <em>fewer giant edges, fewer 80%+ probabilities, less market disagreement</em>
+            than <span style="color: #aaa;">active</span>.
+            If Elo is active, the active column reflects post-cutover state.
+        </p>
+
+        <h3 style="font-size: 0.92rem; color: #aaa; margin-bottom: 0.5rem;">Giant-edge frequency (Q1)</h3>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr style="color: #888;"><td>Threshold</td><td style="text-align: right;">active</td><td style="text-align: right;">alt</td><td style="text-align: right;">delta</td></tr>
+                <tr><td style="color: #aaa;">edge ≥ 6 pp (MIN_EDGE)</td><td style="text-align: right;">{{ review.edge_ge_6pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.edge_ge_6pp.alt }}</td><td style="text-align: right; color: #888;">{{ review.edge_ge_6pp.alt|add:review.edge_ge_6pp.active|add:"0" }}</td></tr>
+                <tr><td style="color: #aaa;">edge ≥ 8 pp (ELITE_EDGE)</td><td style="text-align: right;">{{ review.edge_ge_8pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.edge_ge_8pp.alt }}</td><td style="text-align: right; color: #888;"></td></tr>
+                <tr><td style="color: #aaa;">edge ≥ 10 pp (extreme)</td><td style="text-align: right;">{{ review.edge_ge_10pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.edge_ge_10pp.alt }}</td><td style="text-align: right; color: #888;"></td></tr>
+            </table>
+        </div>
+
+        <h3 style="font-size: 0.92rem; color: #aaa; margin-bottom: 0.5rem;">Overconfidence frequency (Q3, Q6)</h3>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr style="color: #888;"><td>Threshold</td><td style="text-align: right;">active</td><td style="text-align: right;">alt</td></tr>
+                <tr><td style="color: #aaa;">final_prob ≥ 0.60</td><td style="text-align: right;">{{ review.prob_ge_60.active }}</td><td style="text-align: right; color: #6cb;">{{ review.prob_ge_60.alt }}</td></tr>
+                <tr><td style="color: #aaa;">final_prob ≥ 0.70</td><td style="text-align: right;">{{ review.prob_ge_70.active }}</td><td style="text-align: right; color: #6cb;">{{ review.prob_ge_70.alt }}</td></tr>
+                <tr><td style="color: #aaa;">final_prob ≥ 0.80</td><td style="text-align: right;">{{ review.prob_ge_80.active }}</td><td style="text-align: right; color: #6cb;">{{ review.prob_ge_80.alt }}</td></tr>
+                <tr><td style="color: #aaa;">final_prob ≥ 0.85 <span style="color: #c83;">(clamp ceiling)</span></td><td style="text-align: right;">{{ review.prob_ge_85.active }}</td><td style="text-align: right; color: #6cb;">{{ review.prob_ge_85.alt }}</td></tr>
+            </table>
+        </div>
+
+        <h3 style="font-size: 0.92rem; color: #aaa; margin-bottom: 0.5rem;">Market disagreement (Q5)</h3>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            <table style="width: 100%;">
+                <tr style="color: #888;"><td>|final_prob − fair_market|</td><td style="text-align: right;">active</td><td style="text-align: right;">alt</td></tr>
+                <tr><td style="color: #aaa;">mean</td><td style="text-align: right;">{{ review.avg_disagreement_active|default_if_none:"—" }}</td><td style="text-align: right; color: #6cb;">{{ review.avg_disagreement_alt|default_if_none:"—" }}</td></tr>
+                <tr><td style="color: #aaa;">&gt; 5 pp</td><td style="text-align: right;">{{ review.disagreement_gt_5pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.disagreement_gt_5pp.alt }}</td></tr>
+                <tr><td style="color: #aaa;">&gt; 10 pp</td><td style="text-align: right;">{{ review.disagreement_gt_10pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.disagreement_gt_10pp.alt }}</td></tr>
+                <tr><td style="color: #aaa;">&gt; 15 pp</td><td style="text-align: right;">{{ review.disagreement_gt_15pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.disagreement_gt_15pp.alt }}</td></tr>
+                <tr><td style="color: #aaa;">&gt; 20 pp</td><td style="text-align: right;">{{ review.disagreement_gt_20pp.active }}</td><td style="text-align: right; color: #6cb;">{{ review.disagreement_gt_20pp.alt }}</td></tr>
+            </table>
+        </div>
+
+        <h3 style="font-size: 0.92rem; color: #aaa; margin-bottom: 0.5rem;">Short-favorite band (−149 to +99) (Q4)</h3>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; font-family: monospace; font-size: 0.85rem;">
+            {% if review.short_fav.sample == 0 %}
+                <div style="color: #888;">No short-favorite picks in this window.</div>
+            {% else %}
+                <table style="width: 100%;">
+                    <tr><td style="color: #888;">sample</td><td style="text-align: right;">{{ review.short_fav.sample }}</td></tr>
+                    <tr><td style="color: #888;">final_prob mean (active / alt)</td><td style="text-align: right;">{{ review.short_fav.active_final_prob.mean|default_if_none:"—" }} / <span style="color: #6cb;">{{ review.short_fav.alt_final_prob.mean|default_if_none:"—" }}</span></td></tr>
+                    <tr><td style="color: #888;">edge_pp mean (active / alt)</td><td style="text-align: right;">{{ review.short_fav.active_edge_pp.mean|default_if_none:"—" }} / <span style="color: #6cb;">{{ review.short_fav.alt_edge_pp.mean|default_if_none:"—" }}</span></td></tr>
+                    <tr><td style="color: #888;">pick agreement rate</td><td style="text-align: right;">{{ review.short_fav.pick_agreement_rate|default_if_none:"—" }}</td></tr>
+                    <tr><td style="color: #888;">recommended count (active / alt)</td><td style="text-align: right;">{{ review.short_fav.status_recommended_active }} / <span style="color: #6cb;">{{ review.short_fav.status_recommended_alt }}</span></td></tr>
+                </table>
+            {% endif %}
+        </div>
     {% endif %}
 
     <p style="color: #666; font-size: 0.78rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
