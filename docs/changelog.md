@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-05-14 — Phase 2A Task 1: Production-safe Elo backfill hook + architecture laws
+
+**Scope:** Phase 2A Task 1 only per user direction (strict variable isolation). Production hook for the MLB Elo backfill, idempotent and deploy-safe. `USE_DYNAMIC_RATINGS` remains `False` — no live behavior change. Two permanent architecture laws codified.
+
+### Backfill hook
+
+- `apps/datahub/management/commands/ensure_elo_backfilled.py` — idempotent wrapper around `rebuild_elo_ratings --sport mlb`. Detection guard: a sport is "backfilled" when ≥ 20 MLB teams have a non-null `elo_rating` AND ≥ 1 `TeamEloHistory` row exists for the sport. Both conditions catch the "single test team set elo_rating manually" false positive. Supports `--force` for operator-initiated rebuilds (after K-factor / HFA change or data correction).
+- `apps/datahub/management/commands/ensure_seed.py` — calls `ensure_elo_backfilled` on every deploy. First successful deploy populates state; subsequent deploys detect populated state and no-op. No Railway start-command change required.
+- **Failure isolation:** the hook swallows inner failures and logs them — a failed backfill never aborts a Railway deploy. The live engine reads `team.rating` while `USE_DYNAMIC_RATINGS=False`, so a failed backfill has zero blast radius beyond the shadow-mode comparison data.
+- **Reversibility:** `from apps.core.services.elo_service import reset_sport; reset_sport('mlb')` zeros state; next deploy re-detects and rebuilds.
+- Lock: `apps/datahub/test_ensure_elo_backfilled.py` — 6 tests covering empty-state trigger, already-backfilled skip, `--force` override, single-team false-positive guard, history-without-threshold-teams guard, failure isolation.
+
+### Architecture laws codified
+
+`docs/architecture_laws.md` promulgates two permanent design constraints:
+
+- **Law 1 — Signals Are Nudges, Not Drivers.** No single predictive signal may dominate model output. Every signal has a named, bounded, worst-case probability swing reported in its design doc. Worst-case > 5pp requires explicit justification; most signals should land well under 2pp.
+- **Law 2 — No Signal Without Its Evaluation Slice.** Any commit that adds a predictive signal to the score formula must, in the same commit, add a per-band breakdown in `BacktestRun.summary` (sample count, win rate, ROI, avg CLV, positive-CLV rate). Operators must be able to point at a specific summary key to answer "how do we know this signal helps?"
+
+Operating principles derived from the laws (also in the doc): per-feature flags default-False, determinism-only, reversibility-required, diagnostic visibility on the Model Inventory page, evaluation tooling is product, CLV is the primary signal of edge realism, no emotional tuning, no optimization stacking. Amendment process documented.
+
+### Execution strategy
+
+`docs/phase_2a_task1_execution_2026_05_14.md` documents the production-safe execution:
+
+- Expected runtime: 5–15 s on Railway PostgreSQL for one season's final games; < 1 s for empty / cached state on subsequent deploys.
+- Detection semantics with the false-positive guards explained.
+- Failure handling, rollback procedure, verification queries.
+- Phase 2A Task 2/3/4 sequencing (passive collection → analysis → GO/NO-GO decision) — gated and explicit.
+
+### What is NOT in this commit (strict isolation per direction)
+
+- `USE_DYNAMIC_RATINGS` stays `False`. Flag not flipped.
+- No new predictive signals (pitcher form, team form, bullpen).
+- No edge realism compression.
+- No sigmoid / clamp / blend retunes.
+- No new evaluation breakdowns beyond Phase 1A.
+
+The only deploy-time behavior change is: the next successful Railway deploy populates `Team.elo_rating` + `TeamEloHistory` for MLB. Shadow-mode comparison data on new `BettingRecommendation` rows becomes meaningful (`shadow_alt_data.elo_available=True`). Everything else is bit-identical.
+
+### Test totals
+
+- 172 tests passing on the Elo-adjacent path (6 new tests; 0 regressions).
+- `python manage.py check` passes.
+
+### Phase 2A roadmap (sequencing)
+
+1. ✅ This commit — production-safe backfill hook.
+2. ⏳ Wait for the next Railway deploy to run `ensure_elo_backfilled`.
+3. ⏳ At least one MLB slate accumulates shadow data on new recommendations.
+4. ⏳ Phase 2A Task 3 — shadow review analysis at `/analytics/shadow-review/`.
+5. ⏳ Phase 2A Task 4 — GO/NO-GO recommendation for `USE_DYNAMIC_RATINGS=True`.
+
+Each step gated. No intermediate behavioral changes between deploys.
+
+---
+
 ## 2026-05-10 — Phase 1A + 1B: Truth instrumentation + Elo shadow mode
 
 **Summary:** Phase 1A truth-pass and Phase 1B MLB Elo shadow-mode wiring per the engineering report's roadmap. No live recommendation behavior changes — every move is either diagnostic (read-only inventory page, segment instrumentation, audit doc), code-honesty (phantom-weight comments + regression locks), or shadow-only (alt-mode comparison data captured alongside primary recommendations). Production behavior is bit-identical to the pre-commit codebase until `USE_DYNAMIC_RATINGS=True` is set in Railway env vars — and even then the rollback is one env-var change.

@@ -93,6 +93,26 @@ class Command(BaseCommand):
                 f'backfill_loss_reasons on deploy failed: {e}'
             ))
 
+        # 2026-05-14 Phase 2A Task 1: idempotent MLB Elo backfill. First
+        # successful deploy runs `rebuild_elo_ratings --sport mlb`;
+        # subsequent deploys detect existing state and no-op. The live
+        # recommendation engine is unaffected because USE_DYNAMIC_RATINGS
+        # is False — this only populates `Team.elo_rating` +
+        # `TeamEloHistory` so the shadow-mode comparison data on new
+        # `BettingRecommendation` rows becomes meaningful. Failure is
+        # logged but does not abort the deploy (see ensure_elo_backfilled
+        # docstring for the rationale).
+        try:
+            self.stdout.write('--- ensure MLB Elo backfilled ---')
+            call_command('ensure_elo_backfilled')
+        except Exception as e:
+            # Defensive double-guard — the command itself already swallows
+            # its own failures, but if something goes wrong above the
+            # try/except (import error, etc.), the deploy still continues.
+            self.stdout.write(self.style.WARNING(
+                f'ensure_elo_backfilled on deploy failed: {e}'
+            ))
+
         # --- post-run diagnostic block ---------------------------------------
         # Prints a summary of odds coverage for each sport in the deploy log
         # so operators can see at a glance whether ingestion worked. Without
