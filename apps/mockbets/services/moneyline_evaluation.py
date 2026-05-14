@@ -45,21 +45,88 @@ from apps.mockbets.services.system_tuning import compute_data_confidence
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Canonical evaluation scopes (2026-05-14 evaluation-integrity repair).
+#
+# The historical default (`include_manual=False`) silently excluded manual
+# bets, producing surfaces where "My Bets shows 6 placed; Evaluation shows
+# 2" because 4 of the 6 were manual placements. That violates the
+# Brother Willies evaluation-truth contract: the analytics layer MUST NOT
+# silently exclude actual placed bets.
+#
+# Four explicit scopes — every caller chooses one. The chosen scope is
+# echoed back on the report so the operator can see exactly what was
+# evaluated.
+SCOPE_ACTUAL = 'actual'              # all placed moneyline bets in window
+SCOPE_RECOMMENDED = 'recommended'    # is_system_generated=True only
+SCOPE_MANUAL = 'manual'              # is_system_generated=False only
+SCOPE_ALL = 'all'                    # alias for SCOPE_ACTUAL (kept for clarity)
+
+VALID_SCOPES = {SCOPE_ACTUAL, SCOPE_RECOMMENDED, SCOPE_MANUAL, SCOPE_ALL}
+
+# Default scope — Actual Bets. Users expect evaluation to match the
+# bets they actually placed. Model evaluation (system-generated only)
+# is one explicit click away via SCOPE_RECOMMENDED.
+DEFAULT_SCOPE = SCOPE_ACTUAL
+
+SCOPE_LABELS = {
+    SCOPE_ACTUAL: 'Actual Bets',
+    SCOPE_RECOMMENDED: 'Recommended System Bets',
+    SCOPE_MANUAL: 'Manual Bets',
+    SCOPE_ALL: 'All Bets',
+}
+
+
+def _normalize_scope(scope: Optional[str], include_manual: Optional[bool]) -> str:
+    """Resolve scope from the new `scope` param or the legacy `include_manual`.
+
+    Precedence:
+      1. Explicit valid `scope` wins.
+      2. Legacy `include_manual=True`  → SCOPE_ALL  (matches old behavior).
+      3. Legacy `include_manual=False` → SCOPE_RECOMMENDED  (the historical
+         default that was silently dropping manual bets — preserved for
+         strict back-compat when callers pass that flag).
+      4. Nothing supplied → DEFAULT_SCOPE (Actual Bets).
+    """
+    if scope and scope in VALID_SCOPES:
+        return scope
+    if include_manual is True:
+        return SCOPE_ALL
+    if include_manual is False:
+        return SCOPE_RECOMMENDED
+    return DEFAULT_SCOPE
+
+
 def build_evaluation_report(
     bets_qs: Iterable,
     date_from: date,
     date_to: date,
-    include_manual: bool = False,
+    include_manual: Optional[bool] = None,
+    scope: Optional[str] = None,
 ) -> dict:
     """Build the full evaluation packet for the given date range.
 
-    Caller is expected to pass a MockBet queryset (or any iterable of
-    MockBet rows). The service applies the moneyline-only filter, the
-    is_system_generated filter (unless include_manual is True), and the
-    placement-date window itself — so the caller only has to express
+    Caller passes a MockBet queryset (or any iterable). The service applies
+    the moneyline-only filter, the placement-date window, and the scope's
+    is_system_generated filter — so the caller only has to express
     user/sport scope.
+
+    Args:
+        bets_qs: MockBet queryset or iterable to evaluate.
+        date_from / date_to: placement-date window, inclusive on both ends.
+        include_manual: legacy parameter retained for back-compat.
+            Passing True maps to scope='all'; passing False maps to
+            scope='recommended'. New callers should use `scope` instead.
+        scope: one of `actual` / `recommended` / `manual` / `all`.
+            Defaults to `actual` per the evaluation-integrity contract.
     """
-    bets = list(_filter_bets(bets_qs, date_from, date_to, include_manual))
+    resolved_scope = _normalize_scope(scope, include_manual)
+
+    # Compute the in-window total BEFORE applying the scope filter so we
+    # can report "X placed; Y included; Z excluded for reason Q".
+    all_in_window = list(_filter_by_type_and_date(bets_qs, date_from, date_to))
+    bets = [b for b in all_in_window if _scope_matches(b, resolved_scope)]
+
+    scope_summary = _build_scope_summary(all_in_window, bets, resolved_scope)
 
     summary = _executive_summary(bets, date_from, date_to)
     bet_rows = [_bet_detail(b) for b in bets]
@@ -76,15 +143,17 @@ def build_evaluation_report(
             'from': date_from,
             'to': date_to,
             'label': _label_for_range(date_from, date_to),
-            'include_manual': include_manual,
+            'include_manual': resolved_scope != SCOPE_RECOMMENDED,  # legacy
         },
+        'scope': scope_summary,
         'executive_summary': summary,
         'bets': bet_rows,
         'buckets': buckets,
         'loss_review': loss_review,
         'packet_markdown': _render_packet(
             date_from, date_to, summary, bet_rows, buckets, loss_review,
-            include_manual=include_manual,
+            include_manual=(resolved_scope != SCOPE_RECOMMENDED),
+            scope_summary=scope_summary,
         ),
     }
 
@@ -93,21 +162,77 @@ def build_evaluation_report(
 # Filters
 # ---------------------------------------------------------------------------
 
-def _filter_bets(bets_qs, date_from: date, date_to: date, include_manual: bool):
-    """Apply all the report's filters at once.
+def _filter_by_type_and_date(bets_qs, date_from: date, date_to: date):
+    """Apply ONLY the bet-type + placement-date filters.
 
-    Date range is inclusive on both endpoints. Uses the local-tz date of
-    placed_at (matches the mental model "yesterday's slate" without
-    timezone gymnastics — the cron and the user are on the same TZ).
+    Pulled apart from scope filtering so the report can compute "total
+    placed in window" (ignoring scope) vs "included by scope". Date range
+    is inclusive on both endpoints. Uses the local-tz date of placed_at
+    (matches the mental model "yesterday's slate").
     """
-    qs = bets_qs.filter(bet_type='moneyline')
-    if not include_manual:
-        qs = qs.filter(is_system_generated=True)
-    qs = qs.filter(
+    return bets_qs.filter(
+        bet_type='moneyline',
         placed_at__date__gte=date_from,
         placed_at__date__lte=date_to,
     )
-    return qs
+
+
+def _scope_matches(bet, scope: str) -> bool:
+    """True iff `bet` falls inside the chosen scope.
+
+    Operates on materialized MockBet instances, not querysets, so the
+    same predicate works for both DB rows and test fakes.
+    """
+    if scope in (SCOPE_ACTUAL, SCOPE_ALL):
+        return True
+    is_system = bool(getattr(bet, 'is_system_generated', False))
+    if scope == SCOPE_RECOMMENDED:
+        return is_system
+    if scope == SCOPE_MANUAL:
+        return not is_system
+    # Unknown scope (shouldn't reach here after _normalize_scope) —
+    # default to inclusive rather than silently dropping.
+    return True
+
+
+def _build_scope_summary(all_in_window, included, scope: str) -> dict:
+    """Operator-facing breakdown of what the scope filter did.
+
+    Returns a stable shape with non-zero counts only for the relevant
+    exclusion reasons. The template iterates `exclusion_reasons` for
+    display, so empty reasons should not appear there.
+    """
+    total = len(all_in_window)
+    included_count = len(included)
+    excluded_count = total - included_count
+
+    excluded_bets = [b for b in all_in_window if b not in included]
+    manual_excluded = sum(
+        1 for b in excluded_bets
+        if not bool(getattr(b, 'is_system_generated', False))
+    )
+    system_excluded = sum(
+        1 for b in excluded_bets
+        if bool(getattr(b, 'is_system_generated', False))
+    )
+
+    reasons = {}
+    if scope == SCOPE_RECOMMENDED and manual_excluded:
+        reasons['manual_bets'] = manual_excluded
+    if scope == SCOPE_MANUAL and system_excluded:
+        reasons['system_generated_bets'] = system_excluded
+
+    return {
+        'scope': scope,
+        'scope_label': SCOPE_LABELS.get(scope, scope),
+        'total_placed_in_window': total,
+        'included': included_count,
+        'excluded': excluded_count,
+        'exclusion_reasons': reasons,
+        # Convenience flag for templates — true when the user might
+        # want to investigate why bets were dropped.
+        'has_exclusions': excluded_count > 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -475,13 +600,29 @@ def _label_for_range(date_from: date, date_to: date) -> str:
 
 def _render_packet(
     date_from, date_to, summary, bet_rows, buckets, loss_review,
-    *, include_manual: bool,
+    *, include_manual: bool, scope_summary: Optional[dict] = None,
 ) -> str:
     """Render the copy-paste markdown blob. Single source of truth
     with the on-page render — both reads from the same dicts. Format
     designed for ChatGPT/Claude to interpret without preamble."""
     label = _label_for_range(date_from, date_to)
-    scope = 'all bets (system + manual)' if include_manual else 'system-generated only'
+
+    # Prefer the structured scope_summary when present (post 2026-05-14
+    # evaluation-integrity repair); fall back to the legacy boolean for
+    # callers that haven't migrated. The legacy string is intentionally
+    # less precise — that's the bug we just fixed.
+    if scope_summary:
+        scope_label = scope_summary.get('scope_label', 'Actual Bets')
+        scope_line = (
+            f'Scope: {scope_label} '
+            f'({scope_summary.get("included", 0)} of '
+            f'{scope_summary.get("total_placed_in_window", 0)} placed in window)'
+        )
+        exclusion_reasons = scope_summary.get('exclusion_reasons', {})
+    else:
+        scope_label = 'all bets (system + manual)' if include_manual else 'system-generated only'
+        scope_line = f'Scope: {scope_label}'
+        exclusion_reasons = {}
 
     lines = []
     lines.append('# Brother Willies Moneyline Evaluation Packet')
@@ -490,7 +631,11 @@ def _render_packet(
     # --- Date range
     lines.append('## Date Range')
     lines.append(f'{date_from.isoformat()} to {date_to.isoformat()} ({label})')
-    lines.append(f'Scope: {scope}')
+    lines.append(scope_line)
+    if exclusion_reasons:
+        lines.append('Excluded by scope:')
+        for reason, count in exclusion_reasons.items():
+            lines.append(f'  - {count} {reason.replace("_", " ")}')
     lines.append('')
 
     # --- Executive summary

@@ -19,19 +19,20 @@
         <li>Click <strong>Copy Evaluation Packet</strong> and paste it into ChatGPT or Claude.</li>
     </ol>
     <div class="text-sm" style="color:var(--muted);margin-top:6px;">
-        Scope: ALL users, moneyline only, {{ include_manual|yesno:"system + manual bets,system-generated only" }}.
+        Scope: ALL users, moneyline only — choose evaluation scope below
+        (default: <strong>Actual Bets</strong>).
     </div>
 </div>
 
-{% comment %} Filter bar — quick ranges + custom + manual toggle {% endcomment %}
+{% comment %} Filter bar — quick ranges + custom + scope picker {% endcomment %}
 <div class="card mb-1">
     <form method="get" id="eval-filters">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
             <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                <a href="?range=yesterday" class="btn btn-sm{% if current_range == 'yesterday' %} btn-primary{% endif %}" style="font-size:0.8rem;">Yesterday</a>
-                <a href="?range=today" class="btn btn-sm{% if current_range == 'today' %} btn-primary{% endif %}" style="font-size:0.8rem;">Today</a>
-                <a href="?range=7d" class="btn btn-sm{% if current_range == '7d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 7 Days</a>
-                <a href="?range=30d" class="btn btn-sm{% if current_range == '30d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 30 Days</a>
+                <a href="?range=yesterday&scope={{ current_scope }}" class="btn btn-sm{% if current_range == 'yesterday' %} btn-primary{% endif %}" style="font-size:0.8rem;">Yesterday</a>
+                <a href="?range=today&scope={{ current_scope }}" class="btn btn-sm{% if current_range == 'today' %} btn-primary{% endif %}" style="font-size:0.8rem;">Today</a>
+                <a href="?range=7d&scope={{ current_scope }}" class="btn btn-sm{% if current_range == '7d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 7 Days</a>
+                <a href="?range=30d&scope={{ current_scope }}" class="btn btn-sm{% if current_range == '30d' %} btn-primary{% endif %}" style="font-size:0.8rem;">Last 30 Days</a>
             </div>
             <div>
                 <label class="text-sm" style="color:var(--accent);">From</label>
@@ -42,16 +43,55 @@
                 <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
             </div>
             <div>
-                <label class="text-sm" style="color:var(--accent);display:block;">
-                    <input type="checkbox" name="include_manual" value="1" {% if include_manual %}checked{% endif %}>
-                    Include manual
-                </label>
+                <label class="text-sm" style="color:var(--accent);display:block;">Scope</label>
+                <select name="scope" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
+                    <option value="actual" {% if current_scope == 'actual' %}selected{% endif %}>Actual Bets (default)</option>
+                    <option value="recommended" {% if current_scope == 'recommended' %}selected{% endif %}>Recommended System Bets</option>
+                    <option value="manual" {% if current_scope == 'manual' %}selected{% endif %}>Manual Bets</option>
+                    <option value="all" {% if current_scope == 'all' %}selected{% endif %}>All Bets</option>
+                </select>
             </div>
             <div>
                 <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.85rem;">Run Evaluation</button>
             </div>
         </div>
     </form>
+</div>
+
+{% comment %}
+Scope Summary — the 2026-05-14 evaluation-integrity transparency box.
+Surfaces "X placed in window; Y included; Z excluded for reason Q" so
+the operator can never silently be looking at a filtered subset of
+their actual betting ledger.
+{% endcomment %}
+<div class="card mb-1" style="background:rgba(255,200,80,0.06);border-left:3px solid var(--accent);">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div>
+            <div class="text-sm" style="color:var(--accent);font-weight:600;">
+                Scope: {{ report.scope.scope_label }}
+            </div>
+            <div class="text-sm" style="color:var(--muted);">
+                {{ report.scope.total_placed_in_window }} placed moneyline bet{{ report.scope.total_placed_in_window|pluralize }}
+                in window · {{ report.scope.included }} included
+                {% if report.scope.excluded %}· <span style="color:#c83;">{{ report.scope.excluded }} excluded</span>{% endif %}
+            </div>
+        </div>
+        {% if report.scope.exclusion_reasons %}
+            <div class="text-sm" style="color:var(--muted);">
+                Excluded:
+                {% for reason, count in report.scope.exclusion_reasons.items %}
+                    <span style="color:#c83;">{{ count }} {{ reason|cut:"_"|stringformat:"s" }}</span>{% if not forloop.last %} · {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+    {% if report.scope.has_exclusions and report.scope.scope == 'recommended' %}
+        <div class="text-sm" style="color:var(--muted);margin-top:8px;">
+            <em>Note:</em> {{ report.scope.exclusion_reasons.manual_bets|default:0 }} manual bet{{ report.scope.exclusion_reasons.manual_bets|pluralize }} were placed
+            in this window but excluded from model evaluation.
+            Switch to <strong>Actual Bets</strong> scope to see your full ledger.
+        </div>
+    {% endif %}
 </div>
 
 {% comment %} Section 1 — Executive Summary, big and clear {% endcomment %}

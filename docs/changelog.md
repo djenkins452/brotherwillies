@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-14 — Evaluation integrity repair: canonical scopes + UI transparency
+
+**Trigger:** operator observed `My Bets` showed 6 placed MLB bets while Moneyline Evaluation showed only 2 for the same date. Phase 2A Task 4 paused to address.
+
+**Root cause:** `apps/mockbets/services/moneyline_evaluation.py::_filter_bets` defaulted to `include_manual=False`, which added `is_system_generated=True` to the queryset and silently dropped manually-placed bets. The page label said "system + manual" or "system-generated only" depending on a single toggle, but there was no visible count of excluded bets, no list of exclusion reasons, and no operator-readable scope name on the page.
+
+**Fix — surgical, behavior-preserving:**
+
+- Four canonical evaluation scopes: `actual` (default), `recommended`, `manual`, `all`.
+- `build_evaluation_report(...)` gains an explicit `scope=` kwarg. Legacy `include_manual=True/False` callers continue working via a back-compat shim (`include_manual=False` → `recommended`; `include_manual=True` → `all`).
+- Every report now carries a `report['scope']` summary: scope label, total placed in window, included count, excluded count, per-reason exclusion breakdown.
+- Eval page UI: the old "Include manual" checkbox is replaced by a four-option scope dropdown. A new scope-summary box surfaces "X placed moneyline bets · Y included · Z excluded for reason Q" — silent exclusion is now structurally impossible.
+- Default scope is `actual` per the evaluation-truth contract: users expect evaluation to match their actual betting ledger.
+- The markdown copy-packet includes the scope label + counts in its "Date Range" section so downstream LLM analysis sees the same scope context.
+
+**Files touched:**
+
+- `apps/mockbets/services/moneyline_evaluation.py` — canonical scopes, `_normalize_scope`, `_build_scope_summary`, scope-aware `_render_packet`.
+- `apps/mockbets/views.py::moneyline_evaluation_view` — read `?scope=`, default `actual`, pass through to service.
+- `templates/mockbets/moneyline_evaluation.html` — scope dropdown + scope-summary box.
+- `apps/mockbets/tests.py` — new `EvaluationScopeIntegrityTests` class with 11 tests.
+- `docs/eval_integrity_audit_2026_05_14.md` — full audit + fix documentation.
+
+**Tests:** 11 new tests cover all scope semantics, back-compat, the alignment contract (`My Bets count == Actual-scope eval included count` for the same window), and UI rendering. 270 tests passing across mockbets + Phase-relevant modules. Zero regressions.
+
+**What is NOT in this commit:**
+
+- ❌ No changes to recommendation logic.
+- ❌ No Elo activation. `USE_DYNAMIC_RATINGS` stays `False`.
+- ❌ No calibration retunes.
+- ❌ No new predictive signals.
+- ❌ No changes to shadow-review conclusions (different data source).
+
+**Phase 2A status:** Task 4 (Elo activation GO/NO-GO) was paused for this work. Resuming after operator confirms the eval/My Bets alignment is now correct on production.
+
+---
+
 ## 2026-05-14 — Phase 2A Task 3: Shadow review realism diagnostics
 
 **Scope:** Phase 2A Task 3 only — observation + analysis. No tuning, no signals, no calibration changes. `USE_DYNAMIC_RATINGS` stays `False`. Strict variable isolation continues.

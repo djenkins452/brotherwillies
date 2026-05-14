@@ -2647,6 +2647,298 @@ class MoneylineEvaluationFiltersTests(TestCase):
         self.assertEqual(report['executive_summary']['bets_count'], 2)
 
 
+class EvaluationScopeIntegrityTests(TestCase):
+    """Phase 2026-05-14 evaluation-integrity repair.
+
+    Locks the contract that the Moneyline Evaluation page can never
+    silently exclude actual placed bets. Mirrors the 'My Bets shows 6,
+    Evaluation shows 2' discrepancy with deterministic test data.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('scope_user', password='x')
+
+    def _bet(self, *, is_system_generated, placed_days_ago=1, bet_type='moneyline'):
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type=bet_type,
+            selection='X', odds_american=-130,
+            implied_probability=Decimal('0.5652'),
+            stake_amount=Decimal('100'),
+            result='pending',
+            is_system_generated=is_system_generated,
+            expected_edge=Decimal('5.0'),
+            recommendation_status='recommended' if is_system_generated else '',
+            recommendation_tier='standard' if is_system_generated else '',
+            recommendation_confidence=Decimal('60.0'),
+        )
+        bet.placed_at = timezone.now() - timedelta(days=placed_days_ago)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    # ----- Scope semantics --------------------------------------------------
+
+    def test_actual_scope_includes_all_placed_bets(self):
+        """SCOPE_ACTUAL must match My Bets — system + manual both
+        included. This is the discrepancy fix."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ACTUAL,
+        )
+        # 3 system + 3 manual = 6 placed.
+        for _ in range(3):
+            self._bet(is_system_generated=True)
+            self._bet(is_system_generated=False)
+
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ACTUAL,
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_ACTUAL)
+        self.assertEqual(report['scope']['total_placed_in_window'], 6)
+        self.assertEqual(report['scope']['included'], 6)
+        self.assertEqual(report['scope']['excluded'], 0)
+        self.assertEqual(report['executive_summary']['bets_count'], 6)
+
+    def test_recommended_scope_excludes_manual_bets_with_count(self):
+        """SCOPE_RECOMMENDED must surface the excluded count + reason —
+        the silent-exclusion failure mode is forbidden."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_RECOMMENDED,
+        )
+        for _ in range(2):
+            self._bet(is_system_generated=True)
+        for _ in range(4):
+            self._bet(is_system_generated=False)
+
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_RECOMMENDED,
+        )
+        self.assertEqual(report['scope']['total_placed_in_window'], 6)
+        self.assertEqual(report['scope']['included'], 2)
+        self.assertEqual(report['scope']['excluded'], 4)
+        self.assertEqual(report['scope']['exclusion_reasons'].get('manual_bets'), 4)
+        self.assertEqual(report['executive_summary']['bets_count'], 2)
+
+    def test_manual_scope_excludes_system_bets_with_count(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_MANUAL,
+        )
+        for _ in range(2):
+            self._bet(is_system_generated=True)
+        for _ in range(3):
+            self._bet(is_system_generated=False)
+
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MANUAL,
+        )
+        self.assertEqual(report['scope']['included'], 3)
+        self.assertEqual(report['scope']['excluded'], 2)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get('system_generated_bets'),
+            2,
+        )
+
+    def test_all_scope_is_alias_for_actual(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ACTUAL, SCOPE_ALL,
+        )
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+
+        report_actual = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ACTUAL,
+        )
+        report_all = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ALL,
+        )
+        self.assertEqual(
+            report_actual['scope']['included'],
+            report_all['scope']['included'],
+        )
+
+    # ----- Default behavior --------------------------------------------------
+
+    def test_default_scope_is_actual(self):
+        """Calling build_evaluation_report with neither `scope` nor
+        `include_manual` must default to SCOPE_ACTUAL — the
+        evaluation-integrity contract."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ACTUAL,
+        )
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_ACTUAL)
+        self.assertEqual(report['scope']['included'], 2)
+
+    # ----- Back-compat --------------------------------------------------
+
+    def test_legacy_include_manual_false_maps_to_recommended(self):
+        """Old callers that pass include_manual=False must get the
+        historical recommended-only behavior — strict back-compat."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_RECOMMENDED,
+        )
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=False,
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_RECOMMENDED)
+
+    def test_legacy_include_manual_true_maps_to_all(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ALL,
+        )
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=True,
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_ALL)
+        self.assertEqual(report['scope']['included'], 2)
+
+    def test_explicit_scope_wins_over_include_manual(self):
+        """Defensive: if both kwargs are provided, the explicit scope
+        wins. Prevents ambiguity from old URLs being re-saved by JS."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ACTUAL,
+        )
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            include_manual=False,  # would mean RECOMMENDED on its own
+            scope=SCOPE_ACTUAL,    # but explicit scope wins
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_ACTUAL)
+        self.assertEqual(report['scope']['included'], 2)
+
+    # ----- My Bets / Evaluation alignment --------------------------------
+
+    def test_my_bets_count_matches_actual_eval_for_same_window(self):
+        """The discrepancy fix: My Bets's MLB count for a given date
+        range must equal Actual-scope evaluation's included count for
+        the same range."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            build_evaluation_report, SCOPE_ACTUAL,
+        )
+        # 6 bets total in window, mix of system + manual — same
+        # situation that produced the reported discrepancy.
+        for _ in range(3):
+            self._bet(is_system_generated=True)
+        for _ in range(3):
+            self._bet(is_system_generated=False)
+
+        today = timezone.localdate()
+        my_bets_qs = MockBet.objects.filter(
+            user=self.user,
+            sport='mlb',
+            bet_type='moneyline',
+            placed_at__date=today - timedelta(days=1),
+        )
+        my_bets_count = my_bets_qs.count()
+
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ACTUAL,
+        )
+
+        # The alignment contract.
+        self.assertEqual(my_bets_count, report['scope']['included'])
+        self.assertEqual(my_bets_count, 6)
+
+    # ----- UI transparency --------------------------------------------------
+
+    def test_view_renders_scope_summary_with_counts(self):
+        """The eval page must surface included/excluded counts and the
+        scope label — silent exclusions are now impossible to render."""
+        from django.urls import reverse
+        # Three system, three manual.
+        for _ in range(3):
+            self._bet(is_system_generated=True)
+        for _ in range(3):
+            self._bet(is_system_generated=False)
+
+        staff = User.objects.create_user('staff_eval', password='x', is_staff=True)
+        self.client.force_login(staff)
+
+        url = reverse('mockbets:moneyline_evaluation')
+        today = timezone.localdate()
+        date_str = (today - timedelta(days=1)).isoformat()
+        resp = self.client.get(
+            url,
+            {'date_from': date_str, 'date_to': date_str, 'scope': 'recommended'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        # Scope label + counts must appear.
+        self.assertIn('Recommended System Bets', body)
+        # 3 placed (system), 3 placed (manual) = 6 in window
+        # With scope=recommended: 3 included, 3 excluded as manual.
+        self.assertIn('6 placed moneyline bets', body)
+        self.assertIn('3 included', body)
+        self.assertIn('3 excluded', body)
+
+    def test_view_default_is_actual_scope(self):
+        """Visiting the eval page with no scope query param must default
+        to Actual scope — no more silent filtering."""
+        from django.urls import reverse
+        self._bet(is_system_generated=True)
+        self._bet(is_system_generated=False)
+
+        staff = User.objects.create_user('staff_eval2', password='x', is_staff=True)
+        self.client.force_login(staff)
+
+        url = reverse('mockbets:moneyline_evaluation')
+        today = timezone.localdate()
+        date_str = (today - timedelta(days=1)).isoformat()
+        # No `scope` param.
+        resp = self.client.get(url, {'date_from': date_str, 'date_to': date_str})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        self.assertIn('Actual Bets', body)
+
+
 class MoneylineEvaluationSummaryMathTests(TestCase):
     """Executive summary numbers must match the underlying bets."""
 

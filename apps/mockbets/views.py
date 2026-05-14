@@ -685,10 +685,32 @@ def moneyline_evaluation_view(request):
             quick_range = 'yesterday'
             date_from = date_to = today - _td(days=1)
 
-    include_manual = request.GET.get('include_manual') == '1'
+    # 2026-05-14 evaluation-integrity repair. The historical default
+    # was include_manual=False, which silently dropped manual placements
+    # — producing the "My Bets shows 6, Evaluation shows 2" discrepancy.
+    # The new default is scope='actual' (all placed moneyline bets in
+    # window). Old ?include_manual=1 URLs continue to work via the
+    # service's legacy back-compat path.
+    from apps.mockbets.services.moneyline_evaluation import (
+        VALID_SCOPES, DEFAULT_SCOPE, SCOPE_RECOMMENDED,
+    )
+
+    scope_param = request.GET.get('scope', '').strip().lower()
+    if scope_param in VALID_SCOPES:
+        scope = scope_param
+    elif request.GET.get('include_manual') == '1':
+        # Legacy URL: include_manual=1 → effectively SCOPE_ALL.
+        scope = 'all'
+    elif 'include_manual' in request.GET:
+        # Legacy URL: include_manual present but not '1' → recommended-only.
+        scope = SCOPE_RECOMMENDED
+    else:
+        scope = DEFAULT_SCOPE
+
+    include_manual = (scope != SCOPE_RECOMMENDED)
 
     # MockBet.objects.all() — all users, all sports. The service applies
-    # the moneyline + system-generated + date-range filters itself.
+    # the moneyline + scope + date-range filters itself.
     bets_qs = MockBet.objects.all().select_related(
         'cfb_game__home_team', 'cfb_game__away_team',
         'cbb_game__home_team', 'cbb_game__away_team',
@@ -699,7 +721,7 @@ def moneyline_evaluation_view(request):
         bets_qs,
         date_from=date_from,
         date_to=date_to,
-        include_manual=include_manual,
+        scope=scope,
     )
 
     # Pre-flatten buckets into (title, rows) pairs so the template can
@@ -717,7 +739,8 @@ def moneyline_evaluation_view(request):
         'current_range': quick_range,
         'current_date_from': date_from.isoformat(),
         'current_date_to': date_to.isoformat(),
-        'include_manual': include_manual,
+        'include_manual': include_manual,    # legacy template var
+        'current_scope': scope,              # 2026-05-14 evaluation-integrity
         'help_key': 'moneyline_evaluation',
         'nav_active': 'mockbets',
     })
