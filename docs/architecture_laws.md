@@ -100,6 +100,133 @@ PR violates Law 2.
 
 ---
 
+## Law 3 — Analytics Surfaces Must Be Transparent About Their Scope
+
+**Statement.** Any analytics surface that filters the user's actual
+data (bets, recommendations, games, etc.) must visibly disclose:
+
+1. The chosen scope (named).
+2. The total population observed *before* the scope filter (the
+   denominator the user would expect).
+3. The included count (the numerator the surface is actually using).
+4. The excluded count, broken down by reason.
+
+Silent exclusion is forbidden. If a page shows N records but the
+underlying ledger has N + K for the same time/sport/user window, K
+must appear on the page along with the reason it was filtered out.
+
+**What this means in practice.**
+- Every evaluation page carries a `scope` indicator at the top.
+- The default scope on any user-facing surface is the one that
+  matches the user's actual placed-bet ledger (`actual` in the
+  Moneyline Evaluation), not a silently filtered subset.
+- Specialized scopes (e.g., `recommended` for model evaluation) are
+  one explicit click away and surface their exclusion counts.
+- The same scope label propagates to derived artifacts — markdown
+  copy-packets, JSON exports, AI-Insight prompts — so any downstream
+  reader (human or LLM) sees the same scope context the page does.
+
+**Why this law exists.**
+The Phase 2A Task 3 → Task 4 workflow caught the canonical violation:
+the operator saw 6 placed MLB bets on `My Bets` and 2 in `Moneyline
+Evaluation` for the same date. The evaluation page silently dropped 4
+manual bets (`is_system_generated=False`), with no count, no reason,
+no operator-readable scope indicator. Every downstream conclusion
+built on top of that 2-bet view was structurally untrustworthy.
+
+Once the discrepancy is observable, the human can decide whether the
+scope is the right one. When the discrepancy is invisible, the human
+makes confident decisions on incomplete data — the worst possible
+state.
+
+**Concrete examples.**
+
+| Surface | Default scope | Excluded counts visible? | Compliance |
+|---|---|---|---|
+| `/mockbets/moneyline-evaluation/` | `actual` (post-2026-05-14) | ✅ scope-summary box | ✅ |
+| `/mockbets/` (My Bets) | user's full ledger | n/a — not a filtered evaluation | ✅ |
+| `/analytics/shadow-review/` | last 14 days w/ `elo_available=True` | ✅ `sample` vs `sample_total` displayed | ✅ |
+| `/analytics/backtest/` | full historical replay per rating mode | ✅ `validation.evaluated` + `validation.duplicates_dropped` + `validation.approximate_games` in summary | ✅ |
+
+**Compliance check.** A reviewer reading any analytics-page PR should
+be able to answer "what fraction of the user's actual data is this
+page rendering?" by pointing at a visible UI element. If the answer
+requires reading source, the PR violates Law 3.
+
+---
+
+## Law 4 — Do Not Overfit
+
+**Statement.** Brother Willies does not chase outcomes. Constant
+changes, threshold retunes, and recommendation-rule modifications
+require evidence: sample size, time window, effect magnitude, and a
+named mechanism. A single slate, week, or segment cannot trigger a
+configuration change. Survivorship bias, selection bias, and silent
+filtering are forbidden anti-patterns. Every tune is rolled back if
+its supporting evidence disappears within a defined window.
+
+**What this means in practice.**
+- No constant changes without a written justification covering
+  sample, window, effect, mechanism.
+- The Recommendation Health Score (`docs/recommendation_quality_framework.md`
+  §3) is the gating signal for whether action is warranted. Scores
+  in `STRONG` or `HEALTHY` bands do not justify constant changes
+  even when individual segments look "off."
+- Changes that target a single subgroup require a *generalizable*
+  mechanism — "this pitcher's last-3-start ERA was bad" is not a
+  mechanism; "short-favorite picks with default-rated pitchers
+  underperformed across 60 settled bets over 4 weeks" is.
+- After any constant change ships, no other change in the same
+  causal area ships within the next isolation window (4 weeks for
+  calibration; 1 week for sub-segment gates) — Operating Principle
+  "no optimization stacking" enforced harder.
+- Every tune logs its supporting evidence. Tune logs are evaluation
+  inputs themselves — the next person looking at "why is this number
+  set to X?" reads the log entry, not the source-control blame.
+
+**Specific anti-patterns this law forbids.**
+
+| Anti-pattern | Why it's forbidden |
+|---|---|
+| "We lost three in a row — tighten the edge gate." | Variance, not signal. Three-bet samples carry no statistical content. |
+| "This edge bucket lost five bets this week — suppress it." | Insufficient sample (< 20 in bucket per Tuning Governance §2). |
+| "Today's slate was bad — drop the market blend weight." | Single-slate noise. Calibration changes require ≥ 4 weeks. |
+| "The model agreed with the market on the close losses — increase divergence." | Outcome-driven; the model agreeing with the sharp market is *good* CLV behavior even when individual bets lose. |
+| "Add a per-team adjustment because the Yankees keep underperforming." | Per-team adjustments are survivorship-biased by definition. |
+| "Tweak the gate so yesterday's winners would have qualified and yesterday's losers wouldn't." | Look-back overfitting. Cannot be done on the data the change is justified by. |
+
+**How to identify a Law 4 violation in a proposed change.**
+
+A change violates Law 4 if ANY of the following hold:
+1. The supporting sample is < 30 settled bets, OR
+2. The supporting window is < 4 weeks (for calibration) or < 1 week (for sub-segment gates), OR
+3. The change targets a subgroup without a generalizable mechanism, OR
+4. Another change in the same causal area was made within the isolation window, OR
+5. The change's evidence section contains the phrase "felt off," "looked bad," or "we should probably" — these are emotional, not evidence-based.
+
+**Compliance check.** Every commit that modifies a recommendation
+constant, calibration parameter, gate threshold, blend weight, clamp
+bound, sigmoid divisor, lane rule, or any other tuning surface must
+include:
+
+```
+## Evidence
+- Sample: <n> settled bets
+- Window: <date_from> to <date_to> (≥ 4 weeks for calibration)
+- Segment: <if applicable>
+- Effect measured: <metric> changed from <X> to <Y> (Δ <Z>)
+- Mechanism: <generalizable causal explanation>
+- Health Score before: <score>
+- Health Score after (predicted): <score>
+- Rollback trigger: <metric> below <threshold> for <window>
+```
+
+A PR / commit message without that block, for a tuning change,
+violates Law 4. The reviewer should request the evidence or close
+the PR.
+
+---
+
 ## Operating principles derived from the laws
 
 These follow from the two laws but are worth stating explicitly so

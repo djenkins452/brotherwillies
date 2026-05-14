@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-14 — Recommendation Quality Framework + Laws 3 & 4
+
+**Scope:** scientific governance design. No code changes. No constant changes. No recommendation behavior modifications. This commit codifies the operating discipline that prevents Brother Willies from destabilizing through reflexive tuning.
+
+### Two new permanent architecture laws
+
+`docs/architecture_laws.md` extended with:
+
+- **Law 3 — Analytics Surfaces Must Be Transparent About Their Scope.** Any page that filters the user's data must visibly disclose the chosen scope, the total population before filtering, the included count, and the excluded count broken down by reason. Silent exclusion is forbidden. The fix that landed earlier today (Moneyline Evaluation scope dropdown + scope-summary box) is the canonical implementation; this law turns it into a permanent contract for every future analytics page.
+
+- **Law 4 — Do Not Overfit.** Constant changes, threshold retunes, and recommendation-rule modifications require evidence: sample size, time window, effect magnitude, named mechanism. Single slates, single weeks, and single segments cannot trigger configuration changes. Six concrete anti-patterns are listed and forbidden. Five compliance checks identify Law 4 violations in proposed changes. Every tuning commit must carry a structured Evidence block in its message; PRs without it should be rejected.
+
+### Recommendation Quality Framework
+
+`docs/recommendation_quality_framework.md` — comprehensive 8-section governance document covering Tasks 1–5 of the spec:
+
+- **§1 — Primary Success Metrics.** Eight metrics ranked by tuning authority. CLV trend is the primary leading indicator (confirmed; the user's hypothesis was correct). Calibration accuracy is the secondary tuning signal. Edge-bucket performance and favorite-size segmentation drive sub-segment decisions. Long-term ROI is validation-only. Market disagreement is an input to compression, not a tuning target. Recommendation volume and win rate are display-only and explicitly excluded from the Health Score.
+
+- **§2 — Tuning Governance Rules.** Sample-size minimums per decision type (100 settled bets + 4 weeks for calibration retune; 20 in-segment + 4 weeks for sub-segment gate; 50 firings for risk-flag rules). What counts as statistically meaningful vs noise. The four guardrail rules: no tuning from one slate, no tuning from outcome variance alone, calibration changes require per-bucket evidence, no optimization stacking. A "when to wait" decision table.
+
+- **§3 — Recommendation Health Score.** Composite 0–100 score across seven dimensions with documented weights and per-dimension scoring formulas. Four bands (STRONG ≥ 75 / HEALTHY 50–74 / WATCH 25–49 / INTERVENE < 25) that authorize specific operator actions. The Health Score is the Law 4 gate: STRONG and HEALTHY scores do not justify constant changes regardless of individual segment fluctuation. Design only; implementation is gated behind a future authorized step.
+
+- **§4 — Segmentation Framework.** Three tiers. Tier 1 (favorite-size, edge bucket, recommendation tier, pitcher data completeness) may have independent gates with §2 evidence. Tier 2 (home/away, model source, odds source quality, sport) is analysis-only. Tier 3 (day of week, specific team, sportsbook) is debugging-only and explicitly forbidden as a tuning target — survivorship bias by construction.
+
+- **§5 — Calibration Discipline.** Philosophy: "informed humility — disagree when we have a reason, agree by default." Market trust spectrum with eight observable conditions that adjust blend weight bias (Phase 1D candidate; design only). Disagreement-magnitude bands: < 5pp strong alignment, 5–10pp healthy, 10–15pp investigate, > 15pp dangerous. When the market should override the model (default). When the model should override the market (rarely, with named basis). Five documented failure modes with detection signals and remediation paths. Existing and proposed in-code guardrails.
+
+- **§6 — How this framework prevents overfitting.** Cross-references the hierarchy, governance, Health Score, segmentation, calibration, and Law 4 as a joint discipline.
+
+- **§7 — Implementation roadmap.** Five gated implementation steps for the Health Score service, tune log, evidence linking. Each requires explicit operator authorization. None change recommendation behavior.
+
+- **§8 — Single-sentence operating discipline:** *"Brother Willies improves by measuring CLV, calibration, and edge-bucket performance against the Recommendation Health Score, and tunes only when sample, window, mechanism, and isolation all permit."*
+
+### What this commit does NOT do
+
+- ❌ No threshold changes. No retunes.
+- ❌ No Elo activation. `USE_DYNAMIC_RATINGS` stays `False`.
+- ❌ No recommendation behavior changes.
+- ❌ No model probability changes.
+- ❌ No new predictive signals.
+- ❌ No code changes whatsoever. `manage.py check` clean.
+
+### What this commit DOES do
+
+- ✅ Codifies the rules that govern future tuning commits.
+- ✅ Names CLV trend as the primary leading indicator (with evidence).
+- ✅ Defines minimum sample sizes for every category of tuning change.
+- ✅ Designs the Health Score (implementation deferred).
+- ✅ Maps the segmentation framework to three explicit tiers with permission levels.
+- ✅ Documents calibration philosophy with concrete bands and failure modes.
+- ✅ Forbids the six most common overfitting anti-patterns.
+- ✅ Requires every tuning commit to carry a structured Evidence block.
+
+The framework is the operating discipline. Every future Phase 1C / 1D / 2B / 2C change must clear it.
+
+---
+
 ## 2026-05-14 — Evaluation integrity repair: canonical scopes + UI transparency
 
 **Trigger:** operator observed `My Bets` showed 6 placed MLB bets while Moneyline Evaluation showed only 2 for the same date. Phase 2A Task 4 paused to address.
