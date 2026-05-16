@@ -26,18 +26,45 @@ def _settled(bets):
     return [b for b in bets if b.result and b.result != 'pending']
 
 
+# CLV calculation source-quality guard (2026-05-16 evaluation-integrity
+# fix). The Recommendation Quality Framework §1.2 specifies that CLV is
+# only meaningful when both opening and closing snapshots come from a
+# trustworthy primary source (`odds_api`). ESPN-source CLV is dominated
+# by capture artifact (single-bookmaker, single-capture) rather than
+# real market movement, so it should not contribute to model-quality
+# judgments.
+#
+# `apps/core/services/backtesting_service.py::evaluate_game` already
+# enforces this filter; the live-bet path here did not until 2026-05-16.
+# The fix makes the two paths agree.
+#
+# Bets failing the filter are counted under `clv_excluded_by_source` so
+# the operator can see how many CLV samples were dropped and why.
+CLV_PRIMARY_SOURCE = 'odds_api'
+
+
 def _group_stats(bets):
-    """Core math for a single group — used by both status and tier rollups."""
+    """Core math for a single group — used by both status and tier rollups.
+
+    CLV math (2026-05-16):
+      Per the Recommendation Quality Framework §1.2, CLV is only
+      meaningful when sourced from the primary odds feed (odds_api).
+      Bets with clv_cents populated but odds_source != 'odds_api'
+      are counted under `clv_excluded_by_source` instead of
+      contributing to `positive_clv_rate`.
+    """
     stake = Decimal('0')
     winnings = Decimal('0')   # stake returned + profit on wins
     edge_sum = Decimal('0')
     edge_count = 0
     wins = losses = pushes = 0
-    # CLV aggregation — only bets with closing_odds_american populated contribute.
-    # Most bets placed before CLV tracking landed will have None and are skipped.
+    # CLV aggregation — only bets with closing_odds_american populated
+    # AND odds_source='odds_api' contribute. The source filter mirrors
+    # the backtest service so the two paths produce comparable CLV+ rates.
     clv_sum = 0.0
     clv_count = 0
     clv_positive = 0
+    clv_excluded_by_source = 0
     for b in bets:
         stake += b.stake_amount
         if b.result == 'win':
@@ -52,10 +79,17 @@ def _group_stats(bets):
             edge_sum += b.expected_edge
             edge_count += 1
         if b.clv_cents is not None:
-            clv_sum += b.clv_cents
-            clv_count += 1
-            if b.clv_direction == 'positive':
-                clv_positive += 1
+            # Source filter (2026-05-16): only primary-source CLV is
+            # informative. ESPN-source / manual / cached / unknown all
+            # excluded so the rate reflects real market movement.
+            bet_source = getattr(b, 'odds_source', '') or ''
+            if bet_source == CLV_PRIMARY_SOURCE:
+                clv_sum += b.clv_cents
+                clv_count += 1
+                if b.clv_direction == 'positive':
+                    clv_positive += 1
+            else:
+                clv_excluded_by_source += 1
     net_pl = winnings - stake
     total = wins + losses + pushes
     # ROI excludes pushes from the denominator since a push is a return-of-stake
@@ -74,9 +108,13 @@ def _group_stats(bets):
         'avg_edge': (float(edge_sum) / edge_count) if edge_count else 0.0,
         # CLV is the professional signal — resolves at game start, not settlement,
         # and beats raw win-rate as an indicator of bet-selection quality.
+        # Primary-source-only per framework §1.2.
         'clv_sample': clv_count,
         'avg_clv': round(clv_sum / clv_count, 4) if clv_count else 0.0,
         'positive_clv_rate': (clv_positive / clv_count * 100.0) if clv_count else 0.0,
+        # Operator-facing transparency — how many bets were dropped from
+        # CLV math because their source isn't trustworthy for CLV signal.
+        'clv_excluded_by_source': clv_excluded_by_source,
     }
 
 

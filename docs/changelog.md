@@ -2,6 +2,103 @@
 
 ---
 
+## 2026-05-16 — Model Clean scope + CLV source filter (Phases A + C of model-quality diagnostic)
+
+**Implements** the §9 authorized prompt from `docs/model_quality_diagnosis_2026_05_16.md` — the smallest evaluation-integrity fix that unblocks model-quality decisions. Zero recommendation behavior changes. Zero threshold tunes. Zero calibration changes. Zero Elo activation. Zero new predictive signals. Pure evaluation-truth and calculation-correctness fix.
+
+### What ships
+
+**Phase A — `SCOPE_MODEL_CLEAN`** in `apps/mockbets/services/moneyline_evaluation.py`. A fifth scope alongside the existing four (`actual` / `recommended` / `manual` / `all`):
+
+- Required criteria (all must hold for a bet to be included):
+  - moneyline (already enforced by the date/type filter),
+  - `is_system_generated=True` OR linked to a `BettingRecommendation` row via the `recommendation` FK,
+  - `recommendation_status` non-empty,
+  - `recommendation_tier` non-empty,
+  - `expected_edge` is not None,
+  - `recommendation_confidence` is not None (the proxy for "model probability present"),
+  - `placed_at >= MODEL_RULES_EFFECTIVE_DATE` (2026-05-06, the calibration second-pass date that established the current MIN_EDGE / MIN_PROBABILITY / blend constants).
+
+- Manual bets are excluded UNLESS explicitly linked to an official recommendation via the `recommendation` FK — covers the case where the user placed manually through the recommended-pick UI.
+
+- Per-bet exclusion classifier `_model_clean_exclusion` returns exactly one reason per excluded bet, in priority order: `manual_bets` → `pre_rules_bets` → `missing_recommendation_status` → `missing_recommendation_tier` → `missing_edge` → `missing_confidence`. Every exclusion lands in exactly one named category — Law 3 alignment contract.
+
+- Default scope unchanged: `actual` for bankroll-performance review. Model Clean is one click away in the dropdown.
+
+**Phase B — Population audit** rendered on the eval page. New "Population Audit" sub-section surfaces when any scope produces exclusions. Lists every category with count + status (included vs excluded), and shows the alignment math (`included + excluded = total placed in window`). Per Law 3, no silent filtering — every excluded bet is visible with its reason.
+
+**Phase C — CLV primary-source filter** in `apps/mockbets/services/recommendation_performance.py::_group_stats`. The framework requires CLV to only count `odds_source='odds_api'` bets — the backtest service already enforced this; the live-bet path did not. The fix:
+
+- Adds `CLV_PRIMARY_SOURCE = 'odds_api'` constant.
+- Inside the CLV aggregation loop, only counts bets where `odds_source == 'odds_api'` for `positive_clv_rate` math.
+- Bets with other sources (ESPN, manual, cached, unknown) are tallied in `clv_excluded_by_source` so the operator sees how many CLV samples were dropped and why.
+- Returns `clv_excluded_by_source` in the stats dict; surfaced in the executive summary and the markdown copy-packet.
+
+This is a **calculation-correctness fix, not a tune.** Any change to CLV+ rate values comes from removing previously-included artifact data, not from changing thresholds.
+
+**Phase D — UI** updates to `templates/mockbets/moneyline_evaluation.html`:
+
+- Scope dropdown gains `Model Clean` option.
+- Scope-summary box renders the scope description (so the operator understands what's included/excluded under each scope).
+- New Population Audit card surfaces when exclusions exist — table of categories with counts, color-coded by inclusion status.
+- CLV display in the executive summary now shows `(primary-source only)` and surfaces `clv_excluded_by_source` when > 0.
+- Note rendered when on `model_clean` scope: "answers 'how did the recommendation engine perform on bets it officially recommended under current rules?' Switch to Actual Bets for bankroll review."
+
+**Phase E — Tests** (`apps/mockbets/tests.py`):
+
+Two new test classes:
+
+- `ModelCleanScopeTests` — 11 tests covering all 10 spec scenarios plus pre-rules exclusion:
+  1. Model Clean includes complete system bets.
+  2. Manual bets excluded.
+  3. Manual bets WITH `recommendation` FK populated are included (links to official recommendation).
+  4. Missing edge excludes.
+  5. Missing confidence (proxy for market probability) excludes.
+  6. Missing recommendation_status excludes.
+  7. Missing recommendation_tier excludes.
+  8. Pre-rules bets (placed before 2026-05-06) excluded with `pre_rules_bets` reason.
+  9. Population audit separates every exclusion reason into its own bucket.
+  10. Actual vs Model Clean differ transparently — both totals match the window; the gap is visible via excluded count.
+  11. Markdown copy-packet includes scope label + exclusion summary.
+  12. Existing Actual Bets behavior unchanged.
+
+- `CLVSourceFilterTests` — 3 tests:
+  1. Only odds_api-source bets contribute to CLV.
+  2. Manual / cached / unknown sources excluded.
+  3. All-primary-source population produces unchanged CLV math (back-compat for the common path).
+
+### Test totals
+
+- 215 mockbets tests (15 new) + 483 across phase-relevant modules. Zero regressions.
+- `python manage.py check` clean.
+- The existing `test_avg_clv_computed_only_from_bets_with_data` fixture updated to set `odds_source='odds_api'` explicitly — semantic-preserving change so the test's intent (CLV math correctness) survives the new filter. No other test fixtures required changes.
+
+### What this commit does NOT do
+
+- ❌ No recommendation behavior changes.
+- ❌ No threshold / gate / calibration constants modified.
+- ❌ No Elo activation; `USE_DYNAMIC_RATINGS` stays `False`.
+- ❌ No new predictive signals.
+- ❌ No emotional response to short-term outcomes.
+
+### Operator next step (Phase C of the diagnostic — operator action)
+
+1. Visit `/mockbets/moneyline-evaluation/?scope=model_clean` on production once Railway redeploys.
+2. Read the corrected numbers — model performance on the clean subset, CLV+ rate over the primary-source-only sample, full population audit visible.
+3. Compare to the 65-bet Actual Bets topline. The discrepancy is now empirical evidence, not impression.
+4. Capture the pre-Elo baseline: `python manage.py capture_health_snapshot --notes "pre-elo baseline"`.
+5. Verify shadow data per `docs/phase_2a_task3_shadow_analysis_2026_05_14.md` §7.
+
+Once the operator returns with the clean-subset numbers + shadow verification, Phase D (Elo activation decision) becomes a single GO/NO-GO commit with the empirical evidence baked in.
+
+### Remaining caveats
+
+- The MockBet model does NOT carry a snapshot of the `BettingRecommendation.market_prob` field at placement time. The "model probability present" criterion in Phase A is satisfied by `recommendation_confidence` being non-None (the model's picked-side probability in percent); `market_prob` is derivable as `confidence − edge`. If a future change introduces a direct `market_prob` field on MockBet, the criterion should be tightened to require it explicitly.
+- The `pre_rules_bets` exclusion uses a hardcoded date (`2026-05-06`). Any future calibration retune that materially changes the gates should move this date forward in the same commit — otherwise Model Clean will continue counting bets placed under the now-stale rules.
+- Source filter on `_group_stats` affects every caller of that function (not just Moneyline Evaluation). The change is intentional — the framework requires the filter everywhere CLV is computed from live bets — but downstream surfaces that display CLV+ rate (system_tuning, command center) will now show the corrected number too. Existing tests that assert specific CLV+ rates in those surfaces would surface a regression here; none did.
+
+---
+
 ## 2026-05-16 — Model Quality Diagnosis & Repair Plan (analysis only)
 
 **Trigger:** Actual-bets evaluation reported 33–31, ROI −5.6%, CLV+ 29.7%, with 46 of 65 bets (71%) in the 8+pp edge bucket. The framework demands diagnosis before tuning; per Laws 3 & 4 this commit is analysis only.

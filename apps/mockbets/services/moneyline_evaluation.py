@@ -53,19 +53,27 @@ from apps.mockbets.services.system_tuning import compute_data_confidence
 # Brother Willies evaluation-truth contract: the analytics layer MUST NOT
 # silently exclude actual placed bets.
 #
-# Four explicit scopes — every caller chooses one. The chosen scope is
+# Five explicit scopes — every caller chooses one. The chosen scope is
 # echoed back on the report so the operator can see exactly what was
 # evaluated.
+#
+# 2026-05-16 added SCOPE_MODEL_CLEAN to enable model-quality evaluation
+# separately from bankroll-performance evaluation. See
+# docs/model_quality_diagnosis_2026_05_16.md §5.
 SCOPE_ACTUAL = 'actual'              # all placed moneyline bets in window
 SCOPE_RECOMMENDED = 'recommended'    # is_system_generated=True only
 SCOPE_MANUAL = 'manual'              # is_system_generated=False only
 SCOPE_ALL = 'all'                    # alias for SCOPE_ACTUAL (kept for clarity)
+SCOPE_MODEL_CLEAN = 'model_clean'    # system + complete snapshot + current rules
 
-VALID_SCOPES = {SCOPE_ACTUAL, SCOPE_RECOMMENDED, SCOPE_MANUAL, SCOPE_ALL}
+VALID_SCOPES = {
+    SCOPE_ACTUAL, SCOPE_RECOMMENDED, SCOPE_MANUAL, SCOPE_ALL, SCOPE_MODEL_CLEAN,
+}
 
 # Default scope — Actual Bets. Users expect evaluation to match the
 # bets they actually placed. Model evaluation (system-generated only)
-# is one explicit click away via SCOPE_RECOMMENDED.
+# is one explicit click away via SCOPE_RECOMMENDED; the cleaner Model
+# Clean scope (for engine-quality evaluation) is also one click away.
 DEFAULT_SCOPE = SCOPE_ACTUAL
 
 SCOPE_LABELS = {
@@ -73,7 +81,43 @@ SCOPE_LABELS = {
     SCOPE_RECOMMENDED: 'Recommended System Bets',
     SCOPE_MANUAL: 'Manual Bets',
     SCOPE_ALL: 'All Bets',
+    SCOPE_MODEL_CLEAN: 'Model Clean',
 }
+
+SCOPE_DESCRIPTIONS = {
+    SCOPE_ACTUAL: (
+        'Every placed moneyline bet in the window — system-generated AND '
+        'manual. Use this for bankroll-performance review.'
+    ),
+    SCOPE_RECOMMENDED: (
+        'Bets marked is_system_generated=True. Coarser than Model Clean — '
+        'may include older bets predating the current decision-layer '
+        'snapshot or current calibration rules.'
+    ),
+    SCOPE_MANUAL: (
+        'Manual placements only. Useful for "did the user pick well '
+        'on their own?" — never appropriate for model-quality judgments.'
+    ),
+    SCOPE_ALL: 'Alias for Actual Bets; provided for clarity.',
+    SCOPE_MODEL_CLEAN: (
+        'Only bets that meet every model-evaluation criterion: '
+        'system-generated (or linked to a real BettingRecommendation), '
+        'complete decision-layer snapshot (recommendation_status, '
+        'tier, edge, and confidence all present), and placed under '
+        'current rules. Use this for engine-quality evaluation.'
+    ),
+}
+
+# The calibration-tightening date that established the current MIN_EDGE,
+# MIN_PROBABILITY_FOR_RECOMMENDED, MARKET_BLEND_WEIGHT, and
+# EXTREME_DISAGREEMENT_GAP. Bets placed before this date were generated
+# under different gates; they appear in `recommended` scope but should
+# NOT contribute to model-quality judgments that assume current rules.
+#
+# If a future calibration retune ships, this date moves with it (the
+# constant is the rules-effective date, not a historical waypoint).
+import datetime as _datetime
+MODEL_RULES_EFFECTIVE_DATE = _datetime.date(2026, 5, 6)
 
 
 def _normalize_scope(scope: Optional[str], include_manual: Optional[bool]) -> str:
@@ -177,6 +221,87 @@ def _filter_by_type_and_date(bets_qs, date_from: date, date_to: date):
     )
 
 
+# ---------------------------------------------------------------------------
+# Scope matching + per-bet exclusion reason classification
+# ---------------------------------------------------------------------------
+#
+# A bet falls into exactly ONE exclusion reason per scope. The priorities
+# are scope-specific and chosen so the highest-information reason wins.
+
+# Exclusion reasons surfaced by the audit. Keys are stable and used by
+# the template; sub-bucket categories under SCOPE_MODEL_CLEAN follow the
+# diagnostic §3.1 audit framework.
+EXCLUSION_MANUAL = 'manual_bets'
+EXCLUSION_SYSTEM = 'system_generated_bets'
+EXCLUSION_PRE_RULES = 'pre_rules_bets'
+EXCLUSION_MISSING_REC_STATUS = 'missing_recommendation_status'
+EXCLUSION_MISSING_REC_TIER = 'missing_recommendation_tier'
+EXCLUSION_MISSING_EDGE = 'missing_edge'
+EXCLUSION_MISSING_CONFIDENCE = 'missing_confidence'
+EXCLUSION_NO_REC_LINK = 'no_recommendation_link'
+
+# Human-readable labels for the audit template.
+EXCLUSION_LABELS = {
+    EXCLUSION_MANUAL: 'Manual bet (not system-generated)',
+    EXCLUSION_SYSTEM: 'System-generated bet (excluded by Manual scope)',
+    EXCLUSION_PRE_RULES: f'Placed before current rules ({MODEL_RULES_EFFECTIVE_DATE.isoformat()})',
+    EXCLUSION_MISSING_REC_STATUS: 'Missing recommendation_status snapshot',
+    EXCLUSION_MISSING_REC_TIER: 'Missing recommendation_tier snapshot',
+    EXCLUSION_MISSING_EDGE: 'Missing expected_edge',
+    EXCLUSION_MISSING_CONFIDENCE: 'Missing recommendation_confidence (no model probability)',
+    EXCLUSION_NO_REC_LINK: 'Manual bet not linked to any recommendation snapshot',
+}
+
+
+def _is_system_or_linked(bet) -> bool:
+    """True if the bet is system-generated OR explicitly linked to a
+    BettingRecommendation row.
+
+    A manual placement that the operator linked to an existing model
+    recommendation is treated as "from the engine's perspective, this
+    is a model bet." This avoids accidentally excluding bets the user
+    placed through the recommended-pick UI path.
+    """
+    is_system = bool(getattr(bet, 'is_system_generated', False))
+    if is_system:
+        return True
+    return getattr(bet, 'recommendation_id', None) is not None
+
+
+def _model_clean_exclusion(bet) -> Optional[str]:
+    """Classify why `bet` fails the Model Clean criteria, or None when it passes.
+
+    Priority order (highest-information first):
+      1. Not system-generated AND no recommendation FK → manual_bets
+      2. Placed before MODEL_RULES_EFFECTIVE_DATE → pre_rules_bets
+      3. Missing recommendation_status (snapshot incomplete) → missing_recommendation_status
+      4. Missing recommendation_tier → missing_recommendation_tier
+      5. Missing expected_edge → missing_edge
+      6. Missing recommendation_confidence → missing_confidence
+      7. Otherwise (qualifies) → None
+    """
+    if not _is_system_or_linked(bet):
+        return EXCLUSION_MANUAL
+
+    placed_date = bet.placed_at.date() if bet.placed_at else None
+    if placed_date is not None and placed_date < MODEL_RULES_EFFECTIVE_DATE:
+        return EXCLUSION_PRE_RULES
+
+    if not (getattr(bet, 'recommendation_status', '') or ''):
+        return EXCLUSION_MISSING_REC_STATUS
+
+    if not (getattr(bet, 'recommendation_tier', '') or ''):
+        return EXCLUSION_MISSING_REC_TIER
+
+    if getattr(bet, 'expected_edge', None) is None:
+        return EXCLUSION_MISSING_EDGE
+
+    if getattr(bet, 'recommendation_confidence', None) is None:
+        return EXCLUSION_MISSING_CONFIDENCE
+
+    return None
+
+
 def _scope_matches(bet, scope: str) -> bool:
     """True iff `bet` falls inside the chosen scope.
 
@@ -190,41 +315,68 @@ def _scope_matches(bet, scope: str) -> bool:
         return is_system
     if scope == SCOPE_MANUAL:
         return not is_system
+    if scope == SCOPE_MODEL_CLEAN:
+        return _model_clean_exclusion(bet) is None
     # Unknown scope (shouldn't reach here after _normalize_scope) —
     # default to inclusive rather than silently dropping.
     return True
 
 
+def _classify_excluded_bet(bet, scope: str) -> Optional[str]:
+    """Return the exclusion-reason key for a bet that was filtered out
+    of `scope`, or None if it wasn't filtered.
+
+    Scope-specific because the exclusion vocabulary differs:
+      - RECOMMENDED excludes manual.
+      - MANUAL excludes system-generated.
+      - MODEL_CLEAN has the full audit vocabulary.
+      - ACTUAL / ALL never exclude (so this never returns non-None for them).
+    """
+    if scope in (SCOPE_ACTUAL, SCOPE_ALL):
+        return None
+    is_system = bool(getattr(bet, 'is_system_generated', False))
+    if scope == SCOPE_RECOMMENDED:
+        return EXCLUSION_MANUAL if not is_system else None
+    if scope == SCOPE_MANUAL:
+        return EXCLUSION_SYSTEM if is_system else None
+    if scope == SCOPE_MODEL_CLEAN:
+        return _model_clean_exclusion(bet)
+    return None
+
+
 def _build_scope_summary(all_in_window, included, scope: str) -> dict:
     """Operator-facing breakdown of what the scope filter did.
 
-    Returns a stable shape with non-zero counts only for the relevant
-    exclusion reasons. The template iterates `exclusion_reasons` for
-    display, so empty reasons should not appear there.
+    Returns a stable shape with per-reason exclusion counts. The
+    template iterates `exclusion_reasons` for display.
+
+    For SCOPE_MODEL_CLEAN, the breakdown is the full §3.1 population
+    audit categorization — operator can see exactly which Phase A
+    bucket each excluded bet landed in.
     """
     total = len(all_in_window)
     included_count = len(included)
     excluded_count = total - included_count
 
-    excluded_bets = [b for b in all_in_window if b not in included]
-    manual_excluded = sum(
-        1 for b in excluded_bets
-        if not bool(getattr(b, 'is_system_generated', False))
-    )
-    system_excluded = sum(
-        1 for b in excluded_bets
-        if bool(getattr(b, 'is_system_generated', False))
-    )
+    # Build per-reason counts using the scope-specific classifier so
+    # every excluded bet lands in exactly one category.
+    included_ids = {id(b) for b in included}
+    excluded_bets = [b for b in all_in_window if id(b) not in included_ids]
 
     reasons = {}
-    if scope == SCOPE_RECOMMENDED and manual_excluded:
-        reasons['manual_bets'] = manual_excluded
-    if scope == SCOPE_MANUAL and system_excluded:
-        reasons['system_generated_bets'] = system_excluded
+    for b in excluded_bets:
+        key = _classify_excluded_bet(b, scope)
+        if key is None:
+            # Defensive: a bet was excluded by _scope_matches but the
+            # classifier can't name a reason. Count as 'other' so the
+            # alignment (included + excluded = total) holds.
+            key = 'other'
+        reasons[key] = reasons.get(key, 0) + 1
 
     return {
         'scope': scope,
         'scope_label': SCOPE_LABELS.get(scope, scope),
+        'scope_description': SCOPE_DESCRIPTIONS.get(scope, ''),
         'total_placed_in_window': total,
         'included': included_count,
         'excluded': excluded_count,
@@ -274,6 +426,11 @@ def _executive_summary(bets, date_from, date_to) -> dict:
         'positive_clv_rate': stats['positive_clv_rate'],
         'avg_clv': stats['avg_clv'],
         'clv_sample': stats['clv_sample'],
+        # 2026-05-16: how many CLV-eligible bets were dropped from CLV
+        # math because their odds_source wasn't 'odds_api'. The framework
+        # requires this filter; surfacing the count is the Law 3
+        # transparency obligation for the CLV calculation specifically.
+        'clv_excluded_by_source': stats.get('clv_excluded_by_source', 0),
         'stale_odds_count': stale_count,
         'data_confidence_level': data_conf['level'],
     }
@@ -649,10 +806,18 @@ def _render_packet(
     lines.append(f'- ROI: {summary["roi"]:.1f}%')
     lines.append(f'- Total staked: ${summary["total_stake"]:.2f}')
     lines.append(f'- Net P/L: ${summary["net_pl"]:.2f}')
-    lines.append(
+    # 2026-05-16: CLV math now enforces odds_source='odds_api' per the
+    # framework. Surface the excluded count so downstream LLM readers
+    # see the full provenance, not just the headline rate.
+    clv_excluded = summary.get("clv_excluded_by_source", 0)
+    clv_line = (
         f'- Positive CLV rate: {summary["positive_clv_rate"]:.1f}% '
-        f'(sample: {summary["clv_sample"]})'
+        f'(sample: {summary["clv_sample"]}'
     )
+    if clv_excluded:
+        clv_line += f', excluded {clv_excluded} non-primary-source'
+    clv_line += ')'
+    lines.append(clv_line)
     lines.append(f'- Avg CLV: {summary["avg_clv"]:.4f}')
     lines.append(f'- Stale odds count: {summary["stale_odds_count"]}')
     lines.append(f'- Data confidence: {summary["data_confidence_level"]}')

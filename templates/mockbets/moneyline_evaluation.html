@@ -46,6 +46,7 @@
                 <label class="text-sm" style="color:var(--accent);display:block;">Scope</label>
                 <select name="scope" class="input-field" style="padding:6px 8px;font-size:0.85rem;">
                     <option value="actual" {% if current_scope == 'actual' %}selected{% endif %}>Actual Bets (default)</option>
+                    <option value="model_clean" {% if current_scope == 'model_clean' %}selected{% endif %}>Model Clean</option>
                     <option value="recommended" {% if current_scope == 'recommended' %}selected{% endif %}>Recommended System Bets</option>
                     <option value="manual" {% if current_scope == 'manual' %}selected{% endif %}>Manual Bets</option>
                     <option value="all" {% if current_scope == 'all' %}selected{% endif %}>All Bets</option>
@@ -77,7 +78,7 @@ their actual betting ledger.
             </div>
         </div>
         {% if report.scope.exclusion_reasons %}
-            <div class="text-sm" style="color:var(--muted);">
+            <div class="text-sm" style="color:var(--muted);text-align:right;">
                 Excluded:
                 {% for reason, count in report.scope.exclusion_reasons.items %}
                     <span style="color:#c83;">{{ count }} {{ reason|cut:"_"|stringformat:"s" }}</span>{% if not forloop.last %} · {% endif %}
@@ -85,14 +86,76 @@ their actual betting ledger.
             </div>
         {% endif %}
     </div>
+    {% if report.scope.scope_description %}
+        <div class="text-sm" style="color:var(--muted);margin-top:6px;font-style:italic;">
+            {{ report.scope.scope_description }}
+        </div>
+    {% endif %}
     {% if report.scope.has_exclusions and report.scope.scope == 'recommended' %}
         <div class="text-sm" style="color:var(--muted);margin-top:8px;">
             <em>Note:</em> {{ report.scope.exclusion_reasons.manual_bets|default:0 }} manual bet{{ report.scope.exclusion_reasons.manual_bets|pluralize }} were placed
             in this window but excluded from model evaluation.
-            Switch to <strong>Actual Bets</strong> scope to see your full ledger.
+            Switch to <strong>Actual Bets</strong> scope to see your full ledger,
+            or <strong>Model Clean</strong> for engine-quality evaluation.
+        </div>
+    {% endif %}
+    {% if report.scope.scope == 'model_clean' %}
+        <div class="text-sm" style="color:var(--muted);margin-top:8px;">
+            <em>Model Clean</em> answers "how did the recommendation engine
+            perform on bets it officially recommended under current rules?"
+            Switch to <strong>Actual Bets</strong> for bankroll review.
         </div>
     {% endif %}
 </div>
+
+{% comment %}
+Population Audit — Law 3 transparency requirement. Per the framework,
+analytics surfaces must visibly disclose the full population breakdown,
+not just the included/excluded headline. This section renders for all
+scopes when exclusions exist; it's the explicit "no silent filtering"
+guarantee.
+{% endcomment %}
+{% if report.scope.has_exclusions %}
+<div class="card mb-1">
+    <p class="section-title" style="margin-bottom:8px;">Population Audit ({{ report.scope.scope_label }})</p>
+    <p class="text-sm" style="color:var(--muted);margin-bottom:10px;">
+        Per <code>docs/architecture_laws.md</code> Law 3, every analytics surface
+        must visibly disclose its scope and exclusions. The table below lists
+        every category of bet found in the window and shows whether it was
+        included or excluded by this scope.
+    </p>
+    <table style="width:100%;font-size:0.88rem;border-collapse:collapse;">
+        <thead>
+            <tr style="color:var(--muted);text-align:left;">
+                <th style="padding:6px 8px;border-bottom:1px solid var(--border);">Category</th>
+                <th style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;">Count</th>
+                <th style="padding:6px 8px;border-bottom:1px solid var(--border);">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px 8px;color:#3ecf8e;">Included in this scope</td>
+                <td style="padding:6px 8px;text-align:right;color:#3ecf8e;font-weight:600;">{{ report.scope.included }}</td>
+                <td style="padding:6px 8px;color:var(--muted);">used by the report below</td>
+            </tr>
+            {% for reason, count in report.scope.exclusion_reasons.items %}
+            <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px 8px;color:#c83;">
+                    {{ reason|cut:"_"|title }}
+                </td>
+                <td style="padding:6px 8px;text-align:right;color:#c83;">{{ count }}</td>
+                <td style="padding:6px 8px;color:var(--muted);">excluded by this scope</td>
+            </tr>
+            {% endfor %}
+            <tr style="background:rgba(255,255,255,0.02);">
+                <td style="padding:6px 8px;font-weight:600;">Total placed in window</td>
+                <td style="padding:6px 8px;text-align:right;font-weight:600;">{{ report.scope.total_placed_in_window }}</td>
+                <td style="padding:6px 8px;color:var(--muted);">all moneyline bets in date range</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endif %}
 
 {% comment %} Section 1 — Executive Summary, big and clear {% endcomment %}
 <div class="card mb-1">
@@ -123,7 +186,15 @@ their actual betting ledger.
         <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
             <div class="text-sm" style="color:var(--muted);">CLV+ Rate</div>
             <div style="font-size:1.5rem;font-weight:700;{% if summary.positive_clv_rate >= 55 %}color:#3ecf8e;{% elif summary.positive_clv_rate < 50 and summary.clv_sample > 0 %}color:#e35d5d;{% endif %}">{{ summary.positive_clv_rate|floatformat:1 }}%</div>
-            <div class="text-sm" style="color:var(--muted);">n={{ summary.clv_sample }}</div>
+            <div class="text-sm" style="color:var(--muted);">
+                n={{ summary.clv_sample }} (primary-source only)
+                {% if summary.clv_excluded_by_source %}
+                    <br>
+                    <span style="color:#c83;">
+                        {{ summary.clv_excluded_by_source }} excluded — non-primary source
+                    </span>
+                {% endif %}
+            </div>
         </div>
         <div style="border:1px solid var(--border);border-radius:6px;padding:10px;">
             <div class="text-sm" style="color:var(--muted);">Stale Odds</div>

@@ -2106,7 +2106,11 @@ class CLVAnalyticsTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user('clv_analytics', password='pw')
 
-    def _bet(self, result, clv=None, direction=None):
+    def _bet(self, result, clv=None, direction=None, odds_source='odds_api'):
+        # 2026-05-16 evaluation-integrity: CLV math now requires
+        # odds_source='odds_api' per framework §1.2. Test fixture
+        # defaults to 'odds_api' so the historic CLV semantics are
+        # preserved for tests that don't care about the source filter.
         return MockBet.objects.create(
             user=self.user, sport='mlb', bet_type='moneyline',
             selection='X', odds_american=+100,
@@ -2118,6 +2122,7 @@ class CLVAnalyticsTests(TestCase):
             recommendation_tier='strong',
             clv_cents=clv,
             clv_direction=direction or '',
+            odds_source=odds_source,
         )
 
     def test_avg_clv_computed_only_from_bets_with_data(self):
@@ -2937,6 +2942,428 @@ class EvaluationScopeIntegrityTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.content.decode('utf-8')
         self.assertIn('Actual Bets', body)
+
+
+class ModelCleanScopeTests(TestCase):
+    """Phase 2026-05-16 evaluation-integrity repair — Model Clean scope.
+
+    Locks the contract that Model Clean includes ONLY bets meeting every
+    model-evaluation criterion: system-generated (or linked to
+    BettingRecommendation), complete decision-layer snapshot, placed
+    under current rules. Per the diagnostic doc §5, this is the
+    population that should drive model-quality judgments.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('model_clean_user', password='x')
+
+    def _bet(
+        self, *,
+        is_system_generated=True,
+        recommendation_status='recommended',
+        recommendation_tier='strong',
+        expected_edge=Decimal('6.5'),
+        recommendation_confidence=Decimal('62.0'),
+        placed_days_ago=1,
+        bet_type='moneyline',
+        recommendation_fk=None,
+    ):
+        bet = MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type=bet_type,
+            selection='X', odds_american=-130,
+            implied_probability=Decimal('0.5652'),
+            stake_amount=Decimal('100'),
+            result='pending',
+            is_system_generated=is_system_generated,
+            expected_edge=expected_edge,
+            recommendation_status=recommendation_status,
+            recommendation_tier=recommendation_tier,
+            recommendation_confidence=recommendation_confidence,
+            recommendation=recommendation_fk,
+            odds_source='odds_api',
+        )
+        # Override placed_at so date-range filtering can be exercised.
+        bet.placed_at = timezone.now() - timedelta(days=placed_days_ago)
+        bet.save(update_fields=['placed_at'])
+        return bet
+
+    # --- (1) Model Clean includes only complete official recommendations ---
+
+    def test_model_clean_includes_complete_system_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        # 4 complete system bets in window — all should qualify.
+        for _ in range(4):
+            self._bet()
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['scope'], SCOPE_MODEL_CLEAN)
+        self.assertEqual(report['scope']['included'], 4)
+        self.assertEqual(report['scope']['excluded'], 0)
+
+    # --- (2) Manual bets excluded unless linked to a recommendation ---
+
+    def test_model_clean_excludes_manual_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MANUAL, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet()  # system
+        self._bet(is_system_generated=False)  # manual; no rec FK
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['included'], 1)
+        self.assertEqual(report['scope']['exclusion_reasons'].get(EXCLUSION_MANUAL), 1)
+
+    def test_model_clean_includes_manual_bets_linked_to_recommendation(self):
+        """Manual bet with `recommendation` FK populated counts as model bet."""
+        from apps.core.models import BettingRecommendation
+        from apps.mockbets.services.moneyline_evaluation import (
+            SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        # Build a real BettingRecommendation row via a CFB game so we
+        # don't need to fixture an MLB game (MLB FK requires the full
+        # MLB game tree which is heavier than needed for this test).
+        from apps.cfb.models import Conference, Game, Team
+        conf = Conference.objects.create(name='Z', slug=f'z-{timezone.now().timestamp()}')
+        h = Team.objects.create(name='H', slug=f'h-{timezone.now().timestamp()}', conference=conf, rating=50.0)
+        a = Team.objects.create(name='A', slug=f'a-{timezone.now().timestamp()}', conference=conf, rating=50.0)
+        cfb_game = Game.objects.create(
+            home_team=h, away_team=a,
+            kickoff=timezone.now() + timedelta(hours=2),
+        )
+        rec = BettingRecommendation.objects.create(
+            sport='cfb', bet_type='moneyline', pick='H', line='-130',
+            odds_american=-130,
+            confidence_score=Decimal('62.0'),
+            model_edge=Decimal('6.5'),
+            model_source='house',
+            status='recommended',
+            cfb_game=cfb_game,
+        )
+        # Manual MLB bet but explicitly linked to a recommendation row.
+        self._bet(is_system_generated=False, recommendation_fk=rec)
+
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        # The linked manual bet IS in model_clean — recommendation FK
+        # overrides the is_system_generated=False default.
+        self.assertEqual(report['scope']['included'], 1)
+
+    # --- (3) Missing edge excludes ---
+
+    def test_model_clean_excludes_missing_edge(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MISSING_EDGE, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet(expected_edge=None)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['included'], 0)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get(EXCLUSION_MISSING_EDGE), 1,
+        )
+
+    # --- (4) Missing confidence (proxy for market_prob) excludes ---
+
+    def test_model_clean_excludes_missing_confidence(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MISSING_CONFIDENCE, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet(recommendation_confidence=None)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['included'], 0)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get(EXCLUSION_MISSING_CONFIDENCE),
+            1,
+        )
+
+    # --- (5) Missing recommendation snapshot (status) excludes ---
+
+    def test_model_clean_excludes_missing_recommendation_status(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MISSING_REC_STATUS, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet(recommendation_status='')  # blank → incomplete
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['included'], 0)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get(EXCLUSION_MISSING_REC_STATUS),
+            1,
+        )
+
+    def test_model_clean_excludes_missing_recommendation_tier(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MISSING_REC_TIER, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet(recommendation_tier='')
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        self.assertEqual(report['scope']['included'], 0)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get(EXCLUSION_MISSING_REC_TIER),
+            1,
+        )
+
+    # --- Pre-rules bets excluded ---
+
+    def test_model_clean_excludes_pre_rules_bets(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_PRE_RULES, MODEL_RULES_EFFECTIVE_DATE,
+            SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        # Place a bet before the rules-effective date.
+        bet = self._bet()
+        # Push the placed_at to BEFORE MODEL_RULES_EFFECTIVE_DATE.
+        bet.placed_at = timezone.now().replace(
+            year=2026, month=5, day=1, hour=12,
+        )
+        bet.save(update_fields=['placed_at'])
+
+        # Use a wide enough date range to catch the pre-rules bet.
+        date_from = MODEL_RULES_EFFECTIVE_DATE - timedelta(days=10)
+        date_to = MODEL_RULES_EFFECTIVE_DATE - timedelta(days=1)
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=date_from,
+            date_to=date_to,
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        # Bet is system-generated AND complete BUT before rules date.
+        self.assertEqual(report['scope']['included'], 0)
+        self.assertEqual(
+            report['scope']['exclusion_reasons'].get(EXCLUSION_PRE_RULES), 1,
+        )
+
+    # --- (7) Population audit reports exclusion reasons correctly ---
+
+    def test_population_audit_separates_each_exclusion_reason(self):
+        """Mix of failure modes: each lands in its own audit bucket."""
+        from apps.mockbets.services.moneyline_evaluation import (
+            EXCLUSION_MANUAL, EXCLUSION_MISSING_CONFIDENCE,
+            EXCLUSION_MISSING_EDGE, EXCLUSION_MISSING_REC_STATUS,
+            SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet()  # complete; included
+        self._bet(is_system_generated=False)  # manual
+        self._bet(expected_edge=None)  # missing edge
+        self._bet(recommendation_confidence=None)  # missing confidence
+        self._bet(recommendation_status='')  # missing rec status
+
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        reasons = report['scope']['exclusion_reasons']
+        self.assertEqual(report['scope']['total_placed_in_window'], 5)
+        self.assertEqual(report['scope']['included'], 1)
+        self.assertEqual(report['scope']['excluded'], 4)
+        # Each exclusion in its own bucket — no silent grouping.
+        self.assertEqual(reasons.get(EXCLUSION_MANUAL), 1)
+        self.assertEqual(reasons.get(EXCLUSION_MISSING_EDGE), 1)
+        self.assertEqual(reasons.get(EXCLUSION_MISSING_CONFIDENCE), 1)
+        self.assertEqual(reasons.get(EXCLUSION_MISSING_REC_STATUS), 1)
+
+    # --- (8) Actual Bets and Model Clean differ without hiding it ---
+
+    def test_actual_vs_model_clean_show_different_counts_transparently(self):
+        """The two scopes can disagree — and the disagreement must be
+        visible via the excluded count + exclusion_reasons, never silent.
+        """
+        from apps.mockbets.services.moneyline_evaluation import (
+            SCOPE_ACTUAL, SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        # 3 clean system bets + 3 manual bets = 6 placed.
+        for _ in range(3):
+            self._bet()
+        for _ in range(3):
+            self._bet(is_system_generated=False)
+
+        today = timezone.localdate()
+        actual = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ACTUAL,
+        )
+        model_clean = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        # Actual scope includes everything.
+        self.assertEqual(actual['scope']['included'], 6)
+        self.assertEqual(actual['scope']['excluded'], 0)
+        # Model Clean drops manual; surfaces the count explicitly.
+        self.assertEqual(model_clean['scope']['included'], 3)
+        self.assertEqual(model_clean['scope']['excluded'], 3)
+        # And the disagreement is visible — both totals match the window.
+        self.assertEqual(
+            actual['scope']['total_placed_in_window'],
+            model_clean['scope']['total_placed_in_window'],
+        )
+
+    # --- (9) Markdown packet includes scope and exclusion summary ---
+
+    def test_markdown_packet_includes_scope_label_and_exclusions(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            SCOPE_MODEL_CLEAN, build_evaluation_report,
+        )
+        self._bet()  # clean
+        self._bet(is_system_generated=False)  # manual → excluded
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_MODEL_CLEAN,
+        )
+        packet = report['packet_markdown']
+        # Scope label + counts must appear.
+        self.assertIn('Model Clean', packet)
+        self.assertIn('1 of 2 placed in window', packet)
+        # Exclusion reasons surfaced.
+        self.assertIn('Excluded by scope:', packet)
+        self.assertIn('manual bets', packet)
+
+    # --- (10) Existing Actual Bets behavior is intact ---
+
+    def test_actual_scope_unchanged_by_model_clean_addition(self):
+        from apps.mockbets.services.moneyline_evaluation import (
+            SCOPE_ACTUAL, build_evaluation_report,
+        )
+        self._bet()
+        self._bet(is_system_generated=False)
+        today = timezone.localdate()
+        report = build_evaluation_report(
+            MockBet.objects.all(),
+            date_from=today - timedelta(days=1),
+            date_to=today - timedelta(days=1),
+            scope=SCOPE_ACTUAL,
+        )
+        # Actual scope unchanged: includes both bets, no exclusions.
+        self.assertEqual(report['scope']['included'], 2)
+        self.assertEqual(report['scope']['excluded'], 0)
+        self.assertEqual(report['scope']['scope'], SCOPE_ACTUAL)
+
+
+class CLVSourceFilterTests(TestCase):
+    """Phase 2026-05-16 evaluation-integrity repair — CLV primary-source filter.
+
+    Per docs/recommendation_quality_framework.md §1.2, CLV is only
+    meaningful when sourced from the primary odds feed (odds_api).
+    The backtest service has always enforced this; the live-bet
+    evaluation path now matches it.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('clv_source_user', password='x')
+
+    def _bet(self, *, odds_source='odds_api', clv=0.05, direction='positive'):
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='X', odds_american=-110,
+            implied_probability=Decimal('0.5238'),
+            stake_amount=Decimal('100'),
+            simulated_payout=Decimal('91'),
+            result='win',
+            is_system_generated=True,
+            recommendation_status='recommended',
+            recommendation_tier='strong',
+            recommendation_confidence=Decimal('60.0'),
+            expected_edge=Decimal('6.0'),
+            clv_cents=clv,
+            clv_direction=direction,
+            closing_odds_american=-120,
+            odds_source=odds_source,
+        )
+
+    def test_clv_only_counts_primary_source(self):
+        """Only odds_api-source bets contribute to CLV math."""
+        from apps.mockbets.services.recommendation_performance import (
+            _group_stats,
+        )
+        # 2 primary + 2 ESPN, all winners with +CLV.
+        for _ in range(2):
+            self._bet(odds_source='odds_api')
+        for _ in range(2):
+            self._bet(odds_source='espn')
+
+        stats = _group_stats(list(MockBet.objects.all()))
+        # Only the 2 odds_api bets count for CLV.
+        self.assertEqual(stats['clv_sample'], 2)
+        # All 4 are positive CLV but only 2 made it through the filter.
+        self.assertEqual(stats['positive_clv_rate'], 100.0)
+        # And the operator can see how many were dropped.
+        self.assertEqual(stats['clv_excluded_by_source'], 2)
+
+    def test_clv_excludes_manual_and_cached_sources(self):
+        from apps.mockbets.services.recommendation_performance import (
+            _group_stats,
+        )
+        self._bet(odds_source='odds_api')
+        self._bet(odds_source='manual')
+        self._bet(odds_source='cached')
+        self._bet(odds_source='unknown')
+
+        stats = _group_stats(list(MockBet.objects.all()))
+        self.assertEqual(stats['clv_sample'], 1)
+        self.assertEqual(stats['clv_excluded_by_source'], 3)
+
+    def test_clv_math_unchanged_for_all_primary_population(self):
+        """When every bet is odds_api, the new filter is invisible —
+        backward compatibility for the common path."""
+        from apps.mockbets.services.recommendation_performance import (
+            _group_stats,
+        )
+        self._bet(odds_source='odds_api', clv=0.05, direction='positive')
+        self._bet(odds_source='odds_api', clv=-0.03, direction='negative')
+
+        stats = _group_stats(list(MockBet.objects.all()))
+        self.assertEqual(stats['clv_sample'], 2)
+        self.assertEqual(stats['clv_excluded_by_source'], 0)
+        self.assertAlmostEqual(stats['positive_clv_rate'], 50.0)
 
 
 class MoneylineEvaluationSummaryMathTests(TestCase):
