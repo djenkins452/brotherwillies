@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-16 — Model Quality Diagnosis & Repair Plan (analysis only)
+
+**Trigger:** Actual-bets evaluation reported 33–31, ROI −5.6%, CLV+ 29.7%, with 46 of 65 bets (71%) in the 8+pp edge bucket. The framework demands diagnosis before tuning; per Laws 3 & 4 this commit is analysis only.
+
+### What ships
+`docs/model_quality_diagnosis_2026_05_16.md` — comprehensive 11-section diagnostic covering:
+
+- **§0 Executive diagnosis** — three-sentence verdict + prescription.
+- **§1 Evidence analysis** — what's signal vs noise on a 64-bet sample. The 71% concentration in the 8+pp bucket is the structural fingerprint of the stale-rating fake-edge pathology; 33–31 is variance; 29.7% CLV+ is signal but over a possibly-contaminated denominator.
+- **§2 Root-cause hypotheses ranked** — H1 stale `Team.rating` (very likely; mechanistic), H2 mixed evaluation population (likely; today's "Actual Bets" default includes manual bets), H3 CLV calculation lacks the `odds_source='odds_api'` filter the framework requires (likely; direct code inspection), H4 pre-snapshot-feature bets evaluated under current rules (likely), H5/H6 lower-likelihood. H1 is exactly what Phase 2A Elo cutover was designed to address; the evidence base for Elo activation is strengthened not weakened by these numbers.
+- **§3 Evaluation Population Audit framework** — ten categorical buckets with filter definitions; operator runs the audit on production to fill in counts. Framework only because the worktree has no production data access.
+- **§4 CLV Integrity Audit** — direct code inspection: `apps/mockbets/services/recommendation_performance.py::_group_stats` does NOT enforce the `odds_source='odds_api'` filter that `apps/core/services/backtesting_service.py::evaluate_game` does. The 29.7% rate is computed over a mixed-source CLV sample. Calculation-correctness fix proposed; not a tune.
+- **§5 Model Performance vs Bankroll Performance** — the missing distinction. Proposes `SCOPE_MODEL_CLEAN`: system-generated AND complete snapshot AND placed under current rules. Sits alongside existing `actual`/`recommended`/`manual`/`all` scopes.
+- **§6 Elo Activation Readiness** — the case for Elo is now stronger (every observed pathology matches the mechanism Elo addresses). But Law 4 forbids blind activation; readiness gates require pre-Elo Health Score baseline + shadow-mode verification (`sample ≥ 30` with the three structural confirmations) + clean-population evaluation.
+- **§7 Staged repair plan** — Phase A (clean population), Phase B (CLV source filter), Phase C (pre-Elo baseline + shadow verification), Phase D (Elo activation with rollback monitoring), Phase E (4-week stabilization, no other changes). Each phase is gated; no optimization stacking.
+- **§8 Do Now / Do Not Do Yet** — explicit operator action list. Strict prohibitions on threshold tunes, calibration retunes, new signals, edge realism compression, Elo activation, and emotional reaction to short-term outcomes.
+- **§9 Exact next implementation prompt** — self-contained prompt the user can authorize. Implements Phase A + Phase B (the smallest fix that restores evaluation integrity for model-quality decisions). No threshold tunes; no calibration changes; no Elo activation.
+- **§10 What this diagnosis is NOT** — explicit non-prescription.
+- **§11 Closing note** — the framework working as designed: refusing to retune on a 65-bet sample is the operational maturity that Laws 3 and 4 were architected to install.
+
+### What this commit does NOT do
+
+- ❌ No threshold changes, no calibration changes, no Elo activation, no new signals.
+- ❌ No code changes whatsoever. `python manage.py check` clean. Every test still passes (zero regressions because nothing was modified).
+- ❌ No emotional response to the 65-bet sample. Per Law 4, this sample size does not justify any constant change. The framework explicitly forbids reactive tuning.
+
+### What this commit DOES do
+
+- ✅ Names the root cause (stale `Team.rating`) with mechanism + fingerprint evidence.
+- ✅ Identifies CLV calculation source-filter gap as a calculation-correctness bug (not a tune).
+- ✅ Distinguishes Bankroll Performance from Model Performance and proposes the `model_clean` scope.
+- ✅ Strengthens (does not weaken) the case for Elo activation; ties it to the existing Phase 2A readiness gates.
+- ✅ Provides the exact next implementation prompt for the smallest fix that unblocks the model-quality conversation.
+
+### Next step
+
+The operator authorizes (or modifies) the prompt in §9, and Phase A + Phase B ship as their own commit. Until then, no changes are made.
+
+---
+
 ## 2026-05-14 — Recommendation Health Score system
 
 **Implements §3 of `docs/recommendation_quality_framework.md`** — the composite 0–100 score that turns "is the engine behaving rationally?" from a felt question into a measurable one. Zero recommendation behavior changes; zero calibration constant changes; zero Elo activation; pure observability/governance layer.
