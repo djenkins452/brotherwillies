@@ -2,6 +2,87 @@
 
 ---
 
+## 2026-05-16 — Phase 2A Task 4: Elo activation (GO)
+
+**The cutover lands.** Single variable change: `USE_DYNAMIC_RATINGS` default flips from `'false'` to `'true'` in `brotherwillies/settings.py`. The next Railway deploy activates Elo automatically. Rollback is one env var (`USE_DYNAMIC_RATINGS=false` on Railway) — no code revert needed.
+
+### The evidence base
+
+`docs/phase_2a_task4_elo_activation_2026_05_16.md` documents the GO recommendation with the empirical evidence from Model Clean (Phase A) + CLV source-filter (Phase C) outputs:
+
+- 44 clean system bets, ROI −12.8%, CLV+ 25%, 8+pp bucket losing money.
+- Underdog ROI −47.8% (3–10); large +100 to +190 underdogs labeled "elite."
+- 65–70% confidence bucket actually winning 47% — 18pp overconfidence.
+- Market disagreement on 75% of picks.
+- All four pathologies match the stale-rating fake-edge mechanism that Elo addresses by construction.
+
+The 44-bet sample is below the framework's 100-bet threshold for **threshold tunes**, but it is sufficient to confirm a **structural** failure with an independent mechanistic fix. Law 4 forbids reactive constant changes from small samples; it does not forbid structural fixes that have independent justification.
+
+### What this commit changes
+
+| File | Change |
+|---|---|
+| `brotherwillies/settings.py` | `USE_DYNAMIC_RATINGS` default `'false'` → `'true'`. Inline comment documents activation date + rollback path. |
+| `apps/analytics/services/elo_monitor.py` | New service: `build_monitor()` composes activation state + baseline + current + the four documented rollback triggers. Pure read-only. |
+| `apps/analytics/views.py` | New view `elo_monitor` (staff-only). |
+| `apps/analytics/urls.py` | New route `/analytics/elo-monitor/`. |
+| `templates/analytics/elo_monitor.html` | New diagnostic template: activation state, pre-vs-current side by side, trigger cards, rollback procedure. |
+| `apps/analytics/test_elo_monitor.py` | 20 tests: default-True activation, env-var rollback verification, per-trigger evaluation, view access control, isolation. |
+| `docs/phase_2a_task4_elo_activation_2026_05_16.md` | GO recommendation + rollback runbook + observation protocol. |
+
+### What this commit does NOT change
+
+- ❌ No threshold tunes (`MIN_EDGE`, `MIN_PROBABILITY_FOR_RECOMMENDED`, `MAX_ABS_ODDS_FOR_RECOMMENDED`, `HEAVY_FAVORITE_ODDS`, `EXTREME_DISAGREEMENT_GAP` all unchanged).
+- ❌ No calibration retunes (`MARKET_BLEND_WEIGHT`, sigmoid divisor, clamp bounds all unchanged).
+- ❌ No new predictive signals (pitcher form, team form, bullpen — Phase 2B, deferred per the framework's "no optimization stacking" rule).
+- ❌ No edge realism compression (Phase 2C, deferred).
+- ❌ No lane / risk-flag rule changes.
+
+The single variable that moves: rating mode. Everything else holds still — variable isolation is the entire point.
+
+### The four rollback triggers
+
+The Elo Activation Monitor evaluates each on every snapshot capture. Triggers are decision aids, not actions — per Law 4, auto-rollback is forbidden; the operator inspects and decides.
+
+1. **CLV deterioration** — CLV+ rate drops ≥ 5pp from baseline.
+2. **Health Score collapse** — Composite score drops ≥ 10 points from baseline.
+3. **Composite in INTERVENE band** — Composite < 25.
+4. **Edge realism inversion (fake-edge persists)** — 8+ bucket ROI ≥ 5pp BELOW 4-6 bucket with samples ≥ 20 each. *If this fires post-Elo, the cutover failed to address the mechanism.*
+
+Rollback procedure: Railway dashboard → set `USE_DYNAMIC_RATINGS=false`. Effective immediately on next request. No code revert needed.
+
+### Observation protocol (Phase E, 2-3 weeks)
+
+- Day 1 / Day 3 / Week 1 / Week 2 / Week 4 — tagged Health Score snapshots.
+- Weekly review of `/analytics/elo-monitor/`.
+- No other changes ship during the window.
+- Phase 2B / 2C / 1D candidates remain deferred until ≥ 4 weeks of post-cutover data.
+
+### Test totals
+
+- 756 tests passing across phase-relevant modules. Zero regressions.
+- `python manage.py check` clean.
+- The activation is structurally safe: tests that don't override `USE_DYNAMIC_RATINGS` behave identically because `team_rating_for_model` falls back to `team.rating` when `team.elo_rating is None` (default for fresh test fixtures).
+
+### Architecture law compliance
+
+- **Law 1** N/A — Elo is the rating, not a bounded signal.
+- **Law 2** Satisfied — every existing evaluation slice (`by_edge_bucket`, `by_fav_size`, `by_pitcher_completeness`, shadow review dimensions) works under both rating modes.
+- **Law 3** Satisfied — Elo Monitor surfaces rating mode prominently; every snapshot row records `rating_mode_active` for historical filtering.
+- **Law 4** Satisfied — single-variable change with documented mechanism, explicit rollback triggers, no co-changes, evidence-based decision.
+
+### Operator next steps (24 hours)
+
+1. Confirm Railway deploy completes; watch for `ensure_elo_backfilled` output in deploy log.
+2. Capture pre-Elo baseline (if not already): `python manage.py capture_health_snapshot --notes "pre-elo baseline"`.
+3. Visit `/analytics/elo-monitor/` and confirm activation status shows `USE_DYNAMIC_RATINGS: True`, rating mode `elo`.
+4. After first MLB slate post-activation: `python manage.py capture_health_snapshot --notes "post-elo day 1"`.
+5. Visit `/analytics/shadow-review/?days=2` and confirm `active_mode = elo`.
+
+The framework's pre-designed structural fix is now in production. Variable isolation. Evidence-based decision. Documented rollback. Observation only from here.
+
+---
+
 ## 2026-05-16 — Model Clean scope + CLV source filter (Phases A + C of model-quality diagnostic)
 
 **Implements** the §9 authorized prompt from `docs/model_quality_diagnosis_2026_05_16.md` — the smallest evaluation-integrity fix that unblocks model-quality decisions. Zero recommendation behavior changes. Zero threshold tunes. Zero calibration changes. Zero Elo activation. Zero new predictive signals. Pure evaluation-truth and calculation-correctness fix.

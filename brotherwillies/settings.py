@@ -239,11 +239,21 @@ SPREAD_TOTAL_BULK_COOLDOWN_SECONDS = int(
 # --- Dynamic Elo ratings ---
 # When True, the four sport model_services read each team's `elo_rating`
 # (projected onto the legacy 50-scale) instead of the static `team.rating`
-# field. Defaults to False so production behavior doesn't change until the
-# operator validates the dynamic ratings via the backtest harness.
-# When True but a team has no `elo_rating` set, model_service falls back
-# to the static rating — never produces a hybrid.
-USE_DYNAMIC_RATINGS = os.environ.get('USE_DYNAMIC_RATINGS', 'false').lower() in (
+# field. Activated 2026-05-16 (Phase 2A Task 4) — see
+# docs/phase_2a_task4_elo_activation_2026_05_16.md for the GO decision
+# and evidence base. The repo default is now `'true'`; production picks
+# up Elo automatically on the next Railway deploy. Operators can roll
+# back in one step by setting `USE_DYNAMIC_RATINGS=false` in Railway
+# env vars — no code change required.
+#
+# Safety property: when True but a team has no `elo_rating` set,
+# `team_rating_for_model` falls back to the static rating — never
+# produces a hybrid. The `ensure_elo_backfilled` deploy hook
+# (apps/datahub/management/commands/ensure_elo_backfilled.py)
+# guarantees the backfill runs on the same deploy that activates the
+# flag, so there is no time window where the model reads only-default
+# Elo values.
+USE_DYNAMIC_RATINGS = os.environ.get('USE_DYNAMIC_RATINGS', 'true').lower() in (
     'true', '1', 'yes',
 )
 

@@ -332,3 +332,26 @@ def health_score(request):
         'days': days,
         'nav_active': '',
     })
+
+
+# ---------------------------------------------------------------------------
+# Elo Activation Monitor (Phase 2A Task 4 — 2026-05-16)
+#
+# Focused observation surface for the 2-3 week post-activation window.
+# Reads the latest Health Score snapshot, compares to the pre-Elo
+# baseline, and evaluates rollback triggers. Cannot influence
+# recommendation behavior; never writes anything.
+
+def elo_monitor(request):
+    """Pre/post Elo cutover monitor + rollback-trigger status."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from apps.analytics.services.elo_monitor import build_monitor
+
+    monitor = build_monitor()
+    return render(request, 'analytics/elo_monitor.html', {
+        'monitor': monitor,
+        'nav_active': '',
+    })

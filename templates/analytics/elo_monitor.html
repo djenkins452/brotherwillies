@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Elo Activation Monitor | Brother Willies{% endblock %}
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <a href="{% url 'analytics:health_score' %}" style="color: #6cb;">← Health Score</a>
+        ·
+        <a href="{% url 'analytics:shadow_review' %}" style="color: #6cb;">Shadow Review</a>
+        ·
+        <a href="{% url 'analytics:backtest' %}" style="color: #6cb;">Backtest</a>
+    </p>
+
+    <h1 style="margin-bottom: 0.4rem;">Elo Activation Monitor</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Focused observation surface for the post-Elo-activation window
+        (Phase 2A Task 4, 2026-05-16). Compares the current Health Score
+        against the pre-Elo baseline snapshot and evaluates the four
+        documented rollback triggers. <strong>Read-only.</strong> Cannot
+        influence recommendation behavior. See
+        <code>docs/phase_2a_task4_elo_activation_2026_05_16.md</code>.
+    </p>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# Activation Status                                                    #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Activation Status</h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.88rem;">
+        <table style="width: 100%;">
+            <tr>
+                <td style="color: #888; padding: 0.25rem 0;">USE_DYNAMIC_RATINGS</td>
+                <td style="text-align: right; color: {% if monitor.activation_status.active %}#22c55e{% else %}#c83{% endif %}; font-weight: 600;">
+                    {{ monitor.activation_status.active|yesno:"True (Elo active),False (static ratings)" }}
+                </td>
+            </tr>
+            <tr>
+                <td style="color: #888; padding: 0.25rem 0;">Live rating mode</td>
+                <td style="text-align: right; color: #aaa;">{{ monitor.activation_status.rating_mode }}</td>
+            </tr>
+            <tr>
+                <td style="color: #888; padding: 0.25rem 0;">Env var present</td>
+                <td style="text-align: right; color: #aaa;">
+                    {% if monitor.activation_status.env_var_set %}
+                        yes ({{ monitor.activation_status.env_var_value }})
+                    {% else %}
+                        no — using repo default
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td style="color: #888; padding: 0.25rem 0;">Observation window (days since baseline)</td>
+                <td style="text-align: right; color: #aaa;">{{ monitor.observation_window_days }}</td>
+            </tr>
+        </table>
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# Pre / Current Health Score side by side                              #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Pre-Elo Baseline vs Current</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1rem;">
+            <div style="color: #888; font-size: 0.8rem; text-transform: uppercase;">Pre-Elo Baseline</div>
+            {% if monitor.pre_elo_baseline %}
+                <div style="font-size: 2.4rem; font-weight: bold; margin-top: 0.3rem; color:
+                    {% if monitor.pre_elo_baseline.band == 'strong' %}#22c55e
+                    {% elif monitor.pre_elo_baseline.band == 'healthy' %}#6cb
+                    {% elif monitor.pre_elo_baseline.band == 'watch' %}#c83
+                    {% else %}#c33{% endif %};">
+                    {{ monitor.pre_elo_baseline.overall_score|floatformat:1 }}
+                </div>
+                <div style="color: #aaa; font-size: 0.85rem; text-transform: uppercase;">{{ monitor.pre_elo_baseline.band|default:"—" }}</div>
+                <div style="color: #666; font-size: 0.78rem; margin-top: 0.3rem;">{{ monitor.pre_elo_baseline.captured_at }}</div>
+                <div style="color: #888; font-size: 0.8rem; margin-top: 0.3rem;">Mode: {{ monitor.pre_elo_baseline.rating_mode_active }}</div>
+                {% if monitor.pre_elo_baseline.notes %}
+                    <div style="color: #aaa; font-size: 0.8rem; margin-top: 0.4rem; font-style: italic;">"{{ monitor.pre_elo_baseline.notes }}"</div>
+                {% endif %}
+            {% else %}
+                <div style="color: #888; margin-top: 0.5rem;">
+                    No pre-Elo baseline captured yet. Run:
+                    <code>python manage.py capture_health_snapshot --notes "pre-elo baseline"</code>
+                </div>
+            {% endif %}
+        </div>
+        <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1rem;">
+            <div style="color: #888; font-size: 0.8rem; text-transform: uppercase;">Current Health Score</div>
+            {% if monitor.current_health %}
+                <div style="font-size: 2.4rem; font-weight: bold; margin-top: 0.3rem; color:
+                    {% if monitor.current_health.band == 'strong' %}#22c55e
+                    {% elif monitor.current_health.band == 'healthy' %}#6cb
+                    {% elif monitor.current_health.band == 'watch' %}#c83
+                    {% else %}#c33{% endif %};">
+                    {{ monitor.current_health.overall_score|floatformat:1 }}
+                </div>
+                <div style="color: #aaa; font-size: 0.85rem; text-transform: uppercase;">{{ monitor.current_health.band|default:"—" }}</div>
+                <div style="color: #666; font-size: 0.78rem; margin-top: 0.3rem;">{{ monitor.current_health.captured_at }}</div>
+                <div style="color: #888; font-size: 0.8rem; margin-top: 0.3rem;">Mode: {{ monitor.current_health.rating_mode_active }}</div>
+                {% if monitor.score_delta is not None %}
+                    <div style="color:
+                        {% if monitor.score_delta > 0 %}#22c55e{% elif monitor.score_delta < -5 %}#c33{% else %}#aaa{% endif %};
+                        font-size: 0.95rem; margin-top: 0.4rem; font-weight: 600;">
+                        Δ {{ monitor.score_delta|floatformat:1 }} vs baseline
+                    </div>
+                {% endif %}
+            {% else %}
+                <div style="color: #888; margin-top: 0.5rem;">
+                    No post-Elo snapshot yet. Run:
+                    <code>python manage.py capture_health_snapshot --notes "post-elo day 1"</code>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# Rollback Triggers                                                    #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Rollback Triggers</h2>
+    <p style="color: #888; font-size: 0.82rem; margin-bottom: 0.75rem;">
+        A trigger that fires does <strong>NOT</strong> auto-rollback. Per
+        Law 4, the operator inspects, investigates, and decides. Auto-
+        rollback would be self-modifying behavior, forbidden by the
+        architecture.
+    </p>
+    <div style="margin-bottom: 1.5rem;">
+        {% for t in monitor.rollback_triggers %}
+            <div style="background: #1a1a1a; border-left: 3px solid
+                {% if t.fired %}#c33{% else %}#22c55e{% endif %};
+                border-radius: 4px; padding: 0.7rem 0.9rem; margin-bottom: 0.4rem;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
+                    <div>
+                        <strong style="color: {% if t.fired %}#c33{% else %}#22c55e{% endif %};">
+                            {% if t.fired %}FIRED{% else %}OK{% endif %}
+                        </strong>
+                        <span style="color: #ccc; margin-left: 0.4rem;">{{ t.name }}</span>
+                    </div>
+                    <div style="color: #aaa; font-size: 0.85rem; font-family: monospace;">{{ t.current_value }}</div>
+                </div>
+                <div style="color: #666; font-size: 0.78rem; margin-top: 0.2rem;">{{ t.threshold_label }}</div>
+                {% if t.detail %}
+                    <div style="color: #aaa; font-size: 0.85rem; margin-top: 0.4rem;">{{ t.detail }}</div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    </div>
+
+    {# ────────────────────────────────────────────────────────────────── #}
+    {# Rollback Procedure                                                   #}
+    {# ────────────────────────────────────────────────────────────────── #}
+    <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Rollback Procedure</h2>
+    <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.9rem; margin-bottom: 1.5rem; font-size: 0.9rem;">
+        <div style="margin-bottom: 0.5rem; color: #ccc;">
+            One-step rollback: set <code style="color: #c83;">USE_DYNAMIC_RATINGS=false</code>
+            in Railway env vars. Effective immediately on next request — no code change, no DB migration.
+        </div>
+        <div style="color: #888; margin-top: 0.5rem;">
+            For a permanent rollback (re-default the repo): revert the
+            commit that flipped the default in <code>brotherwillies/settings.py</code>
+            and push.
+        </div>
+        <div style="color: #888; margin-top: 0.5rem;">
+            After rollback, capture a snapshot with notes "post-rollback"
+            so the historical ledger preserves the timeline.
+        </div>
+    </div>
+
+    <p style="color: #666; font-size: 0.78rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
+        Diagnostic only. This page does not modify any recommendation,
+        threshold, or calibration constant. Capturing snapshots
+        (via the management command) is the only state-modifying
+        operator action available from this surface.
+    </p>
+</div>
+{% endblock %}

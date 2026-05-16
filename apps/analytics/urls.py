@@ -36,4 +36,11 @@ urlpatterns = [
         views.health_score,
         name='health_score',
     ),
+    # Elo Activation Monitor (2026-05-16) — pre/post-cutover diagnostic
+    # for the 2-3 week observation window. Read-only.
+    path(
+        'elo-monitor/',
+        views.elo_monitor,
+        name='elo_monitor',
+    ),
 ]
