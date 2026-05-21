@@ -21,7 +21,13 @@
     {# pending bet are skipped server-side and surfaced in the toast.    #}
     <div class="mlb-bulk-actions">
       {% if verified_bulk_count %}
+      {# 2026-05-16 trust repair: the button carries the EXACT list of    #}
+      {# game IDs it counts. The JS POSTs them to the bulk endpoint as a  #}
+      {# JSON array so placement processes exactly those games — no       #}
+      {# server-side recomputation of the candidate set. Single source    #}
+      {# of truth: the hub's eligibility predicate produced both numbers. #}
       <button type="button" class="btn btn-sm mlb-bulk-btn mlb-bulk-btn--bet"
+              data-bulk-game-ids='{{ verified_bulk_game_ids_json|safe }}'
               onclick="bulkPlaceRecommended('verified', this, {{ verified_bulk_count }})">
         🟢 Bet All Moneyline Plays ({{ verified_bulk_count }})
       </button>
@@ -105,19 +111,62 @@
       el.style.color = isErr ? 'var(--red)' : '#22c55e';
       el.style.display = 'inline';
   }
+  function _renderBulkSummary(d, msgPrefix) {
+      // 2026-05-16 trust repair: render an explicit per-game summary
+      // when the bulk endpoint returns the structured items arrays.
+      // Falls back to the legacy single-line summary if the response
+      // shape is older (defensive — handles cross-deploy clients).
+      var hasItems = (
+          d.placed_items || d.skipped_items || d.failed_items
+      );
+      if (!hasItems) {
+          var legacy = msgPrefix + 'placed ' + d.placed + ' bet'
+              + (d.placed === 1 ? '' : 's');
+          if (d.skipped_existing) legacy += ' · ' + d.skipped_existing + ' already had pending bets';
+          if (d.skipped_no_odds) legacy += ' · ' + d.skipped_no_odds + ' had no odds yet';
+          return legacy;
+      }
+      // Headline counts.
+      var headline = (
+          msgPrefix + 'requested ' + d.requested
+          + ' · placed ' + d.placed
+          + ' · skipped ' + d.skipped
+          + ' · failed ' + d.failed
+      );
+      // Per-game detail block — only render when the result is not
+      // a clean "all placed" outcome.
+      var detailLines = [];
+      function _push(arr, marker) {
+          (arr || []).forEach(function(item) {
+              detailLines.push(marker + ' ' + (item.label || item.game_id) + ' — ' + (item.reason || item.outcome));
+          });
+      }
+      _push(d.placed_items, '✓');
+      _push(d.skipped_items, '⚠');
+      _push(d.failed_items, '✗');
+      if (detailLines.length && (d.skipped || d.failed)) {
+          // Show details inline only when there's something interesting
+          // to explain. All-placed cases get the headline only.
+          headline += '\n' + detailLines.join('\n');
+      }
+      return headline;
+  }
+
   function bulkPlaceRecommended(sourceFilter, btn, gameCount) {
-      // sourceFilter is 'verified' (primary, default) or 'espn' (secondary).
-      // The confirm copy and the URL param differ between the two so users
-      // are warned explicitly when betting on ESPN-fallback odds.
-      // gameCount is the visible count from the hub — used to give the
-      // confirm modal a concrete "you are about to bet on N games" line
-      // so the user can sanity-check before committing. This is the slate
-      // count, not the post-filter count: any games where the user already
-      // has a pending bet are still skipped server-side and reported in
-      // the success toast.
+      // 2026-05-16 trust repair: the button data-attribute carries
+      // the EXACT list of game IDs the count is based on. We POST
+      // those to the bulk endpoint so placement processes exactly
+      // those games — no server-side recomputation, no count-vs-
+      // placement divergence. Drift between page load and click
+      // (odds movement → lane flip) is surfaced explicitly as
+      // skipped_recommendation_drift, not silently dropped.
       var originalText = btn.textContent;
       var n = (typeof gameCount === 'number' && gameCount > 0) ? gameCount : 0;
       var nLbl = n + ' recommended game' + (n === 1 ? '' : 's');
+      var gameIdsJson = btn.getAttribute('data-bulk-game-ids') || '[]';
+      var gameIds = [];
+      try { gameIds = JSON.parse(gameIdsJson); } catch (e) { gameIds = []; }
+
       var confirmMsg, msgPrefix;
       if (sourceFilter === 'espn') {
           confirmMsg = 'You are about to place a $100 mock bet on each of '
@@ -135,20 +184,30 @@
       if (!window.confirm(confirmMsg)) return;
       btn.disabled = true; btn.textContent = 'Placing…';
       var url = '{% url "mockbets:bulk_place_recommended" %}?source_filter=' + encodeURIComponent(sourceFilter);
+      // POST body carries the locked game_ids. The endpoint enforces
+      // that the candidate set = exactly these IDs (no recomputation).
+      var body = JSON.stringify({ game_ids: gameIds });
       fetch(url, {
           method: 'POST',
-          headers: { 'X-CSRFToken': _csrfToken() },
+          headers: {
+              'X-CSRFToken': _csrfToken(),
+              'Content-Type': 'application/json',
+          },
           credentials: 'same-origin',
+          body: body,
       })
       .then(function(r){ return r.json().then(function(d){ return [r,d]; }); })
       .then(function(arr) {
           var r = arr[0], d = arr[1];
           if (!r.ok) { _showBulkMsg(d.error || 'Bulk placement failed.', true); btn.disabled=false; btn.textContent=originalText; return; }
-          var msg = msgPrefix + 'placed ' + d.placed + ' bet' + (d.placed === 1 ? '' : 's');
-          if (d.skipped_existing) msg += ' · ' + d.skipped_existing + ' already had pending bets';
-          if (d.skipped_no_odds) msg += ' · ' + d.skipped_no_odds + ' had no odds yet';
-          _showBulkMsg(msg, false);
-          setTimeout(function(){ window.location.reload(); }, 1200);
+          var msg = _renderBulkSummary(d, msgPrefix);
+          // Failed bets are red; partial-skip cases get a neutral colour
+          // (not red, because the operator's view still shows what happened).
+          _showBulkMsg(msg, (d.failed || 0) > 0);
+          // Slightly longer dwell when there's a multi-line summary so
+          // the operator has time to read it before the reload.
+          var dwell = (d.skipped || d.failed) ? 4000 : 1200;
+          setTimeout(function(){ window.location.reload(); }, dwell);
       })
       .catch(function(){ _showBulkMsg('Network error.', true); btn.disabled=false; btn.textContent=originalText; });
   }

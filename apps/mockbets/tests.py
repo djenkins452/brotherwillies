@@ -1783,6 +1783,414 @@ class BulkActionsTests(TestCase):
             self.assertEqual(resp.status_code, 405)
 
 
+class BulkPlacementTrustRepairTests(TestCase):
+    """Phase 2026-05-16 trust repair — count-vs-placement determinism.
+
+    The 'Bet All Moneyline Plays (5) → 3 placed silently' bug class
+    is locked out by these tests. Covers all 10 scenarios from the
+    master prompt §6:
+
+      1. 5 requested → 5 placed (happy path)
+      2. Partial placement still succeeds for the eligible subset
+      3. One failed game does NOT stop the loop
+      4. Duplicate bet skip surfaces a reason
+      5. Recommendation drift skip surfaces a reason
+      6. Started-game skip surfaces a reason
+      7. Missing-odds skip surfaces a reason
+      8. Single source of truth: count == request set == placement set
+      9. No silent failures (every game lands in placed/skipped/failed)
+     10. UI state can refresh (response payload carries per-game items)
+    """
+
+    def setUp(self):
+        from apps.mlb.models import (
+            Conference as MLBConf, Team as MLBTeam,
+            Game as MLBGame, OddsSnapshot as MLBOdds,
+        )
+        self.MLBGame = MLBGame
+        self.MLBOdds = MLBOdds
+        self.user = User.objects.create_user('trust_user', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.conf = MLBConf.objects.create(name='AL East', slug='trust-al-east')
+
+    def _team_pair(self, suffix):
+        from apps.mlb.models import Team as MLBTeam
+        t1 = MLBTeam.objects.create(
+            name=f'A{suffix}', slug=f'trust-a-{suffix}', conference=self.conf,
+            rating=90, source='mlb_stats_api', external_id=f'trust-a-{suffix}',
+        )
+        t2 = MLBTeam.objects.create(
+            name=f'B{suffix}', slug=f'trust-b-{suffix}', conference=self.conf,
+            rating=20, source='mlb_stats_api', external_id=f'trust-b-{suffix}',
+        )
+        return t1, t2
+
+    def _game_with_odds(self, suffix, *, hours_out=2, status='scheduled',
+                       ml_home=-160, ml_away=140, market_home_prob=0.55):
+        t1, t2 = self._team_pair(suffix)
+        game = self.MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() + timedelta(hours=hours_out),
+            status=status,
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        if ml_home is not None:
+            self.MLBOdds.objects.create(
+                game=game, captured_at=timezone.now(),
+                market_home_win_prob=market_home_prob,
+                moneyline_home=ml_home, moneyline_away=ml_away,
+                odds_source='odds_api', source_quality='primary',
+            )
+        return game
+
+    # --- 1. Happy path: 5 requested → 5 placed -------------------------------
+
+    def test_count_locked_set_all_placed(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        games = [self._game_with_odds(f'g{i}', hours_out=2 + i) for i in range(5)]
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified',
+            game_ids=[str(g.id) for g in games],
+        )
+        self.assertEqual(result['requested'], 5)
+        self.assertEqual(result['placed'], 5)
+        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['failed'], 0)
+        self.assertEqual(len(result['placed_items']), 5)
+
+    # --- 2. Partial placement still succeeds ---------------------------------
+
+    def test_partial_placement_succeeds_for_eligible_subset(self):
+        """3 eligible, 2 drifted-out → 3 placed + 2 skipped with reasons."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        eligible_games = [self._game_with_odds(f'p{i}', hours_out=2 + i) for i in range(3)]
+        # Two games whose recommendation will be ineligible at request
+        # time. Use long-shot odds so the eligibility predicate rejects.
+        drift_games = []
+        for i in range(2):
+            g = self._game_with_odds(
+                f'd{i}', hours_out=5 + i,
+                ml_home=+450, ml_away=-650, market_home_prob=0.18,
+            )
+            drift_games.append(g)
+
+        all_ids = [str(g.id) for g in eligible_games + drift_games]
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=all_ids,
+        )
+        # Request count matches what we asked for — not silently dropped.
+        self.assertEqual(result['requested'], 5)
+        # The 3 with strong gaps placed; the 2 with longshot odds skip
+        # with drift reason (because the rec engine's eligibility predicate
+        # rejects them).
+        self.assertEqual(result['placed'] + result['skipped'], 5)
+        self.assertGreaterEqual(result['placed'], 1)
+        # Every drift skip carries a human-readable reason.
+        for skip in result['skipped_items']:
+            self.assertTrue(skip['reason'])
+
+    # --- 3. One failed game does NOT stop the loop --------------------------
+
+    def test_one_failed_game_does_not_terminate_loop(self):
+        from unittest.mock import patch
+        from apps.mockbets.services import bulk_actions
+        games = [self._game_with_odds(f'f{i}', hours_out=2 + i) for i in range(5)]
+
+        # Make MockBet.objects.create raise on the 3rd call so games 4 and 5
+        # would have been killed under the legacy atomic-loop architecture.
+        original_create = MockBet.objects.create
+        call_count = {'n': 0}
+
+        def failing_create(*args, **kwargs):
+            call_count['n'] += 1
+            if call_count['n'] == 3:
+                raise RuntimeError('simulated DB failure on game 3')
+            return original_create(*args, **kwargs)
+
+        with patch.object(MockBet.objects, 'create', side_effect=failing_create):
+            result = bulk_actions.place_bulk_recommended_bets(
+                self.user, sport='mlb', stake=Decimal('100'),
+                source_filter='verified',
+                game_ids=[str(g.id) for g in games],
+            )
+
+        self.assertEqual(result['requested'], 5)
+        # Per-game isolation: 4 placed, 1 failed, loop reached every game.
+        self.assertEqual(result['failed'], 1)
+        self.assertEqual(result['placed'] + result['skipped'] + result['failed'], 5)
+        # Failed item carries the exception message.
+        self.assertEqual(len(result['failed_items']), 1)
+        self.assertIn('simulated DB failure', result['failed_items'][0]['reason'])
+
+    # --- 4. Duplicate bet skip surfaces a reason ----------------------------
+
+    def test_duplicate_bet_surfaces_explicit_reason(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        game = self._game_with_odds('dup', hours_out=2)
+        # Pre-existing pending bet on the same game.
+        MockBet.objects.create(
+            user=self.user, sport='mlb', mlb_game=game,
+            bet_type='moneyline', selection='X', odds_american=-160,
+            implied_probability=Decimal('0.6154'),
+            stake_amount=Decimal('100'), result='pending',
+        )
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=[str(game.id)],
+        )
+        self.assertEqual(result['requested'], 1)
+        self.assertEqual(result['placed'], 0)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(
+            result['skipped_items'][0]['outcome'], 'skipped_duplicate',
+        )
+        self.assertIn('duplicate', result['skipped_items'][0]['reason'].lower())
+
+    # --- 5. Recommendation drift skip surfaces a reason ---------------------
+
+    def test_recommendation_drift_surfaces_explicit_reason(self):
+        """A game eligible at hub render time becomes ineligible at
+        placement time. The fix surfaces drift instead of silently
+        skipping. Simulate by passing a game whose odds make it
+        immediately ineligible (longshot)."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        game = self._game_with_odds(
+            'drift', hours_out=2,
+            ml_home=+550, ml_away=-750, market_home_prob=0.13,
+        )
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=[str(game.id)],
+        )
+        self.assertEqual(result['placed'], 0)
+        self.assertEqual(result['skipped'], 1)
+        # Skip reason is drift (recommendation no longer eligible).
+        self.assertEqual(
+            result['skipped_items'][0]['outcome'],
+            'skipped_recommendation_drift',
+        )
+
+    # --- 6. Started-game skip surfaces a reason -----------------------------
+
+    def test_started_game_skip_surfaces_explicit_reason(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Game that started 1 hour ago — first_pitch in the past.
+        t1, t2 = self._team_pair('start')
+        game = self.MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() - timedelta(hours=1),
+            status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        self.MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-160, moneyline_away=140,
+            odds_source='odds_api', source_quality='primary',
+        )
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=[str(game.id)],
+        )
+        self.assertEqual(result['placed'], 0)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(
+            result['skipped_items'][0]['outcome'], 'skipped_game_started',
+        )
+
+    # --- 7. Missing-odds skip surfaces a reason -----------------------------
+
+    def test_missing_odds_skip_surfaces_explicit_reason(self):
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Game has no odds snapshot → get_recommendation returns None.
+        t1, t2 = self._team_pair('noodds')
+        game = self.MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() + timedelta(hours=2),
+            status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=[str(game.id)],
+        )
+        self.assertEqual(result['placed'], 0)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(
+            result['skipped_items'][0]['outcome'], 'skipped_missing_odds',
+        )
+
+    # --- 8. Single source of truth: count predicate ------------------------
+
+    def test_is_bulk_moneyline_eligible_consistent_across_callers(self):
+        """The hub view's count and the bulk endpoint's placement set
+        come from the SAME predicate — that's the entire fix. This
+        test locks the predicate behavior by exercising it directly."""
+        from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+        # None → ineligible.
+        self.assertFalse(is_bulk_moneyline_eligible(None))
+
+        # Class-based stub mimicking a Recommendation dataclass.
+        class _Rec:
+            def __init__(self, **kw):
+                self.status = kw.get('status', 'recommended')
+                self.lane = kw.get('lane', 'core')
+                self.tier = kw.get('tier', 'strong')
+                self.status_reason = kw.get('status_reason', '')
+                self.confidence_score = kw.get('confidence_score', 62.0)
+                self.odds_american = kw.get('odds_american', -130)
+                self.is_secondary = kw.get('is_secondary', False)
+
+        # Happy path.
+        self.assertTrue(is_bulk_moneyline_eligible(_Rec()))
+
+        # Lane != core (the original bug fingerprint).
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(lane='qualified')))
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(lane='pass')))
+
+        # Status != recommended.
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(status='not_recommended')))
+
+        # Value tier.
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(tier='value')))
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(status_reason='value')))
+
+        # Blocked.
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(tier='blocked')))
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(status_reason='derived_odds')))
+
+        # Probability below threshold (default MIN_PROBABILITY_FOR_RECOMMENDED=0.60).
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(confidence_score=55.0)))
+
+        # Longshot.
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(odds_american=400)))
+        self.assertFalse(is_bulk_moneyline_eligible(_Rec(odds_american=-400)))
+
+        # Source filter: verified excludes secondary.
+        self.assertFalse(is_bulk_moneyline_eligible(
+            _Rec(is_secondary=True), source_filter='verified',
+        ))
+        # Source filter: espn excludes primary.
+        self.assertFalse(is_bulk_moneyline_eligible(
+            _Rec(is_secondary=False), source_filter='espn',
+        ))
+        # Source filter: all permits both.
+        self.assertTrue(is_bulk_moneyline_eligible(
+            _Rec(is_secondary=True), source_filter='all',
+        ))
+
+    # --- 9. No silent failures: every game gets an outcome ------------------
+
+    def test_every_game_lands_in_exactly_one_outcome_bucket(self):
+        """For any set of game_ids, placed + skipped + failed = requested."""
+        from apps.mockbets.services.bulk_actions import place_bulk_recommended_bets
+        # Heterogeneous set: 2 eligible, 1 duplicate, 1 longshot drift, 1 started.
+        eligible_a = self._game_with_odds('mix1', hours_out=2)
+        eligible_b = self._game_with_odds('mix2', hours_out=3)
+        # Duplicate
+        dup_game = self._game_with_odds('mix3', hours_out=4)
+        MockBet.objects.create(
+            user=self.user, sport='mlb', mlb_game=dup_game,
+            bet_type='moneyline', selection='X', odds_american=-160,
+            implied_probability=Decimal('0.6154'),
+            stake_amount=Decimal('100'), result='pending',
+        )
+        # Drift (longshot odds)
+        drift_game = self._game_with_odds(
+            'mix4', hours_out=5,
+            ml_home=+500, ml_away=-700, market_home_prob=0.15,
+        )
+        # Started
+        t1, t2 = self._team_pair('mix5')
+        started_game = self.MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() - timedelta(hours=1),
+            status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        self.MLBOdds.objects.create(
+            game=started_game, captured_at=timezone.now(),
+            market_home_win_prob=0.55,
+            moneyline_home=-160, moneyline_away=140,
+            odds_source='odds_api', source_quality='primary',
+        )
+
+        all_ids = [
+            str(g.id) for g in
+            [eligible_a, eligible_b, dup_game, drift_game, started_game]
+        ]
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=all_ids,
+        )
+        self.assertEqual(result['requested'], 5)
+        # The alignment contract: every game lands in EXACTLY one bucket.
+        self.assertEqual(
+            result['placed'] + result['skipped'] + result['failed'],
+            result['requested'],
+        )
+        # Each outcome list carries the documented reason.
+        for item in result['placed_items']:
+            self.assertEqual(item['outcome'], 'placed')
+            self.assertTrue(item['label'])
+        for item in result['skipped_items']:
+            self.assertIn('skipped_', item['outcome'])
+            self.assertTrue(item['reason'])
+        for item in result['failed_items']:
+            self.assertEqual(item['outcome'], 'failed')
+            self.assertTrue(item['reason'])
+
+    # --- 10. Endpoint accepts JSON body with game_ids -----------------------
+
+    def test_endpoint_processes_locked_game_ids_via_json_body(self):
+        """The view layer reads game_ids from the JSON body and passes
+        them to the service. Locks the wire contract that the JS depends on."""
+        import json as _json
+        from django.urls import reverse
+        eligible_a = self._game_with_odds('end1', hours_out=2)
+        eligible_b = self._game_with_odds('end2', hours_out=3)
+
+        # Place a game whose IDs are NOT in the request — should be
+        # ignored entirely (single source of truth: only the IDs in the
+        # request body get processed).
+        ignored_game = self._game_with_odds('end3', hours_out=4)
+
+        url = reverse('mockbets:bulk_place_recommended') + '?source_filter=verified'
+        resp = self.client.post(
+            url,
+            data=_json.dumps({'game_ids': [str(eligible_a.id), str(eligible_b.id)]}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['requested'], 2)
+        self.assertEqual(data['placed'], 2)
+        # The ignored game has no bet placed.
+        self.assertFalse(
+            MockBet.objects.filter(
+                user=self.user, mlb_game=ignored_game,
+            ).exists(),
+        )
+
+    def test_endpoint_falls_back_to_legacy_path_without_body(self):
+        """An old client that doesn't send a body still works — the
+        service computes the candidate set itself."""
+        from django.urls import reverse
+        self._game_with_odds('legacy1', hours_out=2)
+        self._game_with_odds('legacy2', hours_out=3)
+
+        url = reverse('mockbets:bulk_place_recommended') + '?source_filter=verified'
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        # Legacy path runs; placed > 0 because the games are eligible.
+        self.assertGreaterEqual(data['placed'], 1)
+
+
 class CommandCenterTests(TestCase):
     """The build_command_center facade is the single source of analytics
     truth for the dashboard + AI summary. These tests cover the new

@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-16 — Bulk placement trust repair: count == execution set
+
+**Production issue:** MLB hub displayed "Bet All Moneyline Plays (5)"; only 3 bets placed; 2 tiles silently retained "Bet This" with no error, no warning. Operator could not tell what happened.
+
+**Root cause:** count-vs-placement divergence + loop-wide atomic block. The count came from `partition_games_by_decision` (checks status/tier) while placement additionally required `lane='core'` (Two-Lane System). Games with `status='recommended'` + `lane='qualified'` (risk flag fired) inflated the count without being placed. Also: one `IntegrityError` inside the loop's single `transaction.atomic()` could roll back all bets in the batch with no partial-success surface.
+
+**Architectural fix — three layers:**
+
+1. **Single eligibility predicate.** New `apps/mockbets/services/bulk_actions.py::is_bulk_moneyline_eligible(rec, *, source_filter, tier_filter)`. Both the MLB hub view (button count) and `_eligible_games_for_user` (placement filter) call it. They cannot diverge by construction. New inline checks anywhere else are forbidden by the docstring.
+
+2. **Locked candidate set across the wire.** Hub view emits `verified_bulk_game_ids_json` — JSON list of exact UUIDs counted. Template stamps it on the button as `data-bulk-game-ids`. JS POSTs them as a JSON body. View reads them and passes to `place_bulk_recommended_bets(..., game_ids=[...])`. The service processes **exactly** those IDs — no server-side recomputation of the candidate set. Drift between page render and click is surfaced explicitly as `skipped_recommendation_drift`, not silently dropped.
+
+3. **Per-game isolation.** New `_place_one_bet(user, game, rec, stake)` wraps a single bet in `transaction.atomic()`. The outer loop wraps each call in `try/except`. One bad bet does NOT terminate the loop or roll back the others.
+
+**Structured outcome response.** Every candidate game lands in exactly one of three lists:
+- `placed_items` — `{game_id, label, outcome: 'placed', reason: 'Placed', bet_id}`
+- `skipped_items` — `{game_id, label, outcome: 'skipped_*', reason: <human-readable>}` where outcome is `skipped_duplicate` / `skipped_recommendation_drift` / `skipped_game_started` / `skipped_missing_odds`
+- `failed_items` — `{game_id, label, outcome: 'failed', reason: <exception detail>}`
+
+Plus top-level counts: `requested`, `placed`, `skipped`, `failed`. Legacy counters retained for back-compat.
+
+**Alignment contract:** `placed + skipped + failed == requested`. Locked by `test_every_game_lands_in_exactly_one_outcome_bucket`.
+
+**Explicit JS summary.** The hub's `_renderBulkSummary` builds a multi-line operator-readable summary from the structured items. Dwell time before reload extended from 1.2s → 4s when skipped or failed items exist so the operator can read the breakdown.
+
+**Files touched:**
+
+| File | Change |
+|---|---|
+| `apps/mockbets/services/bulk_actions.py` | `is_bulk_moneyline_eligible` predicate; refactored `_eligible_games_for_user`; `_place_one_bet` per-bet atomic; `game_ids` parameter; structured outcome arrays; outcome constants. |
+| `apps/mockbets/views.py::bulk_place_recommended` | Reads `game_ids` from JSON body; passes to service. Legacy fallback retained. |
+| `apps/mlb/views.py::mlb_hub` | Uses predicate for count; emits `verified_bulk_game_ids_json`. |
+| `templates/mlb/hub.html` | `data-bulk-game-ids` on button; JS POSTs JSON body; renders structured summary. |
+| `apps/mockbets/tests.py` | `BulkPlacementTrustRepairTests` — 11 regression tests covering all 10 master-prompt scenarios + JSON-body endpoint contract. |
+| `docs/bulk_placement_trust_repair_2026_05_16.md` | Full RCA + fix documentation. |
+
+**What this commit does NOT change:**
+
+- ❌ No threshold tunes.
+- ❌ No recommendation logic changes.
+- ❌ No Elo changes.
+- ❌ No calibration changes.
+- ❌ No betting-engine changes.
+
+Strictly architectural trust repair. Model behavior untouched.
+
+**Test totals:** 767 passing across phase-relevant modules. Zero regressions. `manage.py check` clean.
+
+**Architecture law compliance:**
+- Law 3 (analytics scope transparency) — satisfied. Every excluded game carries a named outcome and human-readable reason; silent exclusion is structurally impossible.
+- Law 4 (do not overfit) — satisfied. No constants changed; no thresholds tuned; no model behavior modified.
+
+**Proof: count == execution set.** Enforced at three layers (single predicate, locked candidate set, alignment contract). If the button says (5), one of two things now MUST happen: (A) 5 bets placed, OR (B) the operator sees a structured summary showing exactly why each missing bet was skipped or failed. Silent partial execution is no longer architecturally possible.
+
+---
+
 ## 2026-05-16 — Phase 2A Task 4: Elo activation (GO)
 
 **The cutover lands.** Single variable change: `USE_DYNAMIC_RATINGS` default flips from `'false'` to `'true'` in `brotherwillies/settings.py`. The next Railway deploy activates Elo automatically. Rollback is one env var (`USE_DYNAMIC_RATINGS=false` on Railway) — no code revert needed.

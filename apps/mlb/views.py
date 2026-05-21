@@ -139,15 +139,28 @@ def mlb_hub(request):
     if request.GET.get('diag') == '1' and request.user.is_staff:
         diag_rows = _build_diag_rows(all_tiles)
 
-    # Pre-compute bulk-bet button counts so the template can show
-    # "Bet All Verified Plays (8)" and the confirm modal can say "you
-    # are about to place bets on 8 games". Doing this in Python avoids
-    # the {% with foo|length|add:bar|length %} filter-parsing footgun
-    # where Django takes the first post-colon token as the add arg and
-    # a trailing |length is then applied to the wrong intermediate.
-    verified_bulk_count = (
-        len(decision_sections['elite']) + len(decision_sections['recommended'])
-    )
+    # Pre-compute bulk-bet button counts.
+    #
+    # 2026-05-16 trust repair: the count + the candidate game IDs come
+    # from the SAME predicate (`is_bulk_moneyline_eligible`) that the
+    # bulk placement service uses. The hub passes both to the JS so
+    # the bulk endpoint receives the exact game IDs the operator saw
+    # in the button count — no recomputation, no silent skips from
+    # divergent filters.
+    #
+    # Per-game drift between page render and click is still possible
+    # (odds movement can flip a recommendation from core to qualified),
+    # but it is surfaced as `skipped_recommendation_drift` with a
+    # human-readable reason, not silently dropped.
+    from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+    verified_bulk_game_ids = [
+        str(tile.game.id) for tile in all_tiles
+        if is_bulk_moneyline_eligible(
+            getattr(tile, 'recommendation', None), source_filter='verified',
+        )
+    ]
+    verified_bulk_count = len(verified_bulk_game_ids)
     espn_bulk_count = len(decision_sections.get('recommended_espn', []))
 
     # ----- Tiered Intelligence Phase 1: Spread + Total opportunity signals
@@ -265,6 +278,12 @@ def mlb_hub(request):
         'elite_games': decision_sections['elite'],
         'recommended_games': decision_sections['recommended'],
         'verified_bulk_count': verified_bulk_count,
+        # JSON list of game IDs passed to the JS so the bulk endpoint
+        # processes EXACTLY the games shown in the button count (2026-05-16
+        # trust repair). Encoded once in the view to keep the template
+        # logic dumb — `|safe` in the template since these are UUID strings
+        # which are inert.
+        'verified_bulk_game_ids_json': json.dumps(verified_bulk_game_ids),
         'espn_bulk_count': espn_bulk_count,
         # Source-Aware Betting (Commit B): ESPN-secondary recommendeds
         # render in their own section under the verified Recommended

@@ -375,6 +375,29 @@ def bulk_place_recommended(request):
     except (InvalidOperation, TypeError, ValueError):
         return JsonResponse({'error': 'Invalid stake'}, status=400)
 
+    # 2026-05-16 trust repair: when the body carries `game_ids`, the
+    # bulk endpoint processes EXACTLY those games — no candidate-set
+    # recomputation, no silent skips from count/placement divergence.
+    # The MLB hub injects this list from the same eligibility predicate
+    # the button count uses, so requested count and placement set match
+    # by construction. Falls back to the legacy "recompute the set"
+    # behavior when no body is provided (older clients, internal callers).
+    game_ids = None
+    if request.content_type == 'application/json' and request.body:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+            raw_ids = payload.get('game_ids')
+            if isinstance(raw_ids, list):
+                # Cap absurd inputs defensively — slate is bounded to
+                # ~15 MLB games even on a Saturday; 200 is a sane ceiling
+                # for any conceivable legit request.
+                game_ids = [str(x) for x in raw_ids[:200]]
+        except (ValueError, AttributeError, UnicodeDecodeError):
+            # Malformed JSON or missing keys — fall back to legacy
+            # behavior rather than 400'ing, so an old cached browser
+            # tab still works.
+            game_ids = None
+
     if bet_type == 'spread':
         summary = place_bulk_proven_spread_bets(request.user, stake=stake)
     elif bet_type == 'total':
@@ -383,6 +406,7 @@ def bulk_place_recommended(request):
         summary = place_bulk_recommended_bets(
             request.user, sport=sport, stake=stake,
             tier_filter=tier_filter, source_filter=source_filter,
+            game_ids=game_ids,
         )
     if summary.get('error'):
         return JsonResponse(summary, status=400)
