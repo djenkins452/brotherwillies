@@ -105,17 +105,70 @@ def mlb_hub(request):
             return 0.0
         return float(rec.model_edge)
 
-    # Recommended = engine cleared all hard gates, status='recommended'.
-    # Sort: tier ASC (elite=0 < strong=1 < standard=2) then edge DESC.
-    recommended_tiles = _take(
+    # 2026-05-22 trust repair: Recommended bucket membership === bulk-bet
+    # eligibility. Per the master prompt's RULE 2: "If a game appears in
+    # Recommended, it MUST be bettable by Bet All. Otherwise it belongs
+    # in Potential."
+    #
+    # Previously, Recommended was built from decision_sections['elite'] +
+    # decision_sections['recommended'] which checks status/tier but NOT
+    # lane. A game with status='recommended' + lane='qualified' (because
+    # a risk flag fired — short_fav_thin / market_conflict / etc.) would
+    # appear as a Recommended card but be excluded from Bet All. The
+    # operator saw "Recommended (4)" + "Bet All (2)" with no explanation
+    # of the divergence.
+    #
+    # Fix: filter the Recommended candidate pool through
+    # is_bulk_moneyline_eligible — the SAME predicate the Bet All button
+    # count uses. Games that pass go to Recommended. Games that don't
+    # (but were status='recommended' upstream) fall through to Potential
+    # via the lane_sections['qualified'] / value bucket / explicit
+    # carry-over below.
+    #
+    # Single source of truth: is_bulk_moneyline_eligible. No secondary
+    # gates anywhere.
+    from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+    def _is_visible_recommended(tile):
+        """The canonical Recommended-bucket predicate. Identical to the
+        bulk-eligibility predicate so the visible count and the Bet All
+        count cannot diverge by construction."""
+        return is_bulk_moneyline_eligible(
+            getattr(tile, 'recommendation', None), source_filter='verified',
+        )
+
+    # Candidate pool for Recommended: status='recommended' games from
+    # the decision partition (elite + recommended buckets). Filtered
+    # through the canonical predicate.
+    _recommended_candidate_pool = (
         decision_sections['elite'] + decision_sections['recommended']
     )
+    recommended_tiles = _take([
+        tile for tile in _recommended_candidate_pool
+        if _is_visible_recommended(tile)
+    ])
     recommended_tiles.sort(key=lambda t: (_tier_rank(t), -_edge_value(t)))
 
-    # Potential = qualified lane (cleared hard gates, 1-2 risk flags) +
-    # value bucket (high edge, low probability). Sort: edge DESC.
+    # Potential = visible-but-not-bulk-eligible. Three sources, in
+    # priority order (the `_take` dedupe means each game lands in
+    # the highest-priority bucket only):
+    #   1. lane='qualified' games — cleared hard gates but carry 1-2
+    #      risk flags. These are the canonical "Potential" cohort.
+    #   2. Value-tier picks — high edge, low probability. Visible but
+    #      never bulk-eligible by design.
+    #   3. Carry-overs: status='recommended' games that failed
+    #      is_bulk_moneyline_eligible for any other reason (e.g.,
+    #      they dropped below probability gate during the page session,
+    #      odds shifted into longshot range, etc.). These would
+    #      otherwise vanish silently — Potential catches them.
+    _recommended_carry_overs = [
+        tile for tile in _recommended_candidate_pool
+        if not _is_visible_recommended(tile)
+    ]
     potential_tiles = _take(
-        lane_sections['qualified'] + decision_sections.get('value', [])
+        lane_sections['qualified']
+        + decision_sections.get('value', [])
+        + _recommended_carry_overs
     )
     potential_tiles.sort(key=lambda t: -_edge_value(t))
 
@@ -141,27 +194,44 @@ def mlb_hub(request):
 
     # Pre-compute bulk-bet button counts.
     #
-    # 2026-05-16 trust repair: the count + the candidate game IDs come
-    # from the SAME predicate (`is_bulk_moneyline_eligible`) that the
-    # bulk placement service uses. The hub passes both to the JS so
-    # the bulk endpoint receives the exact game IDs the operator saw
-    # in the button count — no recomputation, no silent skips from
-    # divergent filters.
+    # 2026-05-22 trust repair (RULE 1: single source of truth):
+    # the button count and the visible Recommended bucket BOTH come
+    # from `recommended_tiles` above — which is itself filtered by
+    # `_is_visible_recommended` (= `is_bulk_moneyline_eligible`).
+    # By taking `verified_bulk_game_ids` directly from
+    # `recommended_tiles`, the count cannot diverge from the visible
+    # bucket regardless of which gates the predicate enforces.
     #
     # Per-game drift between page render and click is still possible
     # (odds movement can flip a recommendation from core to qualified),
     # but it is surfaced as `skipped_recommendation_drift` with a
     # human-readable reason, not silently dropped.
-    from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
-
-    verified_bulk_game_ids = [
-        str(tile.game.id) for tile in all_tiles
-        if is_bulk_moneyline_eligible(
-            getattr(tile, 'recommendation', None), source_filter='verified',
-        )
-    ]
+    verified_bulk_game_ids = [str(tile.game.id) for tile in recommended_tiles]
     verified_bulk_count = len(verified_bulk_game_ids)
     espn_bulk_count = len(decision_sections.get('recommended_espn', []))
+
+    # RULE 3: defensive divergence detection. The construction above
+    # makes a mismatch impossible by design, but we assert + log
+    # anyway so any future refactor that re-introduces a separate
+    # filter path is caught the first time a slate hits it.
+    _alt_count = sum(
+        1 for tile in all_tiles
+        if _is_visible_recommended(tile)
+    )
+    if _alt_count != verified_bulk_count:
+        import logging as _logging
+        _div_log = _logging.getLogger(__name__)
+        _div_log.warning(
+            'mlb_hub bulk count divergence: recommended_tiles=%d '
+            'predicate_over_all_tiles=%d. visible_ids=%s diverged_ids=%s',
+            verified_bulk_count, _alt_count,
+            verified_bulk_game_ids,
+            [
+                str(tile.game.id) for tile in all_tiles
+                if _is_visible_recommended(tile)
+                and str(tile.game.id) not in verified_bulk_game_ids
+            ],
+        )
 
     # ----- Tiered Intelligence Phase 1: Spread + Total opportunity signals
     # Always computed but only RENDERED when settings.SPREAD_TOTAL_SIGNALS_ENABLED.

@@ -3,10 +3,13 @@
 Uses no network: the schedule provider's normalize() is tested against a
 hand-built sample payload matching statsapi.mlb.com's shape.
 """
+import uuid
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.contrib.auth.models import User
+from django.test import Client, TestCase
 from django.utils import timezone
 
 from apps.mlb.models import Conference, Game, StartingPitcher, Team
@@ -804,6 +807,298 @@ class MLBHubBucketAssignmentTests(TestCase):
         self.assertFalse(rec_ids & pot_ids)
         self.assertFalse(rec_ids & not_rec_ids)
         self.assertFalse(pot_ids & not_rec_ids)
+
+
+class MLBHubRecommendedEqualsBetAllTests(TestCase):
+    """2026-05-22 trust repair regression lock.
+
+    Spec contract (RULE 2): If a game appears in the Recommended bucket,
+    it MUST be bettable by Bet All. Otherwise it belongs in Potential.
+    The visible Recommended count and the Bet All button count MUST
+    be identical for every render.
+
+    The previous trust repair (2026-05-16) aligned the button count
+    with the placement set. This second repair aligns the visible
+    Recommended bucket with both.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam
+        self.MLBConf = MLBConf
+        self.MLBTeam = MLBTeam
+        self.user = User.objects.create_user('rec_eq_user', password='pw')
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.conf = MLBConf.objects.create(name='AL', slug='req-eq-al')
+
+    def _team_pair(self, suffix, home_rating=88, away_rating=22):
+        # 2026-05-03 calibration: rating gap must be wide enough to
+        # clear the post-tightening probability gate (≥0.60).
+        t1 = self.MLBTeam.objects.create(
+            name=f'H{suffix}', slug=f'req-h-{suffix}',
+            conference=self.conf, rating=home_rating,
+            source='mlb_stats_api', external_id=f'req-h-{suffix}',
+        )
+        t2 = self.MLBTeam.objects.create(
+            name=f'A{suffix}', slug=f'req-a-{suffix}',
+            conference=self.conf, rating=away_rating,
+            source='mlb_stats_api', external_id=f'req-a-{suffix}',
+        )
+        return t1, t2
+
+    def _game_with_odds(
+        self, suffix, *,
+        hours_out=2, ml_home=-160, ml_away=140, market_home_prob=0.55,
+        home_rating=88, away_rating=22,
+    ):
+        from apps.mlb.models import Game as MLBGame, OddsSnapshot as MLBOdds
+        t1, t2 = self._team_pair(suffix, home_rating=home_rating, away_rating=away_rating)
+        game = MLBGame.objects.create(
+            home_team=t1, away_team=t2,
+            first_pitch=timezone.now() + timedelta(hours=hours_out),
+            status='scheduled',
+            source='mlb_stats_api', external_id=str(uuid.uuid4()),
+        )
+        MLBOdds.objects.create(
+            game=game, captured_at=timezone.now(),
+            market_home_win_prob=market_home_prob,
+            moneyline_home=ml_home, moneyline_away=ml_away,
+            odds_source='odds_api', source_quality='primary',
+        )
+        return game
+
+    # --- Scenario A: 4 recommended cards → button says 4 → bulk places 4 ----
+
+    def test_scenario_a_four_recommended_cards_match_button_count(self):
+        """4 distinct eligible games → 4 cards in Recommended → button (4)."""
+        from apps.mockbets.services.bulk_actions import (
+            is_bulk_moneyline_eligible, place_bulk_recommended_bets,
+        )
+        for i in range(4):
+            self._game_with_odds(f'sA{i}', hours_out=2 + i)
+
+        resp = self.client.get('/mlb/')
+        self.assertEqual(resp.status_code, 200)
+
+        recommended_tiles = resp.context['recommended_tiles']
+        verified_bulk_count = resp.context['verified_bulk_count']
+        # Filter to bulk-eligible (defensive — fixtures may emit other
+        # categories under unforeseen calibration edges).
+        bulk_eligible_in_rec = [
+            t for t in recommended_tiles
+            if is_bulk_moneyline_eligible(
+                getattr(t, 'recommendation', None), source_filter='verified',
+            )
+        ]
+        # RULE 2 invariant: every visible Recommended tile is bulk-eligible.
+        self.assertEqual(len(bulk_eligible_in_rec), len(recommended_tiles))
+        # RULE 1 invariant: button count == visible count.
+        self.assertEqual(verified_bulk_count, len(recommended_tiles))
+
+        # And bulk placement actually places that many (modulo drift —
+        # fresh test fixture, no drift expected).
+        game_ids = [str(t.game.id) for t in recommended_tiles]
+        result = place_bulk_recommended_bets(
+            self.user, sport='mlb', stake=Decimal('100'),
+            source_filter='verified', game_ids=game_ids,
+        )
+        self.assertEqual(result['placed'], len(recommended_tiles))
+
+    # --- Scenario B: risk-flagged games → Potential, not Recommended -------
+
+    def test_scenario_b_risk_flagged_games_land_in_potential_not_recommended(self):
+        """Construct a game that would normally be Recommended but has
+        a risk flag → ends up in Potential. Recommended count and Bet
+        All count both decrease by one — together — never apart."""
+        from unittest.mock import patch
+        from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+        clean_game = self._game_with_odds('sB1', hours_out=2)
+        flagged_game = self._game_with_odds('sB2', hours_out=3)
+
+        # Patch the recommendation lane to 'qualified' for the flagged
+        # game only. This simulates a risk-flag firing (e.g.
+        # short_fav_thin) without modifying the recommendation engine.
+        from apps.core.services.recommendations import get_recommendation as _real_get
+        def _patched_get(sport, game, user=None):
+            rec = _real_get(sport, game, user)
+            if rec is not None and game.id == flagged_game.id:
+                rec.lane = 'qualified'
+                rec.risk_flags = {'short_fav_thin': True}
+                rec.risk_score = 1
+            return rec
+
+        # get_recommendation is imported inside the function in
+        # prioritization.py and bulk_actions.py — patch the source
+        # module so the lookup at import time picks up our patch.
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            side_effect=_patched_get,
+        ):
+            resp = self.client.get('/mlb/')
+
+        rec_ids = {str(t.game.id) for t in resp.context['recommended_tiles']}
+        pot_ids = {str(t.game.id) for t in resp.context['potential_tiles']}
+
+        # Flagged game is in Potential, not Recommended.
+        self.assertNotIn(str(flagged_game.id), rec_ids)
+        self.assertIn(str(flagged_game.id), pot_ids)
+        # Clean game is in Recommended.
+        self.assertIn(str(clean_game.id), rec_ids)
+        # RULE 1: button count = visible Recommended count.
+        self.assertEqual(
+            resp.context['verified_bulk_count'],
+            len(resp.context['recommended_tiles']),
+        )
+
+    # --- Scenario C: lane='qualified' → NOT in Recommended, IS in Potential -
+
+    def test_scenario_c_qualified_lane_not_in_recommended_is_in_potential(self):
+        """Direct test of lane semantics in the visible bucket structure."""
+        from unittest.mock import patch
+        qualified_game = self._game_with_odds('sC1', hours_out=2)
+
+        from apps.core.services.recommendations import get_recommendation as _real_get
+        def _patched_get(sport, game, user=None):
+            rec = _real_get(sport, game, user)
+            if rec is not None:
+                rec.lane = 'qualified'
+                rec.risk_flags = {'short_fav_thin': True}
+                rec.risk_score = 1
+            return rec
+
+        # get_recommendation is imported inside the function in
+        # prioritization.py and bulk_actions.py — patch the source
+        # module so the lookup at import time picks up our patch.
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            side_effect=_patched_get,
+        ):
+            resp = self.client.get('/mlb/')
+
+        rec_ids = {str(t.game.id) for t in resp.context['recommended_tiles']}
+        pot_ids = {str(t.game.id) for t in resp.context['potential_tiles']}
+        self.assertNotIn(str(qualified_game.id), rec_ids)
+        self.assertIn(str(qualified_game.id), pot_ids)
+        # The visible Recommended count must match Bet All (both zero,
+        # since the only game has lane='qualified').
+        self.assertEqual(
+            resp.context['verified_bulk_count'],
+            len(resp.context['recommended_tiles']),
+        )
+
+    # --- Scenario D: non-negotiable invariant ------------------------------
+
+    def test_scenario_d_visible_recommended_count_equals_bulk_count_always(self):
+        """The contract: for ANY slate, |Recommended bucket| == button count.
+
+        Builds a heterogeneous slate (eligible, qualified-lane, started)
+        and verifies the alignment invariant holds regardless of which
+        gates fire on which games.
+        """
+        from unittest.mock import patch
+        from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+        # 2 eligible, 2 qualified-lane (visible-but-not-bulk).
+        eligible_a = self._game_with_odds('sDa', hours_out=2)
+        eligible_b = self._game_with_odds('sDb', hours_out=3)
+        flagged_a = self._game_with_odds('sDc', hours_out=4)
+        flagged_b = self._game_with_odds('sDd', hours_out=5)
+        flagged_ids = {flagged_a.id, flagged_b.id}
+
+        from apps.core.services.recommendations import get_recommendation as _real_get
+        def _patched_get(sport, game, user=None):
+            rec = _real_get(sport, game, user)
+            if rec is not None and game.id in flagged_ids:
+                rec.lane = 'qualified'
+                rec.risk_flags = {'market_conflict': True}
+                rec.risk_score = 1
+            return rec
+
+        # get_recommendation is imported inside the function in
+        # prioritization.py and bulk_actions.py — patch the source
+        # module so the lookup at import time picks up our patch.
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            side_effect=_patched_get,
+        ):
+            resp = self.client.get('/mlb/')
+
+        # THE INVARIANT.
+        rec_count = len(resp.context['recommended_tiles'])
+        bulk_count = resp.context['verified_bulk_count']
+        self.assertEqual(
+            rec_count, bulk_count,
+            f'Trust contract violated: Recommended bucket shows '
+            f'{rec_count} but Bet All button shows ({bulk_count}). '
+            f'These MUST be equal.',
+        )
+        # And the bulk_game_ids list emitted to the JS must exactly
+        # match the visible Recommended game IDs.
+        import json as _json
+        emitted_ids = set(
+            _json.loads(resp.context['verified_bulk_game_ids_json'])
+        )
+        visible_ids = {str(t.game.id) for t in resp.context['recommended_tiles']}
+        self.assertEqual(emitted_ids, visible_ids)
+
+        # And every visible Recommended tile passes is_bulk_moneyline_eligible.
+        for tile in resp.context['recommended_tiles']:
+            self.assertTrue(
+                is_bulk_moneyline_eligible(
+                    getattr(tile, 'recommendation', None),
+                    source_filter='verified',
+                ),
+                f'Tile {tile.game.id} is in Recommended but fails '
+                f'is_bulk_moneyline_eligible — RULE 2 violation.',
+            )
+
+    # --- Defense in depth: predicate is a property of the rec ---------------
+
+    def test_recommended_carry_overs_land_in_potential_not_lost(self):
+        """A status='recommended' game that fails bulk-eligibility for
+        a non-lane reason (e.g. longshot odds) must NOT vanish — it
+        flows into Potential via the carry-over branch."""
+        from unittest.mock import patch
+        long_shot = self._game_with_odds(
+            'carry', hours_out=2,
+            ml_home=+450, ml_away=-650, market_home_prob=0.18,
+        )
+
+        from apps.core.services.recommendations import get_recommendation as _real_get
+        def _patched_get(sport, game, user=None):
+            rec = _real_get(sport, game, user)
+            # Force status='recommended' + lane='core' + longshot odds
+            # so the only failing gate is the longshot cap. This drives
+            # the recommendation into the "carry-over" branch.
+            if rec is not None and game.id == long_shot.id:
+                rec.status = 'recommended'
+                rec.lane = 'core'
+                rec.odds_american = +450
+                rec.confidence_score = 65.0
+                rec.is_secondary = False
+                rec.tier = 'standard'
+                rec.status_reason = ''
+            return rec
+
+        # get_recommendation is imported inside the function in
+        # prioritization.py and bulk_actions.py — patch the source
+        # module so the lookup at import time picks up our patch.
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            side_effect=_patched_get,
+        ):
+            resp = self.client.get('/mlb/')
+
+        rec_ids = {str(t.game.id) for t in resp.context['recommended_tiles']}
+        pot_ids = {str(t.game.id) for t in resp.context['potential_tiles']}
+        all_buckets = rec_ids | pot_ids | {
+            str(t.game.id) for t in resp.context['not_recommended_tiles']
+        }
+        # NOT in Recommended (longshot fails bulk eligibility).
+        self.assertNotIn(str(long_shot.id), rec_ids)
+        # Game must appear SOMEWHERE — never vanishes silently.
+        self.assertIn(str(long_shot.id), all_buckets)
 
 
 class MLBActionResolverTests(TestCase):

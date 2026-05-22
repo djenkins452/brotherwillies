@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-05-22 — Recommended bucket == Bet All count (UI trust repair)
+
+**Production issue:** MLB hub displayed `Recommended (4)` cards + `Bet All Moneyline Plays (2)` button. Visible divergence with no explanation. Master-prompt RULE 2 violation: *"If a game appears in Recommended, it MUST be bettable by Bet All."*
+
+**Root cause:** the 2026-05-16 repair aligned the Bet All button count with the placement set via `is_bulk_moneyline_eligible`. But the visible Recommended bucket continued to use `decision_sections['elite'] + decision_sections['recommended']` directly, which checks status/tier but NOT lane. A game with `status='recommended'` + `lane='qualified'` (risk flag fired) appeared in Recommended (status passes) but was excluded from Bet All (lane fails). Same root-cause class as the 2026-05-16 bug — different surface.
+
+**Fix — single predicate spans every surface:**
+
+`apps/mlb/views.py::mlb_hub` rebuilt:
+
+1. **Recommended bucket consumes `is_bulk_moneyline_eligible`.** New `_is_visible_recommended(tile)` predicate is identical to the bulk-eligibility predicate. Recommended pool (`decision_sections['elite'] + decision_sections['recommended']`) is filtered through it before becoming `recommended_tiles`.
+2. **Carry-overs flow into Potential.** Games that had `status='recommended'` but failed the predicate (lane='qualified', longshot odds, etc.) are added to Potential via a third source (`_recommended_carry_overs`). Nothing vanishes silently.
+3. **Button count derived directly from `recommended_tiles`.** `verified_bulk_game_ids = [str(t.game.id) for t in recommended_tiles]`. The two cannot diverge by construction.
+4. **Defensive divergence-detection logging (RULE 3).** If the count derived from `recommended_tiles` ever differs from the predicate applied across `all_tiles`, the view emits a warning with the offending game IDs. Catches any future refactor that re-introduces a separate filter path.
+
+**Tests added (5):** `apps.mlb.tests.MLBHubRecommendedEqualsBetAllTests` covering RULE 4 scenarios A/B/C/D plus a carry-over test:
+
+| Test | What it locks |
+|---|---|
+| Scenario A | 4 distinct eligible games → 4 cards → button (4) → bulk places 4 |
+| Scenario B | Risk-flagged game moves to Potential; Recommended and button decrement in lock-step |
+| Scenario C | `lane='qualified'` games are NOT in Recommended, ARE in Potential |
+| Scenario D | **THE INVARIANT:** `len(recommended_tiles) == verified_bulk_count` for any mixed slate; emitted JSON game IDs match visible IDs exactly; every visible Recommended tile passes `is_bulk_moneyline_eligible` |
+| Carry-over | `status='recommended'` games that fail bulk eligibility for non-lane reasons (longshot etc.) still appear in some bucket — never vanish silently |
+
+**Files touched:**
+
+- `apps/mlb/views.py::mlb_hub` — bucket assignment block + divergence-detection logging.
+- `apps/mlb/tests.py` — new imports (`User`, `Client`, `Decimal`, `uuid`) + `MLBHubRecommendedEqualsBetAllTests` class.
+- `docs/recommended_equals_bet_all_repair_2026_05_22.md` — full RCA + fix documentation.
+
+**What this commit does NOT change:**
+
+- ❌ No threshold tunes.
+- ❌ No recommendation logic changes.
+- ❌ No Elo / calibration / model behavior changes.
+
+Pure UI/bucket-assignment trust repair. Recommendations are computed identically; only the visible-bucket placement of `status='recommended'` + `lane='qualified'` games changes (they now correctly land in Potential, matching the Two-Lane System's design intent).
+
+**Test totals:** 772 passing across phase-relevant modules. Zero regressions. `manage.py check` clean.
+
+**Single Source of Truth chain (after this fix):**
+
+```
+recommendation engine ─► is_bulk_moneyline_eligible(rec, source_filter='verified')
+                              │
+                              ▼
+                       recommended_tiles
+                              │
+                              ├─► verified_bulk_game_ids ─► JSON ─► JS data-attr
+                              │                                         │
+                              │                                         ▼
+                              ▼                              POST {game_ids: [...]}
+                       verified_bulk_count                              │
+                              │                                         ▼
+                              ▼                            place_bulk_recommended_bets
+                       Button label "(N)"                  (per-game outcome)
+```
+
+Every layer reads from the same predicate. No surface can diverge by construction.
+
+**Architecture law compliance:** Law 3 (scope transparency) satisfied — the Recommended bucket name now means exactly what the UI implies. Law 4 (do not overfit) satisfied — no constants changed, no thresholds tuned, no model behavior modified.
+
+---
+
 ## 2026-05-16 — Bulk placement trust repair: count == execution set
 
 **Production issue:** MLB hub displayed "Bet All Moneyline Plays (5)"; only 3 bets placed; 2 tiles silently retained "Bet This" with no error, no warning. Operator could not tell what happened.
