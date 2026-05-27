@@ -1827,7 +1827,11 @@ class BulkPlacementTrustRepairTests(TestCase):
         return t1, t2
 
     def _game_with_odds(self, suffix, *, hours_out=2, status='scheduled',
-                       ml_home=-160, ml_away=140, market_home_prob=0.55):
+                       ml_home=-140, ml_away=120, market_home_prob=0.55):
+        # 2026-05-22 fixture update: moneylines widened from -160/+140
+        # to -140/+120 after MARKET_BLEND_WEIGHT bumped 0.40 → 0.55.
+        # Heavier blend pulled the prior fixture below MIN_EDGE.
+        # Edge under new blend: ~7.6pp (strong tier). Intent preserved.
         t1, t2 = self._team_pair(suffix)
         game = self.MLBGame.objects.create(
             home_team=t1, away_team=t2,

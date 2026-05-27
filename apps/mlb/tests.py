@@ -848,7 +848,9 @@ class MLBHubRecommendedEqualsBetAllTests(TestCase):
 
     def _game_with_odds(
         self, suffix, *,
-        hours_out=2, ml_home=-160, ml_away=140, market_home_prob=0.55,
+        # 2026-05-22 fixture update: moneylines widened from -160/+140
+        # to -140/+120 after MARKET_BLEND_WEIGHT bumped 0.40 → 0.55.
+        hours_out=2, ml_home=-140, ml_away=120, market_home_prob=0.55,
         home_rating=88, away_rating=22,
     ):
         from apps.mlb.models import Game as MLBGame, OddsSnapshot as MLBOdds
@@ -1738,11 +1740,15 @@ class MLBConfidenceTests(TestCase):
         from apps.mlb.models import OddsSnapshot
         from apps.mlb.services.prioritization import build_signals
         g = self._game('c4')
-        # Model prob ~0.5 (equal ratings), market 0.25 → 0.25 delta, well past
-        # the LINE_VALUE_STRONG threshold.
+        # Model prob ~0.5 (equal ratings), market 0.15 → big delta even
+        # after the heavier 2026-05-22 market blend (0.55). Caps the
+        # line-value contribution at its max → confidence lifted past 0.7.
+        # (Under blend 0.40 the prior fixture used market=0.25; the 2026-05-22
+        # tighten reduced post-blend discrepancy, so the fixture was widened
+        # to maintain the test's "big line value" intent.)
         OddsSnapshot.objects.create(
             game=g, captured_at=timezone.now(),
-            market_home_win_prob=0.25, spread=1.0,
+            market_home_win_prob=0.15, spread=1.0,
         )
         s = build_signals(g)
         self.assertGreaterEqual(s.confidence, 0.7)
@@ -2792,11 +2798,13 @@ class BulkActionsSourceFilterTests(TestCase):
         for i in range(3):
             # Wide rating gap so model has clear edge → bet lands as
             # 'recommended' rather than no_rec.
+            # 2026-05-22 fixture update: gap widened 80/40 → 90/30
+            # after MARKET_BLEND_WEIGHT bumped 0.40 → 0.55.
             home = Team.objects.create(
-                name=f'Home {i}', slug=f'home-{i}', conference=conf, rating=80.0,
+                name=f'Home {i}', slug=f'home-{i}', conference=conf, rating=90.0,
             )
             away = Team.objects.create(
-                name=f'Away {i}', slug=f'away-{i}', conference=conf, rating=40.0,
+                name=f'Away {i}', slug=f'away-{i}', conference=conf, rating=30.0,
             )
             game = Game.objects.create(
                 home_team=home, away_team=away,
@@ -2880,13 +2888,15 @@ class HubTemplateSourceAwareTests(TestCase):
         def mkgame(label, hours_ahead):
             # Wide rating gap so the model produces a clear edge → the
             # bet lands in 'recommended' status rather than no_rec/edge_too_low.
+            # 2026-05-22 fixture update: gap widened 80/40 → 90/30 after
+            # MARKET_BLEND_WEIGHT bumped 0.40 → 0.55.
             home = Team.objects.create(
                 name=f'Home {label}', slug=f'home-{label}',
-                conference=conf, rating=80.0,
+                conference=conf, rating=90.0,
             )
             away = Team.objects.create(
                 name=f'Away {label}', slug=f'away-{label}',
-                conference=conf, rating=40.0,
+                conference=conf, rating=30.0,
             )
             return Game.objects.create(
                 home_team=home, away_team=away,
@@ -4895,13 +4905,16 @@ class CorrectionRecommendationSafetyTests(TestCase):
         conf = MLBConf.objects.first() or MLBConf.objects.create(
             name='Corr', slug='corr',
         )
+        # 2026-05-22 fixture update: gap widened 80/40 → 90/30 after
+        # MARKET_BLEND_WEIGHT bumped 0.40 → 0.55. The prior gap pulled
+        # blended prob just below MIN_PROBABILITY=0.60 for Case 2.
         self.high_rated = MLBTeam.objects.create(
             name='High', slug='corr-high', conference=conf,
-            rating=80, source='mlb_stats_api', external_id='corr-high',
+            rating=90, source='mlb_stats_api', external_id='corr-high',
         )
         self.low_rated = MLBTeam.objects.create(
             name='Low', slug='corr-low', conference=conf,
-            rating=40, source='mlb_stats_api', external_id='corr-low',
+            rating=30, source='mlb_stats_api', external_id='corr-low',
         )
 
     def _make_game(self, **odds_kwargs):

@@ -82,7 +82,13 @@ class CommandCenterHealthBandTests(TestCase):
 
     def _seed_bet(self, *, clv_direction='', clv_cents=None, result='loss'):
         """Build a settled moneyline bet placed YESTERDAY local-tz with
-        the given CLV signal. Tests the health-rule branches."""
+        the given CLV signal. Tests the health-rule branches.
+
+        2026-05-16 evaluation-integrity: CLV math requires
+        odds_source='odds_api'. Fixture must set it explicitly so
+        the source filter doesn't exclude these test bets from CLV
+        sample (which would make health_status='unknown').
+        """
         from apps.mockbets.models import MockBet
         bet = MockBet.objects.create(
             user=self.user, sport='mlb', bet_type='moneyline',
@@ -97,6 +103,7 @@ class CommandCenterHealthBandTests(TestCase):
             recommendation_confidence=Decimal('60.0'),
             expected_edge=Decimal('5.0'),
             clv_cents=clv_cents,
+            odds_source='odds_api',
             clv_direction=clv_direction,
             closing_odds_american=-110 if clv_direction else None,
         )

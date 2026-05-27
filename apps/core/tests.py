@@ -359,7 +359,10 @@ class DecisionRuleTests(TestCase):
 
     def test_recommendation_dataclass_carries_status(self):
         """Recommendations built by get_recommendation include the computed status."""
-        game = _make_mlb_game(home_rating=80, away_rating=20)
+        # 2026-05-22 fixture update: rating gap widened 80/20 → 85/15
+        # after MARKET_BLEND_WEIGHT bumped 0.40 → 0.55. The prior gap
+        # produced a blended prob just below MIN_PROBABILITY=0.60.
+        game = _make_mlb_game(home_rating=85, away_rating=15)
         OddsSnapshot.objects.create(
             game=game, captured_at=timezone.now(),
             market_home_win_prob=0.5, moneyline_home=-110, moneyline_away=-110,
@@ -1538,9 +1541,10 @@ class RecommendationTrustGuardrailTests(TestCase):
     must be unchanged across all three paths."""
 
     def setUp(self):
-        # Heavy home favorite so the model edge naturally clears the
-        # ELITE threshold — tier='elite' before guardrail intervenes.
-        self.game = _make_mlb_game(home_rating=85, away_rating=45)
+        # 2026-05-22 fixture update: gap widened 85/45 → 90/40 after
+        # MARKET_BLEND_WEIGHT bumped 0.40 → 0.55. Prior gap produced
+        # blended prob just below MIN_PROBABILITY=0.60.
+        self.game = _make_mlb_game(home_rating=90, away_rating=40)
 
     def _seed_snapshot(self, *, source, is_derived=False):
         return OddsSnapshot.objects.create(

@@ -31,16 +31,17 @@ from apps.core.services.recommendations import (
 
 class ProbabilityShrinkTests(TestCase):
     """Spec Task 1 (2026-05-06): weight bumped 0.30 → 0.40.
-    final_prob = model * 0.6 + market * 0.4"""
+    2026-05-22 Roadmap B Step 1: weight bumped 0.40 → 0.55.
+    final_prob = model * 0.45 + market * 0.55"""
 
     def test_constants_match_spec(self):
-        self.assertEqual(MARKET_BLEND_WEIGHT, 0.40)
-        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.40)
+        self.assertEqual(MARKET_BLEND_WEIGHT, 0.55)
+        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.55)
 
     def test_final_prob_is_weighted_average(self):
-        # Spec: final_prob = model * 0.6 + market * 0.4
+        # Spec (post-2026-05-22): final_prob = model * 0.45 + market * 0.55
         result = blend_with_market(0.80, 0.50)
-        self.assertAlmostEqual(result, 0.80 * 0.60 + 0.50 * 0.40, places=6)
+        self.assertAlmostEqual(result, 0.80 * 0.45 + 0.50 * 0.55, places=6)
 
     def test_final_prob_lies_between_model_and_market(self):
         for model, market in [(0.80, 0.50), (0.40, 0.55), (0.65, 0.65), (0.30, 0.45)]:

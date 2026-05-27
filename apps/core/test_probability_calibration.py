@@ -24,12 +24,14 @@ class BlendWithMarketTests(TestCase):
         # No-odds slate: nothing to anchor to, model wins.
         self.assertAlmostEqual(blend_with_market(0.70, None), 0.70)
 
-    def test_default_weight_is_40_percent(self):
-        # 2026-05-06: weight bumped 0.30 → 0.40.
-        # 0.70 * 0.60 + 0.50 * 0.40 = 0.420 + 0.200 = 0.620
+    def test_default_weight_is_55_percent(self):
+        # 2026-05-22 Roadmap B Step 1: weight bumped 0.40 → 0.55 per the
+        # Full Model Failure Review evidence base (29-bet Model Clean,
+        # CLV+ 31%, 8+pp bucket collapse, market disagreeing 75%).
+        # 0.70 * 0.45 + 0.50 * 0.55 = 0.315 + 0.275 = 0.590
         self.assertAlmostEqual(
             blend_with_market(0.70, 0.50),
-            0.620,
+            0.590,
             places=4,
         )
 
@@ -42,9 +44,10 @@ class BlendWithMarketTests(TestCase):
         )
 
     def test_weight_capped_at_cap(self):
-        # 2026-05-03: cap bumped 0.20 → 0.30. Caller asks for 50% — clamped.
+        # 2026-05-22: cap is now 0.55. Caller asks for 0.80 weight — that's
+        # above the cap and must be clamped to MARKET_BLEND_WEIGHT_CAP.
         self.assertAlmostEqual(
-            blend_with_market(0.80, 0.50, weight=0.50),
+            blend_with_market(0.80, 0.50, weight=0.80),
             blend_with_market(0.80, 0.50, weight=MARKET_BLEND_WEIGHT_CAP),
             places=6,
         )
@@ -100,11 +103,11 @@ class ClampProbabilityTests(TestCase):
 class FinalizeWinProbTests(TestCase):
 
     def test_blend_then_clamp_order_matters(self):
-        # 2026-05-06 (weight=0.40): blend 0.92*0.60 + 0.55*0.40 = 0.772.
-        # 0.772 is within [PROB_MIN, PROB_MAX] so the clamp leaves it
+        # 2026-05-22 (weight=0.55): blend 0.92*0.45 + 0.55*0.55 = 0.7165.
+        # 0.7165 is within [PROB_MIN, PROB_MAX] so the clamp leaves it
         # unchanged — proving the blend already pulled the prob in range
         # without needing the clamp to fire.
-        self.assertAlmostEqual(finalize_win_prob(0.92, 0.55), 0.772, places=4)
+        self.assertAlmostEqual(finalize_win_prob(0.92, 0.55), 0.7165, places=4)
 
     def test_no_market_clamp_only(self):
         # Without market data the function reduces to clamp.
@@ -112,11 +115,11 @@ class FinalizeWinProbTests(TestCase):
         self.assertAlmostEqual(finalize_win_prob(0.05, None), 1.0 - PROB_MAX)
 
     def test_blend_can_keep_in_range(self):
-        # 2026-05-06 (weight=0.40): blend 0.86*0.60 + 0.55*0.40 = 0.736.
+        # 2026-05-22 (weight=0.55): blend 0.86*0.45 + 0.55*0.55 = 0.6895.
         # Below MAX so no clamp applies — the blend alone pulled it back
         # into range.
         result = finalize_win_prob(0.86, 0.55)
-        self.assertAlmostEqual(result, 0.86 * 0.60 + 0.55 * 0.40, places=4)
+        self.assertAlmostEqual(result, 0.86 * 0.45 + 0.55 * 0.55, places=4)
         self.assertLess(result, PROB_MAX)
 
     def test_aligned_inputs_pass_through_in_range(self):
@@ -128,10 +131,11 @@ class ConstantsTests(TestCase):
     """Sanity-check the published constants match the spec."""
 
     def test_market_blend_weight_within_spec(self):
-        # 2026-05-06 calibration tighten: bumped 0.30 → 0.40.
-        self.assertEqual(MARKET_BLEND_WEIGHT, 0.40)
-        # 2026-05-06 calibration tighten: cap bumped 0.30 → 0.40.
-        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.40)
+        # 2026-05-22 Roadmap B Step 1: bumped 0.40 → 0.55. Single-variable
+        # change per the Full Model Failure Review + adversarial second
+        # pass. See probability_calibration.py for the full Evidence block.
+        self.assertEqual(MARKET_BLEND_WEIGHT, 0.55)
+        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.55)
 
     def test_prob_bounds_within_spec(self):
         self.assertEqual(PROB_MIN, 0.52)

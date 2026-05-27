@@ -31,13 +31,43 @@ the lane system, or Elo update logic.
 from typing import Optional
 
 
-# Market anchor. 2026-05-03 bumped 0.15 → 0.30. 2026-05-06 bumped further
-# 0.30 → 0.40 after 30-day evaluation showed CLV+ rate stuck near 31% and
-# edge distribution still skewed toward 8%+ buckets. Heavier shrink should
-# pull the model closer to consensus on the picks where it disagrees most.
-# Reversible: drop back to 0.30 (or 0.15) to restore prior behavior.
-MARKET_BLEND_WEIGHT = 0.40
-MARKET_BLEND_WEIGHT_CAP = 0.40
+# Market anchor.
+#
+# Tuning history:
+#   2026-05-03: 0.15 → 0.30. First calibration tighten.
+#   2026-05-06: 0.30 → 0.40. CLV+ stuck near 31%; edges still skewed toward
+#               8%+ buckets. Heavier shrink intended to pull model toward
+#               consensus on disagreement picks.
+#   2026-05-22: 0.40 → 0.55. Roadmap B Step 1 of the Full Model Failure
+#               Review + adversarial second pass. Single-variable change.
+#
+# Evidence basis for 0.55 (per Law 4):
+#   Sample: 29 settled bets (post Phase A Model Clean scope), record 11-18,
+#           ROI -33.6%, CLV+ 31%, 65-70% confidence bucket hitting at 47%.
+#   Window: 2026-05-14 → 2026-05-22 (Model Clean evaluation window).
+#   Mechanism: the model is a 2-feature linear architecture (team rating
+#              + pitcher rating + HFA) competing against a market that
+#              prices many more inputs. Empirical CLV+ at 31% with the
+#              market disagreeing on ~75% of picks indicates the model is
+#              losing the leading-indicator race. Reducing the model's
+#              weight in the final probability from 60% to 45% pulls picks
+#              toward the more-informed source.
+#   Predicted effect: CLV+ rate 31% → ~38-42% over 2-week window.
+#                     Recommendation volume drop ~30%. ROI move from -33%
+#                     toward breakeven by Week 4.
+#   Rollback trigger: CLV+ rate below 33% sustained for 7 days OR Health
+#                     Score composite drops > 5 points from pre-change
+#                     baseline. Either condition: revert to 0.40 in one
+#                     commit, capture post-rollback snapshot.
+#   Roadmap discipline: Step 1 of Roadmap B is THIS change only. No
+#                       co-changes (no edge band, no market-disagreement
+#                       gate, no clamp retune, no new signals, no tier
+#                       logic). Step 2 evaluated only after 2-week
+#                       observation window.
+# Reversible: set to 0.40 (or 0.30 / 0.15 for earlier states) to restore
+# prior behavior. No DB migration required; constant change only.
+MARKET_BLEND_WEIGHT = 0.55
+MARKET_BLEND_WEIGHT_CAP = 0.55
 
 # Soft caps on the picked side's probability. Picked-side prob is
 # `max(home_prob, 1 - home_prob)`. From the home_prob perspective:

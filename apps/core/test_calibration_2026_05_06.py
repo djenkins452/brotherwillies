@@ -35,9 +35,12 @@ from apps.core.services.recommendations import (
 class CalibrationConstantsTests(TestCase):
     """The new constant values are the headline changes."""
 
-    def test_market_blend_weight_is_40_percent(self):
-        self.assertEqual(MARKET_BLEND_WEIGHT, 0.40)
-        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.40)
+    def test_market_blend_weight_matches_current_spec(self):
+        # Tuning trail: 0.30 (2026-05-03) → 0.40 (2026-05-06) →
+        # 0.55 (2026-05-22 Roadmap B Step 1). Single-variable change per
+        # the Full Model Failure Review + adversarial second pass.
+        self.assertEqual(MARKET_BLEND_WEIGHT, 0.55)
+        self.assertEqual(MARKET_BLEND_WEIGHT_CAP, 0.55)
 
     def test_min_edge_is_6pp(self):
         self.assertEqual(MIN_EDGE, 6.0)
@@ -57,19 +60,24 @@ class CalibrationConstantsTests(TestCase):
 
 
 class BlendWith40PercentWeightTests(TestCase):
-    """final_prob = model * 0.6 + market * 0.4"""
+    """Class name preserved for git-blame continuity. Asserts the
+    CURRENT blend weight semantics (0.55 as of 2026-05-22), not 0.40.
+
+    final_prob = model * 0.45 + market * 0.55"""
 
     def test_weighted_average_at_default_weight(self):
-        # 0.80 model, 0.50 market → 0.80*0.60 + 0.50*0.40 = 0.480 + 0.200 = 0.680.
-        self.assertAlmostEqual(blend_with_market(0.80, 0.50), 0.680, places=6)
+        # 0.80 model, 0.50 market → 0.80*0.45 + 0.50*0.55 = 0.360 + 0.275 = 0.635.
+        self.assertAlmostEqual(blend_with_market(0.80, 0.50), 0.635, places=6)
 
     def test_blend_pulls_extreme_model_toward_market(self):
-        # Old (0.30 W): 0.92 model + 0.50 market → 0.794
-        # New (0.40 W): 0.92 model + 0.50 market → 0.752
-        # The shrink is heavier — exactly the calibration intent.
+        # Tuning trail (model=0.92, market=0.50):
+        #   0.30 weight: → 0.794
+        #   0.40 weight: → 0.752
+        #   0.55 weight: → 0.6890
+        # Each step pulls the model harder toward the market consensus.
         result = blend_with_market(0.92, 0.50)
-        self.assertAlmostEqual(result, 0.752, places=6)
-        self.assertLess(result, 0.794, 'new blend must pull harder than the prior 0.30 weight')
+        self.assertAlmostEqual(result, 0.689, places=3)
+        self.assertLess(result, 0.752, 'new 0.55 blend must pull harder than the prior 0.40 weight')
 
 
 class ShortFavoriteDisciplineTests(TestCase):

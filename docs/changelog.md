@@ -2,6 +2,74 @@
 
 ---
 
+## 2026-05-22 — Roadmap B Step 1: MARKET_BLEND_WEIGHT 0.40 → 0.55
+
+**Single-variable constant change.** No other production code modified. Per the adversarial second-pass review's discipline: one variable at a time, ≥ 2 weeks observation between steps, no optimization stacking.
+
+### Evidence block (Law 4)
+
+- **Sample:** 29 settled bets (post-Phase-A Model Clean scope) + the 44-bet Model Clean sample from 2026-05-16.
+- **Window:** 2026-05-14 → 2026-05-22.
+- **Effect measured:** record 11–18, win rate 37.9%, ROI -33.6%, CLV+ 31%, 65–70% confidence bucket hitting at 47% (18pp under-prediction), 8+pp edge bucket "collapsing," market disagreeing on ~75% of picks.
+- **Mechanism:** the model is a 2-feature linear architecture (team rating + pitcher rating + HFA) competing against a market that prices many more inputs (bullpen, lineup vs handedness, recent form, late lineup, sharp money flow, weather, ballpark, ump). CLV+ at 31% with structural market disagreement indicates the model is losing the leading-indicator race. Reducing the model's weight in the final probability from 60% to 45% pulls picks toward the more-informed source.
+- **Predicted effect:** CLV+ rate 31% → ~38–42% over 2-week window. Recommendation volume drop ~30%. ROI move from -33% toward breakeven by Week 4.
+- **Health Score before:** unknown (Health Score not yet captured in current production state).
+- **Rollback trigger:** CLV+ rate below 33% sustained for 7 days OR Health Score composite drops > 5 points from pre-change baseline. Either condition → revert to 0.40 in one commit, capture post-rollback snapshot.
+
+### Files touched
+
+| File | Change |
+|---|---|
+| `apps/core/services/probability_calibration.py` | `MARKET_BLEND_WEIGHT` 0.40 → 0.55; `MARKET_BLEND_WEIGHT_CAP` 0.40 → 0.55. Inline Evidence block + tuning trail + rollback trigger documented. |
+| `apps/core/test_probability_calibration.py` | Updated constant assertions + recomputed weighted-average math for new blend value. |
+| `apps/core/test_calibration_2026_05_03.py` | Updated constant + recomputed weighted-average math. |
+| `apps/core/test_calibration_2026_05_06.py` | Updated constant assertion (renamed `is_40_percent` → `matches_current_spec`) + recomputed blend math + updated extreme-blend example to show full tuning trail. |
+| `apps/core/tests.py` | Two fixture rating-gap updates (80/20 → 85/15, 85/45 → 90/40) to keep test intent (rec is `recommended`) intact under heavier blend. |
+| `apps/core/test_command_center_home.py` | Added `odds_source='odds_api'` to `_seed_bet` fixture (pre-existing breakage from 2026-05-16 CLV source filter, caught by today's broader sweep). |
+| `apps/mockbets/tests.py` | Updated `_game_with_odds` fixture default moneylines -160/+140 → -140/+120. |
+| `apps/mlb/tests.py` | Three fixture rating-gap updates (80/40 → 90/30) + matching moneylines + market_home_win_prob 0.25 → 0.15 in line-value test, all to preserve test intent under heavier blend. |
+
+### What this commit does NOT change
+
+- ❌ No threshold tunes (`MIN_EDGE`, `MIN_PROBABILITY_FOR_RECOMMENDED`, `MAX_ABS_ODDS_FOR_RECOMMENDED` unchanged).
+- ❌ No clamp retune (`PROB_MIN`, `PROB_MAX` unchanged).
+- ❌ No new gates (no market-disagreement gate, no edge band).
+- ❌ No new predictive signals.
+- ❌ No Elo changes.
+- ❌ No tier logic changes.
+- ❌ No bulk-placement architecture changes.
+- ❌ No `EXTREME_DISAGREEMENT_GAP` change (still 0.12 post-blend; note: under the new 0.55 blend, this no longer literally equals "0.20 raw" — the disagreement cap now corresponds to ~26.7pp raw disagreement instead of the original 20pp).
+
+The only behavior change is: under the new 0.55 blend, model probabilities pull harder toward de-vigged market consensus. Fewer recommendations qualify; the ones that do will have closer agreement with the market on the model's confidence side.
+
+### Test totals
+
+- **1030 tests passing** across phase-relevant modules. Zero regressions in fundamental behavior; fixture updates preserve test intent.
+- `manage.py check` clean.
+
+### Observation protocol (Phase E continued)
+
+- Day 1 post-deploy: capture `RecommendationHealthSnapshot` tagged `post-blend-0.55 day 1`.
+- Day 7 / Day 14: same. The expected trajectory:
+  - CLV+ rate trending up (33%+ at Day 7, 38%+ at Day 14).
+  - 8+pp edge bucket shrinking (volume drop).
+  - Recommendation volume down ~30%.
+  - ROI moving toward breakeven (not necessarily positive in 2 weeks).
+- Decision at Day 14:
+  - **Lock in** if CLV+ ≥ 38%, no rollback trigger fired.
+  - **Revert** if CLV+ ≤ 30% or any rollback trigger fired.
+  - **Extend observation** if 30–38% (signal directionally right but small sample).
+- **No other constant changes ship during this window.** Step 2 (market-agreement gate or 0.65 blend bump) is gated on Step 1's evidence.
+
+### Architecture law compliance
+
+- **Law 1** (signals are nudges): N/A — blend weight is a calibration constant, not a signal weight.
+- **Law 2** (no signal without eval slice): N/A — no new signal added.
+- **Law 3** (scope transparency): N/A — no analytics surfaces changed.
+- **Law 4** (do not overfit): satisfied. Single variable, mechanism documented, sample / window / effect / rollback trigger named in commit message and inline Evidence block. Roadmap B's "one change every 2 weeks" cadence is the explicit anti-stacking discipline.
+
+---
+
 ## 2026-05-22 — Recommended bucket == Bet All count (UI trust repair)
 
 **Production issue:** MLB hub displayed `Recommended (4)` cards + `Bet All Moneyline Plays (2)` button. Visible divergence with no explanation. Master-prompt RULE 2 violation: *"If a game appears in Recommended, it MUST be bettable by Bet All."*
