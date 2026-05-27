@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Method Replay | Brother Willies{% endblock %}
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <p style="color: #888; font-size: 0.85rem; margin-bottom: 0.75rem;">
+        <a href="{% url 'analytics:backtest' %}" style="color: #6cb;">← Backtest</a>
+        ·
+        <a href="{% url 'analytics:shadow_review' %}" style="color: #6cb;">Shadow Review</a>
+        ·
+        <a href="{% url 'analytics:elo_monitor' %}" style="color: #6cb;">Elo Monitor</a>
+        ·
+        <a href="{% url 'analytics:health_score' %}" style="color: #6cb;">Health Score</a>
+    </p>
+
+    <h1 style="margin-bottom: 0.4rem;">Method Replay</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.25rem;">
+        Retrospective MLB moneyline backtest. Simulates "what would
+        Brother Willies have recommended over the past N days under
+        a candidate <code>MARKET_BLEND_WEIGHT</code>?" Strict
+        no-future-leakage by construction:
+        opening pre-game snapshot drives the simulated decision;
+        closing odds used <em>only</em> for CLV measurement after
+        the recommendation is generated; pre-game team Elo from
+        <code>TeamEloHistory.pre_rating</code>; outcome data feeds
+        the <em>analytics</em> table, never the decision. See
+        <code>docs/method_replay_2026_05_22.md</code> for the
+        leakage safeguards inventory.
+    </p>
+
+    {# ─── Filter bar ─── #}
+    <div class="card mb-1">
+        <form method="get" id="replay-filters">
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: end;">
+                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    <a href="?range=7d&weights={{ current_weights }}" class="btn btn-sm{% if current_range == '7d' %} btn-primary{% endif %}" style="font-size: 0.8rem;">Last 7 days</a>
+                    <a href="?range=30d&weights={{ current_weights }}" class="btn btn-sm{% if current_range == '30d' %} btn-primary{% endif %}" style="font-size: 0.8rem;">Last 30 days</a>
+                </div>
+                <div>
+                    <label class="text-sm" style="color: var(--accent);">From</label>
+                    <input type="date" name="date_from" value="{{ current_date_from }}" class="input-field" style="padding: 6px 8px; font-size: 0.85rem;">
+                </div>
+                <div>
+                    <label class="text-sm" style="color: var(--accent);">To</label>
+                    <input type="date" name="date_to" value="{{ current_date_to }}" class="input-field" style="padding: 6px 8px; font-size: 0.85rem;">
+                </div>
+                <div>
+                    <label class="text-sm" style="color: var(--accent);">Blend weights (comma-separated)</label>
+                    <input type="text" name="weights" value="{{ current_weights }}" class="input-field" style="padding: 6px 8px; font-size: 0.85rem; width: 140px;">
+                </div>
+                <div>
+                    <button type="submit" class="btn btn-sm btn-primary" style="font-size: 0.85rem;">Run Replay</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    {# ─── Headline ─── #}
+    <div class="card mb-1">
+        <div style="font-size: 0.95rem; color: #ccc;">
+            <strong>{{ result.window.from }} → {{ result.window.to }}</strong>
+            <span style="color: #888;">({{ result.window.days }} day{{ result.window.days|pluralize }})</span>
+            ·
+            <strong>{{ result.total_games_evaluable }}</strong> evaluable final games (status='final', both scores present)
+        </div>
+    </div>
+
+    {% if result.total_games_evaluable == 0 %}
+        <div class="card mb-1">
+            <div style="color: #888; padding: 0.6rem;">
+                No evaluable games in this window. Either no finalized games
+                exist, or odds snapshots are missing. Pick a wider range.
+            </div>
+        </div>
+    {% else %}
+        {# ─── Comparison table ─── #}
+        <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Comparison</h2>
+        <div class="card mb-1" style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 0.88rem; border-collapse: collapse;">
+                <thead>
+                    <tr style="color: #888; text-align: left; border-bottom: 1px solid #2a2a2a;">
+                        <th style="padding: 0.4rem 0.5rem;">Variant</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">Recs</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">W–L–P</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">Win %</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">ROI</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">Net P/L</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">Avg Edge</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">Avg CLV</th>
+                        <th style="padding: 0.4rem 0.5rem; text-align: right;">CLV+ %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in result.variants %}
+                    <tr style="border-bottom: 1px solid #1a1a1a;">
+                        <td style="padding: 0.4rem 0.5rem;"><strong>{{ v.label }}</strong></td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics.count }}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics.wins }}–{{ v.metrics.losses }}–{{ v.metrics.pushes }}{% if v.metrics.pending %} ({{ v.metrics.pending }} pending){% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.win_rate is not None %}{{ v.metrics.win_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right; color: {% if v.metrics.roi and v.metrics.roi > 0 %}#22c55e{% elif v.metrics.roi and v.metrics.roi < 0 %}#c33{% else %}#aaa{% endif %};">
+                            {% if v.metrics.roi is not None %}{{ v.metrics.roi|floatformat:1 }}%{% else %}—{% endif %}
+                        </td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right; color: {% if v.metrics.net_pl > 0 %}#22c55e{% elif v.metrics.net_pl < 0 %}#c33{% else %}#aaa{% endif %};">
+                            ${{ v.metrics.net_pl|floatformat:2 }}
+                        </td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.avg_edge %}{{ v.metrics.avg_edge|floatformat:2 }}pp{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.avg_clv is not None %}{{ v.metrics.avg_clv|floatformat:4 }}{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.positive_clv_rate is not None %}{{ v.metrics.positive_clv_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {# ─── Per-variant breakdowns ─── #}
+        {% for v in result.variants %}
+        <h3 style="font-size: 0.95rem; color: #aaa; margin: 1rem 0 0.4rem;">{{ v.label }} — segment breakdown</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 1rem;">
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem; font-size: 0.83rem;">
+                <div style="color: #888; text-transform: uppercase; font-size: 0.72rem;">Tier</div>
+                {% for tier, count in v.metrics.by_tier.items %}
+                    <div style="display: flex; justify-content: space-between;"><span>{{ tier }}</span><span>{{ count }}</span></div>
+                {% endfor %}
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem; font-size: 0.83rem;">
+                <div style="color: #888; text-transform: uppercase; font-size: 0.72rem;">Edge bucket</div>
+                {% for k, v2 in v.metrics.by_edge_bucket.items %}
+                    <div style="display: flex; justify-content: space-between;"><span>{{ k }}</span><span>{{ v2 }}</span></div>
+                {% endfor %}
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem; font-size: 0.83rem;">
+                <div style="color: #888; text-transform: uppercase; font-size: 0.72rem;">Confidence bucket</div>
+                {% for k, v2 in v.metrics.by_confidence_bucket.items %}
+                    <div style="display: flex; justify-content: space-between;"><span>{{ k }}%</span><span>{{ v2 }}</span></div>
+                {% endfor %}
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem; font-size: 0.83rem;">
+                <div style="color: #888; text-transform: uppercase; font-size: 0.72rem;">Odds type</div>
+                {% for k, v2 in v.metrics.by_odds_type.items %}
+                    <div style="display: flex; justify-content: space-between;"><span>{{ k }}</span><span>{{ v2 }}</span></div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+
+        {# ─── Diff between first two variants ─── #}
+        {% if result.diff_first_two %}
+        <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem; margin-top: 1.5rem;">Recommendation Diff: {{ result.variants.0.label }} vs {{ result.variants.1.label }}</h2>
+        <div class="card mb-1" style="font-size: 0.88rem;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;">
+                <div>
+                    <div style="color: #888;">In <strong>{{ result.variants.0.label }}</strong> only</div>
+                    <div style="font-size: 1.6rem; color: #c83;">{{ result.diff_first_two.a_only_count }}</div>
+                </div>
+                <div>
+                    <div style="color: #888;">In <strong>both</strong></div>
+                    <div style="font-size: 1.6rem; color: #6cb;">{{ result.diff_first_two.both_count }}</div>
+                </div>
+                <div>
+                    <div style="color: #888;">In <strong>{{ result.variants.1.label }}</strong> only</div>
+                    <div style="font-size: 1.6rem; color: #c83;">{{ result.diff_first_two.b_only_count }}</div>
+                </div>
+            </div>
+        </div>
+
+        {% if result.diff_first_two.a_only or result.diff_first_two.b_only %}
+        <h3 style="font-size: 0.95rem; color: #aaa; margin: 1rem 0 0.4rem;">Games only one variant recommended (first 10 each side)</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.83rem;">
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem;">
+                <div style="color: #c83; font-weight: 600;">Only in {{ result.variants.0.label }}</div>
+                {% for s in result.diff_first_two.a_only|slice:":10" %}
+                    <div style="border-top: 1px solid #222; padding: 0.3rem 0;">
+                        <div style="color: #ccc;">{{ s.game_label }}</div>
+                        <div style="color: #888;">pick: {{ s.pick_side }} {{ s.pick_odds }} · edge {{ s.edge_pp }}pp · prob {{ s.pick_prob|floatformat:3 }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+            <div style="background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0.6rem;">
+                <div style="color: #c83; font-weight: 600;">Only in {{ result.variants.1.label }}</div>
+                {% for s in result.diff_first_two.b_only|slice:":10" %}
+                    <div style="border-top: 1px solid #222; padding: 0.3rem 0;">
+                        <div style="color: #ccc;">{{ s.game_label }}</div>
+                        <div style="color: #888;">pick: {{ s.pick_side }} {{ s.pick_odds }} · edge {{ s.edge_pp }}pp · prob {{ s.pick_prob|floatformat:3 }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if result.diff_first_two.largest_prob_diffs %}
+        <h3 style="font-size: 0.95rem; color: #aaa; margin: 1rem 0 0.4rem;">Largest final_prob deltas (top 10)</h3>
+        <div class="card mb-1" style="font-size: 0.82rem; overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="color: #888; text-align: left; border-bottom: 1px solid #2a2a2a;">
+                        <th style="padding: 0.3rem 0.4rem;">Game</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">{{ result.variants.0.label }} prob</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">{{ result.variants.1.label }} prob</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">Δ prob</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">{{ result.variants.0.label }} edge</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">{{ result.variants.1.label }} edge</th>
+                        <th style="padding: 0.3rem 0.4rem; text-align: right;">Δ edge</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in result.diff_first_two.largest_prob_diffs %}
+                    <tr style="border-bottom: 1px solid #1a1a1a;">
+                        <td style="padding: 0.3rem 0.4rem; color: #ccc;">{{ d.game_label }}</td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right;">{{ d.a_final_prob|floatformat:4 }} <span style="color: #666;">({{ d.a_status }})</span></td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right;">{{ d.b_final_prob|floatformat:4 }} <span style="color: #666;">({{ d.b_status }})</span></td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right; color: {% if d.delta > 0 %}#22c55e{% else %}#c83{% endif %};">{{ d.delta|floatformat:4 }}</td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right;">{{ d.a_edge_pp|floatformat:2 }}pp</td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right;">{{ d.b_edge_pp|floatformat:2 }}pp</td>
+                        <td style="padding: 0.3rem 0.4rem; text-align: right; color: {% if d.edge_delta > 0 %}#22c55e{% else %}#c83{% endif %};">{{ d.edge_delta|floatformat:2 }}pp</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        {% endif %}
+    {% endif %}
+
+    <p style="color: #666; font-size: 0.78rem; margin-top: 2rem; border-top: 1px solid #2a2a2a; padding-top: 0.6rem;">
+        Analysis only. This page does not modify any recommendation,
+        threshold, or calibration constant. Pitcher ratings are CURRENT
+        values (documented limitation — small drift over 7-30 day
+        windows; affects all variants identically so relative
+        comparisons remain unbiased).
+    </p>
+</div>
+{% endblock %}

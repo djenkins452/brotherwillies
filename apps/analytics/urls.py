@@ -43,4 +43,12 @@ urlpatterns = [
         views.elo_monitor,
         name='elo_monitor',
     ),
+    # Method Replay (2026-05-22) — retrospective MLB moneyline backtest.
+    # Compares candidate methodologies (varying MARKET_BLEND_WEIGHT)
+    # against actual historical outcomes. No-future-leakage by design.
+    path(
+        'method-replay/',
+        views.method_replay,
+        name='method_replay',
+    ),
 ]

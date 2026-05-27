@@ -1,0 +1,610 @@
+"""Method Replay service — retrospective MLB moneyline backtest.
+
+Answers: "what would Brother Willies have recommended over the last N
+days under a given MARKET_BLEND_WEIGHT?" without changing live logic.
+
+LEAKAGE SAFEGUARDS (ALL ENFORCED IN CODE — see tests):
+
+  L1. Pre-game odds only. Every OddsSnapshot query filters
+      `captured_at < game.first_pitch`. Post-game snapshots (which can
+      exist when an odds provider keeps polling after first pitch) are
+      structurally excluded.
+
+  L2. Recommendation input = OPENING snapshot only. The first pre-game
+      snapshot's moneylines + market_home_win_prob drive the simulated
+      placement decision. The closing snapshot (latest pre-game) is
+      used ONLY after the recommendation is generated, for CLV
+      measurement.
+
+  L3. Pre-game team Elo from history. `TeamEloHistory.pre_rating` for
+      the row created when the game was processed = the rating going
+      INTO the game. No use of post-game `team.elo_rating`.
+
+  L4. Static team rating is frozen. `Team.rating` has no updater
+      (locked by `apps/core/test_feature_truth_audit.py`), so current
+      value == historical value. No leakage by mechanism.
+
+  L5. Outcome data (home_score / away_score) used ONLY for the post-
+      simulation `won` field. Never feeds back into the recommendation.
+
+DOCUMENTED LIMITATION (not leakage but worth naming):
+
+  - Pitcher ratings (`StartingPitcher.rating`) are NOT historical.
+    Current ratings are used as an approximation. Over a 7-30 day
+    window a pitcher has ~1-5 additional starts since the simulated
+    game, so the rating drift is small. The drift affects all method
+    variants identically, so RELATIVE comparisons (0.40 vs 0.55)
+    remain unbiased even though absolute simulated probabilities
+    may differ slightly from what would have been computed live.
+
+  - The `compute_status` and tier/lane logic uses CURRENT constants
+    (MIN_EDGE, MIN_PROBABILITY_FOR_RECOMMENDED, etc.). The replay
+    answers "what would today's rules + an alternative blend have
+    produced over the past N days?" — not "what would the past
+    rules at that time have produced." This is intentional: the
+    purpose is to evaluate the new method against historical data,
+    not to retroactively re-derive what the system actually did.
+    For the latter, read `BettingRecommendation` rows directly.
+
+INTENTIONALLY NOT TOUCHED:
+  - `MARKET_BLEND_WEIGHT` in production code (still 0.55 per the
+    2026-05-22 Roadmap B Step 1 change).
+  - Any threshold, gate, or signal in the live recommendation
+    pipeline. This is analysis only.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, asdict
+from datetime import date, datetime, timedelta
+from typing import List, Optional, Tuple
+
+from django.utils import timezone
+
+
+# Blend-weight history. Updated when MARKET_BLEND_WEIGHT changes in
+# production. Each entry: (date_active_from, weight). Sorted DESC.
+# Used by the "Old Actual" comparison to identify the blend weight
+# in effect at the time of a historical game.
+BLEND_WEIGHT_HISTORY: List[Tuple[date, float]] = [
+    (date(2026, 5, 22), 0.55),
+    (date(2026, 5, 6), 0.40),
+    (date(2026, 5, 3), 0.30),
+    (date(2025, 1, 1), 0.15),
+]
+
+
+def historical_blend_weight(d: date) -> float:
+    """Return the MARKET_BLEND_WEIGHT in effect on date `d`."""
+    for cutoff, weight in BLEND_WEIGHT_HISTORY:
+        if d >= cutoff:
+            return weight
+    return 0.15
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+
+
+@dataclass
+class SimulatedRecommendation:
+    """One game's simulated recommendation under a single method variant."""
+    sport: str
+    game_id: str
+    game_label: str
+    first_pitch_iso: str
+    method_label: str
+    blend_weight: float
+    # Inputs (no leakage)
+    home_rating_pregame: float
+    away_rating_pregame: float
+    home_pitcher_rating: float
+    away_pitcher_rating: float
+    raw_score: float
+    raw_prob_pre_blend: float
+    market_prob_pregame: float
+    blended_prob: float
+    final_prob: float
+    # Placement-time pre-game odds (OPENING snapshot)
+    opening_moneyline_home: int
+    opening_moneyline_away: int
+    fair_home_prob: float
+    fair_away_prob: float
+    pick_side: str             # 'home' / 'away'
+    pick_odds: int
+    pick_prob: float
+    edge_pp: float
+    # Decision-rule output
+    status: str
+    status_reason: str
+    tier: str
+    # Outcome (post-game; used only for analytics, NEVER for decision)
+    home_score: Optional[int]
+    away_score: Optional[int]
+    won: Optional[bool]
+    # CLV — uses CLOSING odds applied AFTER recommendation generation
+    closing_moneyline_home: Optional[int]
+    closing_moneyline_away: Optional[int]
+    clv_decimal: Optional[float]
+
+    def to_dict(self):
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+
+
+def _pregame_snapshots(game, *, only_primary: bool = True):
+    """Return ALL pre-game snapshots for the game, oldest first.
+
+    LEAKAGE GUARD: filters `captured_at < game.first_pitch`. Post-game
+    rows are structurally excluded.
+    """
+    from apps.mlb.models import OddsSnapshot
+    qs = OddsSnapshot.objects.filter(
+        game=game,
+        captured_at__lt=game.first_pitch,
+    )
+    if only_primary:
+        qs = qs.filter(odds_source='odds_api')
+    return list(qs.order_by('captured_at'))
+
+
+def _pregame_team_rating(team, game) -> float:
+    """Pre-game rating for `team` going into `game` (NO LEAKAGE).
+
+    Strategy:
+      1. If Elo is active AND a TeamEloHistory row exists for (team, game):
+         use its `pre_rating` (= rating immediately before this game).
+      2. If Elo is active but no history row: fall back to current
+         `team.elo_rating` projected to legacy scale (caveat).
+      3. If Elo is not active: use `team.rating` (no updater → current
+         value == historical value).
+    """
+    from apps.analytics.models import TeamEloHistory
+    from apps.core.services import elo_service
+
+    if not elo_service.is_dynamic_active():
+        return float(team.rating)
+
+    history_row = TeamEloHistory.objects.filter(
+        sport='mlb', mlb_team=team, mlb_game=game,
+    ).first()
+    if history_row is not None:
+        return float(elo_service.elo_to_legacy_scale(history_row.pre_rating))
+
+    if team.elo_rating is not None:
+        # Game hasn't been processed by Elo yet (rare for final games
+        # after ensure_elo_backfilled). Falls back to current Elo —
+        # technically leakage but limited because a single un-processed
+        # game's pre-rating ≈ current rating to within K-factor (4 for MLB).
+        return float(elo_service.elo_to_legacy_scale(team.elo_rating))
+
+    return float(team.rating)
+
+
+def _clamp_probability(p: float) -> float:
+    """Mirrors `apps.core.services.probability_calibration.clamp_probability`.
+    Duplicated here so the replay is self-contained and stable against
+    refactors of the live module."""
+    from apps.core.services.probability_calibration import PROB_MIN, PROB_MAX
+    if p > 0.5:
+        return max(PROB_MIN, min(PROB_MAX, p))
+    if p < 0.5:
+        return max(1.0 - PROB_MAX, min(1.0 - PROB_MIN, p))
+    return p
+
+
+def _simulate_recommendation(
+    game,
+    blend_weight: float,
+    method_label: str,
+) -> Optional[SimulatedRecommendation]:
+    """Simulate one recommendation under the given blend weight.
+
+    Returns None when the game has insufficient pre-game data
+    (no primary-source snapshots, missing moneylines). Such games
+    are NOT counted as recommended OR not-recommended — they're
+    excluded entirely.
+    """
+    from apps.core.services.recommendations import (
+        compute_status, _raw_tier,
+    )
+    from apps.core.utils.odds import (
+        american_to_implied_prob, devig_two_way, closing_line_value,
+    )
+    from apps.mlb.services.model_service import HFA
+
+    snaps = _pregame_snapshots(game, only_primary=True)
+    if not snaps:
+        return None
+
+    opening = snaps[0]
+    closing = snaps[-1]  # used ONLY for CLV measurement (L2 safeguard)
+
+    if opening.moneyline_home is None or opening.moneyline_away is None:
+        return None
+    if opening.market_home_win_prob is None:
+        return None
+
+    # ---- L3 + L4: pre-game team ratings (no leakage) ----
+    home_rating = _pregame_team_rating(game.home_team, game)
+    away_rating = _pregame_team_rating(game.away_team, game)
+
+    # ---- Pitcher ratings — current values (documented approximation) ----
+    home_pitcher_rating = float(game.home_pitcher.rating) if game.home_pitcher else 50.0
+    away_pitcher_rating = float(game.away_pitcher.rating) if game.away_pitcher else 50.0
+
+    # ---- Score formula (mirrors apps.mlb.services.model_service._score) ----
+    rating_term = (home_rating - away_rating) * 0.35
+    pitcher_term = 0.0
+    if game.home_pitcher is not None and game.away_pitcher is not None:
+        pitcher_term = (home_pitcher_rating - away_pitcher_rating) * 0.65
+    hfa_term = HFA if not game.neutral_site else 0.0
+    score = rating_term + pitcher_term + hfa_term
+
+    # ---- Sigmoid → raw probability ----
+    raw_prob = 1.0 / (1.0 + math.exp(-score / 25.0))
+    raw_prob = max(0.01, min(0.99, raw_prob))
+
+    # ---- Blend with PRE-GAME (opening) market — never closing ----
+    market_home = opening.market_home_win_prob
+    w = max(0.0, min(0.65, blend_weight))
+    blended = raw_prob * (1.0 - w) + market_home * w
+
+    # ---- Soft clamp ----
+    final = _clamp_probability(blended)
+
+    # ---- De-vig OPENING moneylines for fair market prob ----
+    raw_implied_home = american_to_implied_prob(opening.moneyline_home)
+    raw_implied_away = american_to_implied_prob(opening.moneyline_away)
+    fair_home, fair_away = devig_two_way(raw_implied_home, raw_implied_away)
+
+    # ---- Pick the side with the larger edge ----
+    away_prob = 1.0 - final
+    home_edge = final - fair_home
+    away_edge = away_prob - fair_away
+    if home_edge >= away_edge:
+        pick_side = 'home'
+        pick_odds = opening.moneyline_home
+        pick_prob = final
+        edge_decimal = home_edge
+    else:
+        pick_side = 'away'
+        pick_odds = opening.moneyline_away
+        pick_prob = away_prob
+        edge_decimal = away_edge
+    edge_pp = round(edge_decimal * 100, 2)
+
+    # ---- Apply current decision rules ----
+    status, reason = compute_status(
+        edge_pp, pick_odds,
+        probability=pick_prob,
+        is_secondary=False,  # primary source by construction (filter above)
+    )
+    tier = _raw_tier(edge_pp)
+
+    # ---- Outcome (post-game) — analytics ONLY (L5 safeguard) ----
+    won: Optional[bool] = None
+    if game.home_score is not None and game.away_score is not None:
+        if game.home_score == game.away_score:
+            won = None  # push (defensive — no MLB regulation ties)
+        else:
+            home_won = game.home_score > game.away_score
+            won = (pick_side == 'home' and home_won) or (
+                pick_side == 'away' and not home_won
+            )
+
+    # ---- CLV — uses CLOSING odds AFTER recommendation (L2 safeguard) ----
+    clv = None
+    closing_ml_home = closing.moneyline_home
+    closing_ml_away = closing.moneyline_away
+    if (
+        closing is not opening
+        and closing_ml_home is not None
+        and closing_ml_away is not None
+    ):
+        opening_pick_ml = (
+            opening.moneyline_home if pick_side == 'home' else opening.moneyline_away
+        )
+        closing_pick_ml = (
+            closing_ml_home if pick_side == 'home' else closing_ml_away
+        )
+        if opening_pick_ml is not None and closing_pick_ml is not None:
+            clv = closing_line_value(opening_pick_ml, closing_pick_ml)
+
+    return SimulatedRecommendation(
+        sport='mlb',
+        game_id=str(game.id),
+        game_label=f"{game.away_team.name} @ {game.home_team.name}",
+        first_pitch_iso=game.first_pitch.isoformat(),
+        method_label=method_label,
+        blend_weight=blend_weight,
+        home_rating_pregame=round(home_rating, 3),
+        away_rating_pregame=round(away_rating, 3),
+        home_pitcher_rating=round(home_pitcher_rating, 3),
+        away_pitcher_rating=round(away_pitcher_rating, 3),
+        raw_score=round(score, 3),
+        raw_prob_pre_blend=round(raw_prob, 4),
+        market_prob_pregame=round(market_home, 4),
+        blended_prob=round(blended, 4),
+        final_prob=round(final, 4),
+        opening_moneyline_home=opening.moneyline_home,
+        opening_moneyline_away=opening.moneyline_away,
+        fair_home_prob=round(fair_home, 4),
+        fair_away_prob=round(fair_away, 4),
+        pick_side=pick_side,
+        pick_odds=pick_odds,
+        pick_prob=round(pick_prob, 4),
+        edge_pp=edge_pp,
+        status=status,
+        status_reason=reason,
+        tier=tier,
+        home_score=game.home_score,
+        away_score=game.away_score,
+        won=won,
+        closing_moneyline_home=closing_ml_home,
+        closing_moneyline_away=closing_ml_away,
+        clv_decimal=clv,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+
+
+def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
+    """Aggregate metrics from a list of `status='recommended'` simulations."""
+    from apps.core.utils.odds import american_to_decimal
+
+    if not recommended_sims:
+        return {
+            'count': 0, 'wins': 0, 'losses': 0, 'pushes': 0, 'pending': 0,
+            'win_rate': None, 'roi': None, 'net_pl': 0.0,
+            'total_stake': 0.0,
+            'avg_edge': None, 'avg_clv': None, 'positive_clv_rate': None,
+            'clv_sample': 0,
+            'favorites_count': 0, 'underdogs_count': 0,
+            'by_tier': {'elite': 0, 'strong': 0, 'standard': 0},
+            'by_edge_bucket': {'0-4': 0, '4-6': 0, '6-8': 0, '8+': 0},
+            'by_confidence_bucket': {
+                '60-65': 0, '65-70': 0, '70-75': 0, '75-80': 0, '80+': 0,
+            },
+            'by_odds_type': {
+                'heavy_fav': 0, 'mid_fav': 0, 'short_fav': 0,
+                'short_dog': 0, 'mid_dog': 0, 'long_dog': 0,
+            },
+        }
+
+    wins = losses = pushes = pending = 0
+    stake_total = 0.0
+    payout_total = 0.0
+    edge_sum = 0.0
+    clv_sum = 0.0
+    clv_count = 0
+    clv_positive = 0
+    favorites_count = underdogs_count = 0
+    by_tier = {'elite': 0, 'strong': 0, 'standard': 0}
+    by_edge_bucket = {'0-4': 0, '4-6': 0, '6-8': 0, '8+': 0}
+    by_confidence_bucket = {
+        '60-65': 0, '65-70': 0, '70-75': 0, '75-80': 0, '80+': 0,
+    }
+    by_odds_type = {
+        'heavy_fav': 0, 'mid_fav': 0, 'short_fav': 0,
+        'short_dog': 0, 'mid_dog': 0, 'long_dog': 0,
+    }
+
+    for s in recommended_sims:
+        stake_total += 100.0
+        if s.won is True:
+            wins += 1
+            payout_total += 100.0 * american_to_decimal(s.pick_odds)
+        elif s.won is False:
+            losses += 1
+        elif s.won is None and s.home_score is None:
+            pending += 1
+        else:
+            pushes += 1
+            payout_total += 100.0
+
+        if s.edge_pp is not None:
+            edge_sum += s.edge_pp
+            if s.edge_pp < 4:
+                by_edge_bucket['0-4'] += 1
+            elif s.edge_pp < 6:
+                by_edge_bucket['4-6'] += 1
+            elif s.edge_pp < 8:
+                by_edge_bucket['6-8'] += 1
+            else:
+                by_edge_bucket['8+'] += 1
+
+        if s.tier in by_tier:
+            by_tier[s.tier] += 1
+
+        if s.pick_prob is not None:
+            p_pct = s.pick_prob * 100
+            if p_pct < 65:
+                by_confidence_bucket['60-65'] += 1
+            elif p_pct < 70:
+                by_confidence_bucket['65-70'] += 1
+            elif p_pct < 75:
+                by_confidence_bucket['70-75'] += 1
+            elif p_pct < 80:
+                by_confidence_bucket['75-80'] += 1
+            else:
+                by_confidence_bucket['80+'] += 1
+
+        if s.pick_odds is not None:
+            if s.pick_odds < 0:
+                favorites_count += 1
+            else:
+                underdogs_count += 1
+            o = int(s.pick_odds)
+            if o <= -200:
+                by_odds_type['heavy_fav'] += 1
+            elif -199 <= o <= -150:
+                by_odds_type['mid_fav'] += 1
+            elif -149 <= o <= 99:
+                by_odds_type['short_fav'] += 1
+            elif 100 <= o <= 150:
+                by_odds_type['short_dog'] += 1
+            elif 151 <= o <= 250:
+                by_odds_type['mid_dog'] += 1
+            else:
+                by_odds_type['long_dog'] += 1
+
+        if s.clv_decimal is not None:
+            clv_sum += s.clv_decimal
+            clv_count += 1
+            if s.clv_decimal > 0:
+                clv_positive += 1
+
+    net_pl = payout_total - stake_total
+    decisive = wins + losses
+
+    return {
+        'count': len(recommended_sims),
+        'wins': wins, 'losses': losses, 'pushes': pushes, 'pending': pending,
+        'win_rate': round(wins / decisive * 100, 2) if decisive else None,
+        'roi': round(net_pl / stake_total * 100, 2) if stake_total else None,
+        'net_pl': round(net_pl, 2),
+        'total_stake': round(stake_total, 2),
+        'avg_edge': round(edge_sum / len(recommended_sims), 2),
+        'avg_clv': round(clv_sum / clv_count, 4) if clv_count else None,
+        'positive_clv_rate': round(clv_positive / clv_count * 100, 2) if clv_count else None,
+        'clv_sample': clv_count,
+        'favorites_count': favorites_count,
+        'underdogs_count': underdogs_count,
+        'by_tier': by_tier,
+        'by_edge_bucket': by_edge_bucket,
+        'by_confidence_bucket': by_confidence_bucket,
+        'by_odds_type': by_odds_type,
+    }
+
+
+def diff_recommendations(variant_a: dict, variant_b: dict) -> dict:
+    """Per-game divergences between two method variants.
+
+    a_only: games variant_a recommended but variant_b did not.
+    b_only: games variant_b recommended but variant_a did not.
+    both: tuples of (a_sim, b_sim) for games both recommended.
+    largest_prob_diff: top games where final_prob diverged most between
+        the two methods (any status).
+    """
+    a_recs = {
+        s.game_id: s for s in variant_a['simulations']
+        if s.status == 'recommended'
+    }
+    b_recs = {
+        s.game_id: s for s in variant_b['simulations']
+        if s.status == 'recommended'
+    }
+    a_only = [a_recs[gid] for gid in (a_recs.keys() - b_recs.keys())]
+    b_only = [b_recs[gid] for gid in (b_recs.keys() - a_recs.keys())]
+    both = [
+        (a_recs[gid], b_recs[gid])
+        for gid in (a_recs.keys() & b_recs.keys())
+    ]
+
+    # Largest probability change across all simulated games (any status).
+    a_by_game = {s.game_id: s for s in variant_a['simulations']}
+    b_by_game = {s.game_id: s for s in variant_b['simulations']}
+    shared_ids = a_by_game.keys() & b_by_game.keys()
+    prob_diffs = []
+    for gid in shared_ids:
+        a = a_by_game[gid]
+        b = b_by_game[gid]
+        prob_diffs.append({
+            'game_id': gid,
+            'game_label': a.game_label,
+            'a_final_prob': a.final_prob,
+            'b_final_prob': b.final_prob,
+            'delta': round(b.final_prob - a.final_prob, 4),
+            'a_edge_pp': a.edge_pp,
+            'b_edge_pp': b.edge_pp,
+            'edge_delta': round(b.edge_pp - a.edge_pp, 2),
+            'a_status': a.status,
+            'b_status': b.status,
+        })
+    prob_diffs.sort(key=lambda d: -abs(d['delta']))
+
+    return {
+        'a_only_count': len(a_only),
+        'b_only_count': len(b_only),
+        'both_count': len(both),
+        'a_only': a_only,
+        'b_only': b_only,
+        'largest_prob_diffs': prob_diffs[:10],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+
+
+def run_replay(
+    date_from: date,
+    date_to: date,
+    blend_weights: Optional[List[float]] = None,
+    method_labels: Optional[List[str]] = None,
+) -> dict:
+    """Run the method replay across a date window.
+
+    Returns a dict with:
+        window: {from, to, days}
+        total_games_evaluable: int
+        variants: list of {label, blend_weight, simulations, metrics}
+        diff_vs_baseline: {a_only_count, b_only_count, ...}
+                          (only when 2 variants are present)
+    """
+    from apps.mlb.models import Game
+
+    if blend_weights is None:
+        blend_weights = [0.40, 0.55]
+    if method_labels is None:
+        method_labels = [f'Replay {w:.2f}' for w in blend_weights]
+
+    games = list(
+        Game.objects.filter(
+            status='final',
+            home_score__isnull=False,
+            away_score__isnull=False,
+            first_pitch__date__gte=date_from,
+            first_pitch__date__lte=date_to,
+        )
+        .select_related('home_team', 'away_team', 'home_pitcher', 'away_pitcher')
+        .order_by('first_pitch')
+    )
+
+    variants = []
+    for weight, label in zip(blend_weights, method_labels):
+        simulations = [
+            sim for sim in (
+                _simulate_recommendation(g, weight, label) for g in games
+            ) if sim is not None
+        ]
+        recommended_only = [s for s in simulations if s.status == 'recommended']
+        metrics = _compute_metrics(recommended_only)
+        variants.append({
+            'label': label,
+            'blend_weight': weight,
+            'simulations': simulations,
+            'recommended_count': len(recommended_only),
+            'metrics': metrics,
+        })
+
+    out = {
+        'window': {
+            'from': date_from,
+            'to': date_to,
+            'days': (date_to - date_from).days + 1,
+        },
+        'total_games_evaluable': len(games),
+        'variants': variants,
+    }
+
+    if len(variants) >= 2:
+        out['diff_first_two'] = diff_recommendations(variants[0], variants[1])
+
+    return out

@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-05-22 — Method Replay: retrospective MLB moneyline backtest
+
+**Surface:** `/analytics/method-replay/` (staff-only). Answers "what would Brother Willies have recommended over the last N days under blend weight W?" without waiting for the live 14-day observation window. Pure analysis — no live logic touched.
+
+### Leakage safeguards (all locked by tests)
+
+- **L1 — Pre-game odds only.** Every `OddsSnapshot` query filters `captured_at < game.first_pitch`. Post-game snapshots structurally excluded.
+- **L2 — Closing odds for CLV only.** OPENING snapshot drives the simulated recommendation; CLOSING (latest pre-game) used only for CLV measurement after the recommendation is generated.
+- **L3 — Pre-game team Elo from history.** `TeamEloHistory.pre_rating` for the row created when the game was processed = rating going INTO the game. Never uses post-game `team.elo_rating`.
+- **L4 — Static `Team.rating` has no updater** (locked transitively by the Feature Truth Audit). Current value = historical value by mechanism.
+- **L5 — Outcome data is analytics only.** `home_score` / `away_score` populate the `won` field; never feed into the simulation decision.
+
+### Documented limitation
+
+`StartingPitcher.rating` is current, not historical. Over 7-30 day windows, pitcher rating has drifted modestly (~1-5 subsequent starts). **The drift affects all variants identically, so relative comparisons remain unbiased.** Absolute simulated probabilities may differ slightly from what the live engine would have computed at the historical moment. For absolute reconstruction, use the existing backtest harness which reads stored `ModelResultSnapshot` predictions.
+
+### Metrics produced
+
+Per variant: recommended count, win/loss/push/pending, win rate, ROI, net P/L, avg edge, avg CLV, positive CLV rate (primary-source only). Segment breakdowns: tier, edge bucket, confidence bucket, odds type. Cross-variant diff: a_only/b_only/both counts + top-10 largest probability deltas.
+
+### Files
+
+- `apps/analytics/services/method_replay.py` (new) — service layer.
+- `apps/analytics/views.py` — new `method_replay` view (staff-only, parses range/dates/weights).
+- `apps/analytics/urls.py` — new route.
+- `templates/analytics/method_replay.html` (new) — comparison table + segment breakdowns + diff card.
+- `apps/analytics/test_method_replay.py` (new) — 18 tests across 7 classes.
+- `docs/method_replay_2026_05_22.md` (new) — full methodology + leakage inventory + operator usage.
+
+### Tests
+
+18 new tests, all passing. 1054 across phase-relevant modules, zero regressions. `manage.py check` clean.
+
+Critical leakage tests:
+- `test_post_game_snapshot_does_not_affect_recommendation` — adds a post-game snapshot with extreme values; confirms simulation byte-identical.
+- `test_closing_odds_only_used_for_clv_not_recommendation` — opening and closing at different markets; recommendation uses opening only.
+- `test_outcome_does_not_affect_recommendation` — flips home_score/away_score; probability/edge/status unchanged (only `won` field changes).
+- `test_pre_rating_from_history_used_when_elo_active` — `TeamEloHistory.pre_rating` wins over current `team.elo_rating`.
+
+### Architecture law compliance
+
+- Law 3 (scope transparency): satisfied — page documents safeguards inline.
+- Law 4 (do not overfit): satisfied — no constants changed. The tool exists to evaluate the current constant against historical outcomes; if it surfaces evidence for a different constant, that new constant goes through Law 4 governance before shipping.
+
+### Operator usage
+
+Once Railway redeploys, visit:
+- `/analytics/method-replay/?range=7d` — last 7 days
+- `/analytics/method-replay/?range=30d` — last 30 days
+- `/analytics/method-replay/?date_from=2026-05-10&date_to=2026-05-21&weights=0.40,0.55` — custom
+
+The comparison table answers whether 0.55 outperformed 0.40 over the chosen window. Combined with the live 14-day observation, this gives retrospective + prospective evidence for the Day 14 decision gate.
+
+---
+
 ## 2026-05-22 — Roadmap B Step 1: MARKET_BLEND_WEIGHT 0.40 → 0.55
 
 **Single-variable constant change.** No other production code modified. Per the adversarial second-pass review's discipline: one variable at a time, ≥ 2 weeks observation between steps, no optimization stacking.

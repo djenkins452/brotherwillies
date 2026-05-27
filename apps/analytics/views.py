@@ -355,3 +355,74 @@ def elo_monitor(request):
         'monitor': monitor,
         'nav_active': '',
     })
+
+
+# ---------------------------------------------------------------------------
+# Method Replay — retrospective MLB moneyline backtest (2026-05-22)
+#
+# Answers "what would BW have recommended over the past N days under
+# blend weight W?" Strict no-future-leakage. Staff-only. Read-only.
+
+def method_replay(request):
+    """Render the Method Replay comparison page."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from datetime import datetime as _dt, date as _d, timedelta as _td
+
+    from apps.analytics.services.method_replay import run_replay
+
+    today = timezone.localdate()
+    quick_range = (request.GET.get('range') or '').lower()
+
+    date_from = date_to = None
+    if quick_range == '7d':
+        date_from = today - _td(days=7)
+        date_to = today - _td(days=1)
+    elif quick_range == '30d':
+        date_from = today - _td(days=30)
+        date_to = today - _td(days=1)
+    else:
+        df_raw = request.GET.get('date_from', '')
+        dt_raw = request.GET.get('date_to', '')
+        try:
+            date_from = _dt.strptime(df_raw, '%Y-%m-%d').date() if df_raw else None
+            date_to = _dt.strptime(dt_raw, '%Y-%m-%d').date() if dt_raw else None
+        except ValueError:
+            date_from = date_to = None
+        if date_from is None or date_to is None:
+            quick_range = '7d'
+            date_from = today - _td(days=7)
+            date_to = today - _td(days=1)
+
+    # Parse blend weights (defaults: 0.40 vs 0.55).
+    raw_weights = request.GET.get('weights', '0.40,0.55')
+    try:
+        weights = []
+        for w_str in raw_weights.split(','):
+            w = float(w_str.strip())
+            if 0.0 <= w <= 0.80:
+                weights.append(w)
+        if not weights:
+            weights = [0.40, 0.55]
+    except (ValueError, TypeError):
+        weights = [0.40, 0.55]
+
+    labels = [f'Replay {w:.2f}' for w in weights]
+
+    result = run_replay(
+        date_from=date_from,
+        date_to=date_to,
+        blend_weights=weights,
+        method_labels=labels,
+    )
+
+    return render(request, 'analytics/method_replay.html', {
+        'result': result,
+        'current_range': quick_range,
+        'current_date_from': date_from.isoformat(),
+        'current_date_to': date_to.isoformat(),
+        'current_weights': ','.join(f'{w:.2f}' for w in weights),
+        'nav_active': '',
+    })
