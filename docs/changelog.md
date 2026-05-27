@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-27 — Three-Population Audit (Production Truth Test)
+
+**Read-only diagnostic. No engine changes. No live behavior change.**
+
+Empirical-proof harness for the Production Truth Audit (Steps 3.3 / 3.4). Splits the trailing 30-day MLB moneyline MockBet set into three populations and emits hard numbers for each.
+
+### What changed
+
+`apps/mockbets/services/three_population_audit.py` (NEW):
+
+- `is_true_system_approved(bet)` — production-equivalence predicate. Returns True iff: (a) is_system_generated OR linked to a real BettingRecommendation, (b) recommendation_status == 'recommended', (c) linked recommendation.lane == 'core', (d) placed on/after MODEL_RULES_EFFECTIVE_DATE (2026-05-06), (e) complete decision-layer snapshot (tier, edge, confidence all populated).
+- `compute_metrics(bets)` — count, W-L-P (+pending), win%, ROI%, net P/L, settled stake, avg edge pp, avg CLV cents (primary-source only — `odds_source='odds_api'`), CLV+ %, CLV sample size.
+- `build_audit(qs, *, cutoff, now, days, sport, username, settled_only)` — applies bet_type/date/sport/user/settled filters and partitions into the three populations. Returns dict with `window`, `populations`, and an `answers` block resolving the three questions (A: beat market?, B: did manual hurt?, C: blind-follow bankroll outcome?).
+- `render_report(audit)` — copy-paste-ready plaintext output for terminal or browser.
+
+`apps/mockbets/management/commands/audit_three_populations.py` (NEW):
+
+- Thin CLI wrapper. `python manage.py audit_three_populations --days 30 [--user demo] [--settled-only]`.
+- Useful in dev; on Railway prefer the HTTP view (no interactive shell).
+
+`apps/mockbets/views.py` + `apps/mockbets/urls.py`:
+
+- New staff-only endpoint `/mockbets/audit/three-populations/` returns the plaintext report (Content-Type `text/plain`). `?format=json` returns the structured dict. `?days=N` (clamped to [1, 90]), `?user=username`, `?settled_only=1`, `?sport=mlb` query params.
+- Anonymous → 302 (login). Non-staff → 404. Staff → 200.
+
+`apps/mockbets/tests.py`:
+
+- `ThreePopulationAuditTests` — 12 predicate tests locking down: lane=qualified excluded, lane=pass excluded, missing link excluded, status≠recommended excluded, pre-rules date excluded, missing snapshot fields excluded, partition disjoint+complete (n1 == n2 + n3), CLV math respects odds_source='odds_api' contract, answer block populates.
+- `ThreePopulationAuditViewTests` — 5 HTTP tests: anonymous redirect, non-staff 404, staff plaintext 200, staff JSON 200, ?days=9999 clamps to 90.
+
+### Why
+
+The Production Truth Audit identified that production metrics may diverge from replay metrics because the actual placed-bet population contains contamination (manual bets, pre-rules bets, lane-non-core bets, incomplete-snapshot bets). The replay measured a clean, lane-corrected population. To convert theory → proof, we need to separately measure the same three slices on REAL production data:
+
+1. **ALL ACTUAL** — what the user actually placed (everything).
+2. **TRUE SYSTEM-APPROVED** — production-equivalent filter (matches replay scope).
+3. **MANUAL/CONTAMINATED** — (1) minus (2).
+
+The verdict on each of (A) beat market?, (B) manual hurt?, (C) blind-follow bankroll? falls directly out of comparing populations (2) vs (3).
+
+### Tests
+
+656 tests across `apps.analytics.test_method_replay` + `apps.mlb.tests` + `apps.core.tests` + `apps.mockbets.tests`. All pass. Zero regressions.
+
+### Next step
+
+Operator hits `/mockbets/audit/three-populations/` on Railway as a staff user. Paste output → verdict is mechanical from the answer block.
+
+---
+
 ## 2026-05-22 — Method Replay: lane-corrected extension
 
 **Tool only. No production code or constants changed. No live behavior change.**

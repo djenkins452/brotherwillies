@@ -901,3 +901,78 @@ def ai_commentary(request):
         'content': result['content'],
         'meta': result['meta'],
     })
+
+
+@login_required
+def three_population_audit_view(request):
+    """Staff-only Production Truth Audit endpoint.
+
+    Returns the three-population breakdown as plaintext (Content-Type
+    text/plain) so it's directly copy-pasteable from Railway → here.
+
+    Query params:
+        days         — trailing window in days (default 30, max 90)
+        user         — restrict to a single username (default: all users)
+        sport        — sport filter (default 'mlb')
+        settled_only — exclude pending bets ('1' to enable)
+        format       — 'text' (default) or 'json'
+
+    Designed for Railway where there is no interactive shell. Hit
+    /mockbets/audit/three-populations/ as a staff user.
+    """
+    if not request.user.is_staff:
+        raise Http404
+
+    from datetime import timedelta as _td
+    from .services.three_population_audit import build_audit, render_report
+    from django.http import HttpResponse
+
+    try:
+        days = int(request.GET.get('days', 30))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(days, 90))  # cap at 90 to keep queries bounded
+
+    username = request.GET.get('user') or None
+    sport = request.GET.get('sport') or 'mlb'
+    settled_only = request.GET.get('settled_only') == '1'
+    fmt = (request.GET.get('format') or 'text').lower()
+
+    now = timezone.now()
+    cutoff = now - _td(days=days)
+
+    audit = build_audit(
+        MockBet.objects.all(),
+        cutoff=cutoff,
+        now=now,
+        days=days,
+        sport=sport,
+        username=username,
+        settled_only=settled_only,
+    )
+
+    if fmt == 'json':
+        # Decimals → str for JSON safety.
+        def _ser(m):
+            d = dict(m)
+            d['net_pl'] = str(d['net_pl'])
+            d['total_stake'] = str(d['total_stake'])
+            return d
+        payload = {
+            'window': {
+                'days': audit['window']['days'],
+                'cutoff': audit['window']['cutoff'].isoformat(),
+                'now': audit['window']['now'].isoformat(),
+                'sport': audit['window']['sport'],
+                'username': audit['window']['username'],
+                'settled_only': audit['window']['settled_only'],
+            },
+            'rules_effective_date': audit['rules_effective_date'].isoformat(),
+            'populations': {
+                k: _ser(v) for k, v in audit['populations'].items()
+            },
+            'answers': audit['answers'],
+        }
+        return JsonResponse(payload)
+
+    return HttpResponse(render_report(audit), content_type='text/plain; charset=utf-8')

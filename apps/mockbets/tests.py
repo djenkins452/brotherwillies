@@ -4243,3 +4243,300 @@ class MockBetPendingStatusRenderingTests(TestCase):
         body = resp.content.decode('utf-8')
         self.assertIn('Live — Game in progress', body)
         self.assertIn('badge-red', body)
+
+
+class ThreePopulationAuditTests(TestCase):
+    """Lock down the three-population predicate against accidental drift.
+
+    Population (2) — TRUE SYSTEM-APPROVED — must require EVERY one of:
+      - is_system_generated=True OR linked to a real BettingRecommendation
+      - recommendation_status == 'recommended'
+      - linked recommendation.lane == 'core'
+      - placed_at.date() >= MODEL_RULES_EFFECTIVE_DATE (2026-05-06)
+      - non-empty recommendation_tier, expected_edge, recommendation_confidence
+
+    Population (1) ∪ (3) = Population (2) is the algebraic identity
+    we also assert.
+    """
+
+    def setUp(self):
+        from apps.mlb.models import Conference as MLBConf, Team as MLBTeam, Game as MLBGame
+        from apps.core.models import BettingRecommendation
+        self.MLBGame = MLBGame
+        self.BettingRecommendation = BettingRecommendation
+        self.user = User.objects.create_user('audit_user', password='pw')
+        conf, _ = MLBConf.objects.get_or_create(slug='al-east', defaults={'name': 'AL East'})
+        self.home = MLBTeam.objects.create(
+            name='Yankees', slug='yankees', conference=conf,
+            source='mlb_stats_api', external_id='147',
+        )
+        self.away = MLBTeam.objects.create(
+            name='Royals', slug='royals', conference=conf,
+            source='mlb_stats_api', external_id='118',
+        )
+
+    def _game(self, ext='g1'):
+        return self.MLBGame.objects.create(
+            home_team=self.home, away_team=self.away,
+            first_pitch=timezone.now() - timedelta(hours=4),
+            status='final', home_score=5, away_score=3,
+            source='mlb_stats_api', external_id=ext,
+        )
+
+    def _rec(self, game, *, lane='core', status='recommended'):
+        return self.BettingRecommendation.objects.create(
+            sport='mlb', mlb_game=game, bet_type='moneyline',
+            pick='Yankees', line='-130', odds_american=-130,
+            confidence_score=Decimal('72'),
+            model_edge=Decimal('6.5'),
+            model_source='house', status=status,
+            status_reason='', lane=lane,
+        )
+
+    def _bet(self, game, *, recommendation=None, is_system=True,
+             rec_status='recommended', rec_tier='strong',
+             rec_conf=Decimal('72.00'), edge=Decimal('0.065'),
+             result='win', payout=Decimal('176.92'),
+             clv_cents=0.05, odds_source='odds_api',
+             placed_at=None):
+        from datetime import datetime
+        if placed_at is None:
+            placed_at = timezone.now() - timedelta(days=2)
+        return MockBet.objects.create(
+            user=self.user, sport='mlb', bet_type='moneyline',
+            selection='Yankees', odds_american=-130,
+            implied_probability=Decimal('0.5652'),
+            stake_amount=Decimal('100'), simulated_payout=payout,
+            result=result, mlb_game=game,
+            recommendation=recommendation, is_system_generated=is_system,
+            recommendation_status=rec_status, recommendation_tier=rec_tier,
+            recommendation_confidence=rec_conf, expected_edge=edge,
+            closing_odds_american=-125, clv_cents=clv_cents,
+            odds_source=odds_source, placed_at=placed_at,
+        )
+
+    # ------------------------------------------------------------------
+    # is_true_system_approved predicate
+    # ------------------------------------------------------------------
+
+    def test_qualifying_bet_passes(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='qual')
+        rec = self._rec(g, lane='core')
+        bet = self._bet(g, recommendation=rec)
+        self.assertTrue(is_true_system_approved(bet))
+
+    def test_lane_qualified_fails(self):
+        """Lane=qualified is NOT system-approved (only 'core' counts)."""
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='qf')
+        rec = self._rec(g, lane='qualified')
+        bet = self._bet(g, recommendation=rec)
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_lane_pass_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='ps')
+        rec = self._rec(g, lane='pass')
+        bet = self._bet(g, recommendation=rec)
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_no_recommendation_link_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='nolink')
+        bet = self._bet(g, recommendation=None, is_system=False)
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_status_not_recommended_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='notrec')
+        rec = self._rec(g, status='not_recommended')
+        bet = self._bet(g, recommendation=rec, rec_status='not_recommended')
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_pre_rules_date_fails(self):
+        """Bet placed before MODEL_RULES_EFFECTIVE_DATE is excluded."""
+        from datetime import datetime, timezone as _dt_tz
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        from apps.mockbets.services.moneyline_evaluation import MODEL_RULES_EFFECTIVE_DATE
+        g = self._game(ext='pre')
+        rec = self._rec(g, lane='core')
+        pre = datetime.combine(MODEL_RULES_EFFECTIVE_DATE - timedelta(days=1),
+                               datetime.min.time(), tzinfo=_dt_tz.utc)
+        bet = self._bet(g, recommendation=rec, placed_at=pre)
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_missing_tier_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='nt')
+        rec = self._rec(g, lane='core')
+        bet = self._bet(g, recommendation=rec, rec_tier='')
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_missing_edge_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='ne')
+        rec = self._rec(g, lane='core')
+        bet = self._bet(g, recommendation=rec, edge=None)
+        self.assertFalse(is_true_system_approved(bet))
+
+    def test_missing_confidence_fails(self):
+        from apps.mockbets.services.three_population_audit import is_true_system_approved
+        g = self._game(ext='nc')
+        rec = self._rec(g, lane='core')
+        bet = self._bet(g, recommendation=rec, rec_conf=None)
+        self.assertFalse(is_true_system_approved(bet))
+
+    # ------------------------------------------------------------------
+    # build_audit integration + algebra
+    # ------------------------------------------------------------------
+
+    def test_partition_is_disjoint_and_complete(self):
+        """Population (2) ∪ Population (3) == Population (1), and they
+        are disjoint by construction."""
+        from apps.mockbets.services.three_population_audit import build_audit
+
+        # Approved
+        g1 = self._game(ext='ok1')
+        rec1 = self._rec(g1, lane='core')
+        self._bet(g1, recommendation=rec1)
+        # Approved
+        g2 = self._game(ext='ok2')
+        rec2 = self._rec(g2, lane='core')
+        self._bet(g2, recommendation=rec2, result='loss', payout=Decimal('0.00'))
+        # Manual (no link, not system)
+        g3 = self._game(ext='man')
+        self._bet(g3, recommendation=None, is_system=False, rec_status='')
+        # Wrong lane → falls into manual/contaminated
+        g4 = self._game(ext='lq')
+        rec4 = self._rec(g4, lane='qualified')
+        self._bet(g4, recommendation=rec4)
+
+        now = timezone.now()
+        audit = build_audit(
+            MockBet.objects.all(),
+            cutoff=now - timedelta(days=30),
+            now=now,
+            days=30, sport='mlb',
+        )
+        n1 = audit['populations']['actual']['count']
+        n2 = audit['populations']['system_approved']['count']
+        n3 = audit['populations']['manual_contaminated']['count']
+        self.assertEqual(n1, 4)
+        self.assertEqual(n2, 2)
+        self.assertEqual(n3, 2)
+        self.assertEqual(n1, n2 + n3)
+
+    def test_clv_only_from_primary_source(self):
+        """CLV+ % must ignore non-odds_api rows even if clv_cents is set."""
+        from apps.mockbets.services.three_population_audit import build_audit
+
+        g_primary = self._game(ext='ps')
+        rec_p = self._rec(g_primary, lane='core')
+        self._bet(g_primary, recommendation=rec_p,
+                  clv_cents=0.05, odds_source='odds_api')
+
+        g_espn = self._game(ext='es')
+        rec_e = self._rec(g_espn, lane='core')
+        self._bet(g_espn, recommendation=rec_e,
+                  clv_cents=0.99, odds_source='espn')  # should be ignored
+
+        now = timezone.now()
+        audit = build_audit(
+            MockBet.objects.all(),
+            cutoff=now - timedelta(days=30),
+            now=now,
+            days=30, sport='mlb',
+        )
+        sys_pop = audit['populations']['system_approved']
+        self.assertEqual(sys_pop['count'], 2)
+        # Only ONE CLV row counted (the odds_api one).
+        self.assertEqual(sys_pop['clv_sample'], 1)
+        self.assertEqual(sys_pop['clv_plus_pct'], 100.0)
+        # The 0.99 ESPN value did NOT enter the average.
+        self.assertAlmostEqual(sys_pop['avg_clv_cents'], 0.05, places=4)
+
+    def test_answers_block_resolves(self):
+        """A/B/C verdicts populate; no None text where data exists."""
+        from apps.mockbets.services.three_population_audit import build_audit, render_report
+
+        g1 = self._game(ext='a1')
+        rec1 = self._rec(g1, lane='core')
+        self._bet(g1, recommendation=rec1)
+        g2 = self._game(ext='a2')
+        self._bet(g2, recommendation=None, is_system=False, rec_status='',
+                  result='loss', payout=Decimal('0.00'),
+                  clv_cents=None, odds_source='manual')
+
+        now = timezone.now()
+        audit = build_audit(
+            MockBet.objects.all(),
+            cutoff=now - timedelta(days=30),
+            now=now,
+            days=30, sport='mlb',
+        )
+        ans = audit['answers']
+        self.assertIn(ans['A_beat_market']['verdict'], ('yes', 'no', 'unknown'))
+        self.assertIn(ans['B_manual_hurt']['verdict'],
+                      ('yes', 'no', 'undetermined'))
+        self.assertIn(ans['C_blind_follow']['verdict'], ('computed', 'na'))
+
+        # Renderer must produce something non-empty.
+        report = render_report(audit)
+        self.assertIn('THREE-POPULATION AUDIT', report)
+        self.assertIn('ANSWER BLOCK', report)
+
+
+class ThreePopulationAuditViewTests(TestCase):
+    """Staff-only HTTP endpoint at /mockbets/audit/three-populations/."""
+
+    def setUp(self):
+        self.client = Client()
+        self.staff = User.objects.create_user('staffuser', password='pw',
+                                              is_staff=True)
+        self.normal = User.objects.create_user('plainuser', password='pw')
+
+    def test_anonymous_redirects(self):
+        resp = self.client.get('/mockbets/audit/three-populations/')
+        # login_required redirects to login
+        self.assertEqual(resp.status_code, 302)
+
+    def test_non_staff_404(self):
+        self.client.force_login(self.normal)
+        resp = self.client.get('/mockbets/audit/three-populations/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_staff_gets_text_report(self):
+        self.client.force_login(self.staff)
+        resp = self.client.get('/mockbets/audit/three-populations/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        body = resp.content.decode('utf-8')
+        self.assertIn('THREE-POPULATION AUDIT', body)
+        self.assertIn('ALL ACTUAL BETS PLACED', body)
+        self.assertIn('TRUE SYSTEM-APPROVED BETS', body)
+        self.assertIn('MANUAL / CONTAMINATED BETS', body)
+        self.assertIn('ANSWER BLOCK', body)
+
+    def test_staff_json_format(self):
+        self.client.force_login(self.staff)
+        resp = self.client.get('/mockbets/audit/three-populations/?format=json')
+        self.assertEqual(resp.status_code, 200)
+        import json as _json
+        data = _json.loads(resp.content.decode('utf-8'))
+        self.assertIn('populations', data)
+        self.assertIn('answers', data)
+        self.assertIn('actual', data['populations'])
+        self.assertIn('system_approved', data['populations'])
+        self.assertIn('manual_contaminated', data['populations'])
+
+    def test_days_clamp(self):
+        """?days=9999 must clamp to 90 — keeps queries bounded."""
+        self.client.force_login(self.staff)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?days=9999&format=json'
+        )
+        self.assertEqual(resp.status_code, 200)
+        import json as _json
+        data = _json.loads(resp.content.decode('utf-8'))
+        self.assertEqual(data['window']['days'], 90)
