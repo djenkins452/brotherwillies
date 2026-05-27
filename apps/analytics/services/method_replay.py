@@ -118,14 +118,28 @@ class SimulatedRecommendation:
     status: str
     status_reason: str
     tier: str
+    # 2026-05-22 LANE-CORRECTED replay extension. Mirrors the production
+    # `_moneyline_candidate` flow so the replay measures the SAME
+    # population the live engine auto-recommends (status='recommended'
+    # AND lane='core'). Without these fields the replay overcounted.
+    lane: str = 'pass'                       # 'core' / 'qualified' / 'pass'
+    risk_flags: dict = None
+    risk_score: int = 0
+    movement_class: Optional[str] = None
+    movement_supports_pick: bool = False
+    # Convenience field — True iff status='recommended' AND lane='core'.
+    # This is the strict lane-corrected recommendation indicator. The
+    # uncorrected `status` field is preserved for back-compat + for
+    # showing the delta between corrected and uncorrected sets.
+    is_lane_corrected_recommended: bool = False
     # Outcome (post-game; used only for analytics, NEVER for decision)
-    home_score: Optional[int]
-    away_score: Optional[int]
-    won: Optional[bool]
+    home_score: Optional[int] = None
+    away_score: Optional[int] = None
+    won: Optional[bool] = None
     # CLV — uses CLOSING odds applied AFTER recommendation generation
-    closing_moneyline_home: Optional[int]
-    closing_moneyline_away: Optional[int]
-    clv_decimal: Optional[float]
+    closing_moneyline_home: Optional[int] = None
+    closing_moneyline_away: Optional[int] = None
+    clv_decimal: Optional[float] = None
 
     def to_dict(self):
         return asdict(self)
@@ -194,6 +208,88 @@ def _clamp_probability(p: float) -> float:
     if p < 0.5:
         return max(1.0 - PROB_MAX, min(1.0 - PROB_MIN, p))
     return p
+
+
+def _pregame_movement_signal(game, pick_side: str) -> dict:
+    """Pre-game-anchored mirror of `movement_signal_for_pick`.
+
+    The live `movement_signal_for_pick` (in `apps.core.services.odds_movement`)
+    cutoffs on `timezone.now() - HISTORY_MAX_HOURS`. That's correct for the
+    live path (recommendations are generated before first_pitch, so all
+    in-window snapshots are pre-game by temporal context). For historical
+    replay, NOW is days or weeks past first_pitch, so calling the live
+    function directly returns empty (no snapshots in last 24h of NOW).
+
+    This replay version uses the SAME math but anchors the time window
+    on `game.first_pitch` instead of `now`, AND adds an explicit
+    `captured_at < first_pitch` filter as defense-in-depth against
+    post-game snapshot leakage (L1 safeguard preserved).
+
+    Returns the same dict shape as `movement_signal_for_pick`:
+        movement_class, movement_score, supports_pick, market_warning, direction.
+    """
+    from datetime import timedelta as _td
+
+    from apps.core.services.odds_movement import (
+        HISTORY_MAX_HOURS, HISTORY_MAX_SNAPSHOTS,
+        W_MAGNITUDE, W_SPEED, W_CONSISTENCY, W_TIMING,
+        _per_market_signal, classify_score, _direction_for_attr,
+    )
+    from apps.mlb.models import OddsSnapshot
+
+    empty = {
+        'movement_class': None,
+        'movement_score': None,
+        'supports_pick': False,
+        'market_warning': False,
+        'direction': 0,
+    }
+    if pick_side not in ('home', 'away'):
+        return empty
+    if game is None or game.first_pitch is None:
+        return empty
+
+    cutoff = game.first_pitch - _td(hours=HISTORY_MAX_HOURS)
+    snaps = list(
+        OddsSnapshot.objects
+        .filter(
+            game=game,
+            captured_at__gte=cutoff,
+            # L1 SAFEGUARD: pre-game only. Even if the time window
+            # extends past first_pitch (it shouldn't, but defense in
+            # depth), exclude any snapshot at or after first_pitch.
+            captured_at__lt=game.first_pitch,
+        )
+        .order_by('-captured_at')[:HISTORY_MAX_SNAPSHOTS * 3]
+    )
+    if len(snaps) < 2:
+        return empty
+    snaps = list(reversed(snaps))  # oldest → newest
+
+    attr = 'moneyline_home' if pick_side == 'home' else 'moneyline_away'
+    sig = _per_market_signal(snaps, attr)
+    if sig is None:
+        return empty
+
+    score = (
+        W_MAGNITUDE * sig['magnitude']
+        + W_SPEED * sig['speed']
+        + W_CONSISTENCY * sig['consistency']
+        + W_TIMING * sig['timing']
+    )
+    cls = classify_score(score)
+    direction = _direction_for_attr(attr, sig['signed_delta'])
+    expected = 1 if pick_side == 'home' else -1
+    supports = (cls in ('moderate', 'strong', 'sharp')) and direction == expected
+    warning = (cls in ('strong', 'sharp')) and direction == -expected
+
+    return {
+        'movement_class': cls if cls != 'noise' else None,
+        'movement_score': round(score, 2),
+        'supports_pick': supports,
+        'market_warning': warning,
+        'direction': direction,
+    }
 
 
 def _simulate_recommendation(
@@ -285,6 +381,34 @@ def _simulate_recommendation(
     )
     tier = _raw_tier(edge_pp)
 
+    # ---- Lane classification (2026-05-22 lane-corrected replay) ----
+    # Mirrors `_moneyline_candidate`'s lane flow EXACTLY: movement signal
+    # → lane_classify → tier blocked/secondary override. The replay
+    # measures the production-equivalent recommended set (status='recommended'
+    # AND lane='core'), not the over-broad compute_status-only set.
+    from apps.core.services.recommendations import (
+        LANE_CORE, LANE_QUALIFIED, _lane_classify,
+    )
+    movement = _pregame_movement_signal(game, pick_side)
+    lane, risk_flags, risk_score = _lane_classify(
+        probability=pick_prob,
+        edge_decimal=edge_decimal,
+        odds_american=pick_odds,
+        source_quality='primary',  # filter enforces this
+        movement_class=movement['movement_class'],
+        movement_supports_pick=movement['supports_pick'],
+        insight_conflicts=False,
+    )
+    # Defense in depth — blocked tier or secondary source caps lane.
+    # In this replay, source is always 'primary' by filter, so
+    # secondary doesn't apply. Tier='blocked' applies if it ever fires.
+    if tier == 'blocked' and lane == LANE_CORE:
+        lane = LANE_QUALIFIED
+
+    is_lane_corrected_recommended = (
+        status == 'recommended' and lane == LANE_CORE
+    )
+
     # ---- Outcome (post-game) — analytics ONLY (L5 safeguard) ----
     won: Optional[bool] = None
     if game.home_score is not None and game.away_score is not None:
@@ -341,6 +465,13 @@ def _simulate_recommendation(
         status=status,
         status_reason=reason,
         tier=tier,
+        # 2026-05-22 lane-corrected fields:
+        lane=lane,
+        risk_flags=dict(risk_flags or {}),
+        risk_score=risk_score,
+        movement_class=movement['movement_class'],
+        movement_supports_pick=movement['supports_pick'],
+        is_lane_corrected_recommended=is_lane_corrected_recommended,
         home_score=game.home_score,
         away_score=game.away_score,
         won=won,
@@ -483,7 +614,10 @@ def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
     }
 
 
-def diff_recommendations(variant_a: dict, variant_b: dict) -> dict:
+def diff_recommendations(
+    variant_a: dict, variant_b: dict,
+    *, use_lane_corrected: bool = False,
+) -> dict:
     """Per-game divergences between two method variants.
 
     a_only: games variant_a recommended but variant_b did not.
@@ -491,14 +625,23 @@ def diff_recommendations(variant_a: dict, variant_b: dict) -> dict:
     both: tuples of (a_sim, b_sim) for games both recommended.
     largest_prob_diff: top games where final_prob diverged most between
         the two methods (any status).
+
+    use_lane_corrected: when True, uses `is_lane_corrected_recommended`
+        instead of bare `status='recommended'`. The corrected version
+        is the production-equivalent comparison.
     """
+    if use_lane_corrected:
+        predicate = lambda s: s.is_lane_corrected_recommended
+    else:
+        predicate = lambda s: s.status == 'recommended'
+
     a_recs = {
         s.game_id: s for s in variant_a['simulations']
-        if s.status == 'recommended'
+        if predicate(s)
     }
     b_recs = {
         s.game_id: s for s in variant_b['simulations']
-        if s.status == 'recommended'
+        if predicate(s)
     }
     a_only = [a_recs[gid] for gid in (a_recs.keys() - b_recs.keys())]
     b_only = [b_recs[gid] for gid in (b_recs.keys() - a_recs.keys())]
@@ -584,14 +727,42 @@ def run_replay(
                 _simulate_recommendation(g, weight, label) for g in games
             ) if sim is not None
         ]
+        # Uncorrected set — compute_status='recommended' only. Same as
+        # the original replay; kept for delta comparison.
         recommended_only = [s for s in simulations if s.status == 'recommended']
+        # Lane-corrected set — additionally requires lane='core'.
+        # This is the production-equivalent recommended population.
+        lane_corrected = [
+            s for s in simulations if s.is_lane_corrected_recommended
+        ]
         metrics = _compute_metrics(recommended_only)
+        metrics_corrected = _compute_metrics(lane_corrected)
+        # Delta: how many picks did the lane filter remove + their risk
+        # flag breakdown. Operator-readable.
+        demoted = [
+            s for s in recommended_only
+            if not s.is_lane_corrected_recommended
+        ]
+        demoted_by_flag = {}
+        for s in demoted:
+            for flag, fired in (s.risk_flags or {}).items():
+                if fired:
+                    demoted_by_flag[flag] = demoted_by_flag.get(flag, 0) + 1
+            # If lane is 'pass' (hard gate failure) rather than 'qualified',
+            # surface that too. Should be empty in practice because
+            # compute_status enforces the same gates, but defense in depth.
+            if s.lane == 'pass' and s.risk_score == 0:
+                demoted_by_flag['hard_gate_fail'] = demoted_by_flag.get('hard_gate_fail', 0) + 1
         variants.append({
             'label': label,
             'blend_weight': weight,
             'simulations': simulations,
             'recommended_count': len(recommended_only),
+            'lane_corrected_count': len(lane_corrected),
             'metrics': metrics,
+            'metrics_corrected': metrics_corrected,
+            'demoted_count': len(demoted),
+            'demoted_by_flag': demoted_by_flag,
         })
 
     out = {
@@ -606,5 +777,10 @@ def run_replay(
 
     if len(variants) >= 2:
         out['diff_first_two'] = diff_recommendations(variants[0], variants[1])
+        # Lane-corrected diff: same comparison but restricted to
+        # lane-corrected recommended sets per variant.
+        out['diff_first_two_corrected'] = diff_recommendations(
+            variants[0], variants[1], use_lane_corrected=True,
+        )
 
     return out

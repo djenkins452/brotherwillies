@@ -416,3 +416,231 @@ class ViewAccessTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.content.decode('utf-8')
         self.assertIn('Comparison', body)
+
+
+class LaneCorrectedReplayTests(TestCase):
+    """The 2026-05-22 lane-corrected replay extension.
+
+    Critical because the prior replay overcounted recommendations
+    (compute_status only, no lane filter). The corrected version
+    matches production's auto-recommended population (status=
+    'recommended' AND lane='core').
+    """
+
+    def test_simulation_now_emits_lane_and_corrected_flag(self):
+        _, h, a = _mlb_setup('lc1')
+        game = _settled_game(h, a)
+        _snapshot(game)
+        sim = _simulate_recommendation(game, 0.55, 'test')
+        # New fields exist and are populated.
+        self.assertIn(sim.lane, ('core', 'qualified', 'pass'))
+        self.assertIsInstance(sim.risk_flags, dict)
+        self.assertIsInstance(sim.risk_score, int)
+        self.assertIsInstance(sim.is_lane_corrected_recommended, bool)
+        # If status is 'recommended', the corrected flag iff lane='core'.
+        if sim.status == 'recommended':
+            self.assertEqual(
+                sim.is_lane_corrected_recommended,
+                sim.lane == 'core',
+            )
+
+    def test_short_fav_thin_cannot_demote_replay_recommended_picks(self):
+        """STRUCTURAL: short_fav_thin fires when edge < 6pp, but the
+        replay's compute_status already enforces edge >= MIN_EDGE=6pp.
+        So this flag cannot fire on a replay-recommended pick. Confirms
+        my §1 audit math: this is the most common lane demoter in
+        live ops but is structurally unreachable in the corrected
+        replay's recommended set."""
+        _, h, a = _mlb_setup('lc2')
+        # Build a short-fav scenario: home favored at -130, but
+        # rating gap big enough to clear MIN_PROBABILITY + MIN_EDGE.
+        # Score: 70*0.35 + 2.5 = 27. sigmoid(27/25) ≈ 0.7464.
+        # Blended 0.55: 0.7464*0.45 + 0.55*0.55 = 0.638.
+        # ml -130/+110: fair_home ≈ 0.5428. Edge ~9.5pp.
+        h.rating = 90; h.save()
+        a.rating = 20; a.save()
+        game = _settled_game(h, a)
+        _snapshot(game, ml_home=-130, ml_away=+110, market_home_prob=0.55)
+
+        sim = _simulate_recommendation(game, 0.55, 'test')
+        if sim.status == 'recommended':
+            # If recommended, short_fav_thin flag must NOT fire because
+            # edge >= MIN_EDGE = 6.0 means edge_decimal >= 0.06, which
+            # is NOT strictly less than 0.06 (the threshold).
+            self.assertFalse(
+                (sim.risk_flags or {}).get('short_fav_thin', False),
+                f'short_fav_thin fired on a replay-recommended pick. '
+                f'Math should make this impossible. risk_flags={sim.risk_flags}, '
+                f'edge_pp={sim.edge_pp}',
+            )
+
+    def test_movement_signal_pregame_filters_post_game_snapshots(self):
+        """L1 SAFEGUARD: the pre-game movement signal helper must
+        exclude post-game snapshots from the history window."""
+        from apps.analytics.services.method_replay import _pregame_movement_signal
+
+        _, h, a = _mlb_setup('lc3')
+        game = _settled_game(h, a)
+        # Pre-game snapshots with clear directional movement.
+        for hours_before in (10, 6, 3, 1):
+            _snapshot(
+                game,
+                hours_before=hours_before,
+                ml_home=-140 + (hours_before * 5),  # moving toward home (less negative)
+                ml_away=120 - (hours_before * 4),
+            )
+        # POST-game snapshot with extreme reversal — must be ignored.
+        _post_game_snapshot(
+            game, hours_after=1,
+            ml_home=+9999, ml_away=-9999,
+        )
+
+        sig_with_post = _pregame_movement_signal(game, 'home')
+        # The signal exists (we have multiple pre-game snapshots).
+        # Now remove the post-game snapshot and confirm the signal is
+        # unchanged (proving post-game wasn't influencing it).
+        from apps.mlb.models import OddsSnapshot
+        OddsSnapshot.objects.filter(
+            game=game, captured_at__gte=game.first_pitch,
+        ).delete()
+        sig_without_post = _pregame_movement_signal(game, 'home')
+
+        self.assertEqual(
+            sig_with_post['movement_class'],
+            sig_without_post['movement_class'],
+        )
+        self.assertEqual(
+            sig_with_post['movement_score'],
+            sig_without_post['movement_score'],
+        )
+
+    def test_lane_corrected_count_is_subset_of_uncorrected(self):
+        """The lane-corrected recommended set is always a SUBSET of the
+        uncorrected (compute_status-only) set, by construction. Any
+        pick lane='core' implies status='recommended' (lane hard gates
+        share gates with compute_status), and pick that fails lane
+        demotion just gets dropped from the corrected set."""
+        # Build a slate of games — some clean, some with extreme odds
+        # that may push picks into qualified/pass lanes.
+        for i in range(5):
+            _, h, a = _mlb_setup(f'lcsub{i}')
+            game = _settled_game(h, a)
+            _snapshot(game, ml_home=-140, ml_away=120)
+
+        today = timezone.localdate()
+        result = run_replay(
+            today - timedelta(days=2), today, [0.55],
+        )
+        v = result['variants'][0]
+        # The corrected count <= the uncorrected count.
+        self.assertLessEqual(v['lane_corrected_count'], v['recommended_count'])
+
+    def test_demoted_by_flag_categorizes_excluded_picks(self):
+        """The demoted_by_flag dict surfaces which risk flags demoted
+        recommendations from core to qualified, broken out by flag.
+        Useful for operator-readable explanations."""
+        _, h, a = _mlb_setup('demo1')
+        game = _settled_game(h, a)
+        _snapshot(game)
+
+        today = timezone.localdate()
+        result = run_replay(today - timedelta(days=2), today, [0.55])
+        v = result['variants'][0]
+        # Shape is stable: demoted_by_flag is a dict (possibly empty).
+        self.assertIsInstance(v['demoted_by_flag'], dict)
+        # demoted_count = recommended_count - lane_corrected_count.
+        self.assertEqual(
+            v['demoted_count'],
+            v['recommended_count'] - v['lane_corrected_count'],
+        )
+
+    def test_metrics_corrected_uses_lane_filtered_population(self):
+        """`metrics_corrected` is computed over `is_lane_corrected_recommended`
+        sims. `metrics` is over the uncorrected (status='recommended')
+        sims. They should differ when there are demotions."""
+        # Build a game with edge well above MIN_EDGE so it's recommended.
+        _, h, a = _mlb_setup('m1')
+        h.rating = 95; h.save()
+        a.rating = 5; a.save()
+        game = _settled_game(h, a, home_score=7, away_score=2)
+        _snapshot(game, ml_home=-120, ml_away=+100, market_home_prob=0.50)
+
+        today = timezone.localdate()
+        result = run_replay(today - timedelta(days=2), today, [0.55])
+        v = result['variants'][0]
+        # Both metric dicts exist.
+        self.assertIn('count', v['metrics'])
+        self.assertIn('count', v['metrics_corrected'])
+        # Sanity: counts are consistent with the recommended/corrected counts.
+        self.assertEqual(v['metrics']['count'], v['recommended_count'])
+        self.assertEqual(v['metrics_corrected']['count'], v['lane_corrected_count'])
+
+    def test_diff_first_two_corrected_uses_lane_filter(self):
+        """The corrected diff between two variants uses lane-corrected
+        recommended sets. Output structure mirrors the uncorrected diff."""
+        for i in range(3):
+            _, h, a = _mlb_setup(f'dfc{i}')
+            game = _settled_game(h, a)
+            _snapshot(game)
+
+        today = timezone.localdate()
+        result = run_replay(today - timedelta(days=2), today, [0.40, 0.55])
+        # Both diffs present.
+        self.assertIn('diff_first_two', result)
+        self.assertIn('diff_first_two_corrected', result)
+        # Both have the same shape.
+        for key in ('a_only_count', 'b_only_count', 'both_count'):
+            self.assertIn(key, result['diff_first_two'])
+            self.assertIn(key, result['diff_first_two_corrected'])
+
+    def test_lane_classification_uses_pregame_movement_signal(self):
+        """Verify the lane classifier sees the pre-game movement signal,
+        not the live timezone.now()-anchored signal. Tests integration
+        of `_pregame_movement_signal` into the lane pipeline."""
+        _, h, a = _mlb_setup('lpms')
+        game = _settled_game(h, a)
+        # Single snapshot — too few for movement signal to fire.
+        _snapshot(game)
+
+        sim = _simulate_recommendation(game, 0.55, 'test')
+        # With < 2 snapshots, movement signal is empty → movement_class=None.
+        self.assertIsNone(sim.movement_class)
+        self.assertFalse(sim.movement_supports_pick)
+
+
+class ProductionEquivalenceAssertionTests(TestCase):
+    """The corrected replay is supposed to be production-equivalent.
+    This locks the structural contract that the lane-corrected
+    recommended population matches what `_moneyline_candidate` +
+    `is_bulk_moneyline_eligible` would produce."""
+
+    def test_lane_corrected_passes_is_bulk_moneyline_eligible_predicate(self):
+        """Every lane-corrected recommendation in the replay should also
+        pass `is_bulk_moneyline_eligible` (the canonical production
+        predicate). The two-lane system makes them equivalent by design."""
+        from unittest.mock import MagicMock
+        from apps.mockbets.services.bulk_actions import is_bulk_moneyline_eligible
+
+        _, h, a = _mlb_setup('peq1')
+        h.rating = 92; h.save()
+        a.rating = 8; a.save()
+        game = _settled_game(h, a)
+        _snapshot(game, ml_home=-130, ml_away=+110, market_home_prob=0.55)
+
+        sim = _simulate_recommendation(game, 0.55, 'test')
+        if sim.is_lane_corrected_recommended:
+            # Build a mock recommendation-like object that mirrors
+            # what `is_bulk_moneyline_eligible` consumes.
+            fake = MagicMock()
+            fake.status = sim.status
+            fake.lane = sim.lane
+            fake.tier = sim.tier
+            fake.status_reason = sim.status_reason
+            fake.confidence_score = sim.pick_prob * 100.0
+            fake.odds_american = sim.pick_odds
+            fake.is_secondary = False
+            self.assertTrue(
+                is_bulk_moneyline_eligible(fake, source_filter='verified'),
+                f'lane-corrected sim should pass is_bulk_moneyline_eligible, '
+                f'but didn\'t. sim={sim}',
+            )

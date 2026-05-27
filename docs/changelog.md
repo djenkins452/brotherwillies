@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-22 — Method Replay: lane-corrected extension
+
+**Tool only. No production code or constants changed. No live behavior change.**
+
+The Method Replay tool from earlier today (`/analytics/method-replay/`) was overcounting recommendations because it called `compute_status` but NOT `_lane_classify`. Production filters additionally by `lane=='core'`. The corrected replay applies the full production filter set so the metrics measure the production-equivalent recommended population.
+
+### What changed
+
+`apps/analytics/services/method_replay.py`:
+
+- New `_pregame_movement_signal(game, pick_side)` — pre-game-anchored mirror of `apps.core.services.odds_movement.movement_signal_for_pick`. The live function anchors the time window on `timezone.now()`; for historical replay that returns empty. The new helper anchors on `game.first_pitch` with explicit `captured_at < first_pitch` filter (L1 safeguard preserved).
+- `_simulate_recommendation` now additionally calls `_lane_classify`, captures `lane`, `risk_flags`, `risk_score`, `movement_class`, `movement_supports_pick`, and the derived `is_lane_corrected_recommended` (`status='recommended'` AND `lane='core'`).
+- `run_replay` emits per variant: `metrics` (uncorrected, status only) AND `metrics_corrected` (lane-corrected). Also `demoted_count` + `demoted_by_flag` so the operator sees which risk flags caused demotions.
+- `diff_recommendations` gains `use_lane_corrected=True` mode; called as `diff_first_two_corrected` alongside the original.
+
+`templates/analytics/method_replay.html`:
+
+- Comparison table shows TWO ROWS per variant: Uncorrected + Lane-corrected. The corrected row is highlighted.
+- New Lane Demotions card surfaces which risk flags caused each variant's demotions, per-flag count.
+
+`apps/analytics/test_method_replay.py`:
+
+- 9 new tests in `LaneCorrectedReplayTests` + `ProductionEquivalenceAssertionTests`:
+  - schema check on new fields
+  - `short_fav_thin` cannot fire on replay-recommended picks (structural math lock)
+  - movement signal helper filters post-game snapshots (L1)
+  - lane-corrected ⊆ uncorrected
+  - demoted_by_flag alignment math
+  - metrics_corrected uses lane-filtered population
+  - corrected diff structure
+  - lane classification uses pre-game movement signal
+  - lane-corrected sims pass `is_bulk_moneyline_eligible` (production-equivalence)
+
+### Tests
+
+27 method-replay tests (18 prior + 9 new), all passing. 1063 total across phase-relevant modules. Zero regressions. `manage.py check` clean.
+
+### What this commit does NOT do
+
+- ❌ No constants changed. No threshold or calibration changes.
+- ❌ No Elo / model / live recommendation behavior changes.
+- ❌ Does not run the corrected replay against production data (no production data available in dev worktree).
+- ❌ Does not build the game-by-game overlap matrix (Phase 2 of the user's mission). That requires either operator running on Railway or a follow-up commit.
+
+### What it DOES enable
+
+After Railway redeploys, the operator runs:
+
+- `/analytics/method-replay/?range=7d&weights=0.40,0.55`
+- `/analytics/method-replay/?range=14d&weights=0.40,0.55` (via custom dates)
+- `/analytics/method-replay/?range=30d&weights=0.40,0.55`
+
+The comparison table shows uncorrected vs lane-corrected metrics side by side. The lane-demotion card shows which risk flags drop picks from `core` to `qualified`. The Phase 3 verdict framework (in `docs/method_replay_lane_corrected_2026_05_22.md` §4) maps the operator's empirical numbers to one of four verdicts.
+
+### Math prediction (from the re-audit)
+
+The re-audit established that of the five risk flags, only `market_conflict` can fire with meaningful frequency on edge ≥ 6pp picks. Predicted demotion rate: ~10–20% from the uncorrected set.
+
+If the actual demotion rate is in that range and CLV+ / ROI metrics survive the demotion intact: methodology is sound, production-replay gap explained by production sample contamination. **Verdict A.**
+
+If demotion is much higher (say 40%+) and ROI collapses: replay was overstated by lane omission. **Verdict C.** Roadmap B Step 1 rollback candidate.
+
+### Architecture law compliance
+
+- Law 3 (scope transparency): satisfied — both uncorrected and corrected populations are displayed; demotion reasons surfaced explicitly.
+- Law 4 (do not overfit): satisfied — no constants changed; tool change only.
+
+---
+
 ## 2026-05-22 — Method Replay: retrospective MLB moneyline backtest
 
 **Surface:** `/analytics/method-replay/` (staff-only). Answers "what would Brother Willies have recommended over the last N days under blend weight W?" without waiting for the live 14-day observation window. Pure analysis — no live logic touched.

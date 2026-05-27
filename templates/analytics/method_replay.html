@@ -72,13 +72,21 @@
             </div>
         </div>
     {% else %}
-        {# ─── Comparison table ─── #}
-        <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Comparison</h2>
+        {# ─── Comparison table — uncorrected vs lane-corrected ─── #}
+        <h2 style="font-size: 1.05rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.4rem;">Comparison (uncorrected vs lane-corrected)</h2>
+        <p style="color: #888; font-size: 0.82rem; margin-bottom: 0.6rem;">
+            <strong>Uncorrected</strong> = `compute_status='recommended'` only.
+            <strong>Lane-corrected</strong> = additionally requires
+            <code>lane=='core'</code> — matches what production's
+            <code>is_bulk_moneyline_eligible</code> predicate emits.
+            The lane-corrected set is the production-equivalent population.
+        </p>
         <div class="card mb-1" style="overflow-x: auto;">
-            <table style="width: 100%; font-size: 0.88rem; border-collapse: collapse;">
+            <table style="width: 100%; font-size: 0.85rem; border-collapse: collapse;">
                 <thead>
                     <tr style="color: #888; text-align: left; border-bottom: 1px solid #2a2a2a;">
                         <th style="padding: 0.4rem 0.5rem;">Variant</th>
+                        <th style="padding: 0.4rem 0.5rem;">Set</th>
                         <th style="padding: 0.4rem 0.5rem; text-align: right;">Recs</th>
                         <th style="padding: 0.4rem 0.5rem; text-align: right;">W–L–P</th>
                         <th style="padding: 0.4rem 0.5rem; text-align: right;">Win %</th>
@@ -91,10 +99,12 @@
                 </thead>
                 <tbody>
                     {% for v in result.variants %}
+                    {# Uncorrected row #}
                     <tr style="border-bottom: 1px solid #1a1a1a;">
-                        <td style="padding: 0.4rem 0.5rem;"><strong>{{ v.label }}</strong></td>
+                        <td rowspan="2" style="padding: 0.4rem 0.5rem; vertical-align: top;"><strong>{{ v.label }}</strong></td>
+                        <td style="padding: 0.4rem 0.5rem; color: #aaa;">Uncorrected</td>
                         <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics.count }}</td>
-                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics.wins }}–{{ v.metrics.losses }}–{{ v.metrics.pushes }}{% if v.metrics.pending %} ({{ v.metrics.pending }} pending){% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics.wins }}–{{ v.metrics.losses }}–{{ v.metrics.pushes }}</td>
                         <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.win_rate is not None %}{{ v.metrics.win_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
                         <td style="padding: 0.4rem 0.5rem; text-align: right; color: {% if v.metrics.roi and v.metrics.roi > 0 %}#22c55e{% elif v.metrics.roi and v.metrics.roi < 0 %}#c33{% else %}#aaa{% endif %};">
                             {% if v.metrics.roi is not None %}{{ v.metrics.roi|floatformat:1 }}%{% else %}—{% endif %}
@@ -106,9 +116,42 @@
                         <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.avg_clv is not None %}{{ v.metrics.avg_clv|floatformat:4 }}{% else %}—{% endif %}</td>
                         <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics.positive_clv_rate is not None %}{{ v.metrics.positive_clv_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
                     </tr>
+                    {# Lane-corrected row #}
+                    <tr style="border-bottom: 1px solid #2a2a2a; background: rgba(108,180,200,0.04);">
+                        <td style="padding: 0.4rem 0.5rem; color: #6cb;">Lane-corrected</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right; color: #6cb;"><strong>{{ v.metrics_corrected.count }}</strong></td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{{ v.metrics_corrected.wins }}–{{ v.metrics_corrected.losses }}–{{ v.metrics_corrected.pushes }}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics_corrected.win_rate is not None %}{{ v.metrics_corrected.win_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right; color: {% if v.metrics_corrected.roi and v.metrics_corrected.roi > 0 %}#22c55e{% elif v.metrics_corrected.roi and v.metrics_corrected.roi < 0 %}#c33{% else %}#aaa{% endif %};">
+                            {% if v.metrics_corrected.roi is not None %}{{ v.metrics_corrected.roi|floatformat:1 }}%{% else %}—{% endif %}
+                        </td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right; color: {% if v.metrics_corrected.net_pl > 0 %}#22c55e{% elif v.metrics_corrected.net_pl < 0 %}#c33{% else %}#aaa{% endif %};">
+                            ${{ v.metrics_corrected.net_pl|floatformat:2 }}
+                        </td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics_corrected.avg_edge %}{{ v.metrics_corrected.avg_edge|floatformat:2 }}pp{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics_corrected.avg_clv is not None %}{{ v.metrics_corrected.avg_clv|floatformat:4 }}{% else %}—{% endif %}</td>
+                        <td style="padding: 0.4rem 0.5rem; text-align: right;">{% if v.metrics_corrected.positive_clv_rate is not None %}{{ v.metrics_corrected.positive_clv_rate|floatformat:1 }}%{% else %}—{% endif %}</td>
+                    </tr>
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+
+        {# ─── Demotion breakdown ─── #}
+        <h3 style="font-size: 0.95rem; color: #aaa; margin: 1rem 0 0.4rem;">Lane demotions (recommendations dropped from corrected set)</h3>
+        <div class="card mb-1" style="font-size: 0.86rem;">
+            {% for v in result.variants %}
+            <div style="border-top: 1px solid #2a2a2a; padding: 0.5rem 0;">
+                <div><strong>{{ v.label }}</strong> — {{ v.demoted_count }} of {{ v.recommended_count }} demoted ({{ v.lane_corrected_count }} survive)</div>
+                {% if v.demoted_by_flag %}
+                <div style="color: #888; margin-top: 0.3rem;">
+                    {% for flag, count in v.demoted_by_flag.items %}
+                        <span style="margin-right: 0.6rem;">{{ count }} × {{ flag }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
         </div>
 
         {# ─── Per-variant breakdowns ─── #}
