@@ -695,3 +695,93 @@ def render_splits(splits: dict, *, label: str, window_desc: str) -> str:
     lines.append(_splits_metric_line('Underdogs (odds > 0)', splits['underdogs']))
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# WEEKLY SCORECARD  (0.55 validation — read-only)
+# ---------------------------------------------------------------------------
+#
+# Lightweight, trustworthy weekly readout for the 0.55 observation window.
+# SYSTEM-APPROVED BETS ONLY (is_true_system_approved): status='recommended',
+# lane='core', system/linked, post-rules date, complete snapshot.
+#
+# Odds buckets match the favorites-experiment definition EXACTLY so the
+# scorecard, the splits view, and the replay all speak the same language:
+#   heavy fav ≤ -200 / mid fav -150..-199 / short fav -149..+99 / dog ≥ +100
+SCORECARD_ODDS_BUCKETS = [
+    ('Heavy fav (≤ -200)',    lambda o: o is not None and o <= -200),
+    ('Mid fav (-150..-199)',  lambda o: o is not None and -199 <= o <= -150),
+    ('Short fav (-149..+99)', lambda o: o is not None and -149 <= o <= 99),
+    ('Underdog (≥ +100)',     lambda o: o is not None and o >= 100),
+]
+
+
+def weekly_scorecard(bets: list) -> dict:
+    """System-approved scorecard for a window. `bets` MUST already be the
+    system-approved population (is_true_system_approved). Pure re-partition
+    through the SAME compute_metrics — no new math."""
+    base = compute_metrics(bets)
+    buckets = []
+    for label, pred in SCORECARD_ODDS_BUCKETS:
+        buckets.append((label, compute_metrics([b for b in bets if pred(b.odds_american)])))
+    # Favorite/dog split uses the +100 cutoff to match the odds-bucket scheme
+    # and the favorites experiment (favorite = priced below +100; +99 is a fav).
+    favorites = compute_metrics(
+        [b for b in bets if b.odds_american is not None and b.odds_american < 100])
+    underdogs = compute_metrics(
+        [b for b in bets if b.odds_american is not None and b.odds_american >= 100])
+    return {
+        'base': base,
+        'odds_buckets': buckets,
+        'favorites': favorites,
+        'underdogs': underdogs,
+    }
+
+
+def render_scorecard(sc: dict, *, window_desc: str) -> str:
+    """Plaintext weekly scorecard for the staff HTTP view."""
+    base = sc['base']
+    lines = []
+    lines.append("#" * 100)
+    lines.append("#  WEEKLY SCORECARD — SYSTEM-APPROVED BETS ONLY  (blend 0.55 validation)")
+    lines.append(f"#  {window_desc}")
+    lines.append("#  Scope: status=recommended AND lane=core AND post-rules AND complete snapshot")
+    lines.append("#" * 100)
+    lines.append("")
+    lines.append("HEADLINE")
+    lines.append("-" * 100)
+    lines.append(f"  Total system-approved bets .. {base['count']}")
+    lines.append(f"  Recommendation count ........ {base['count']}  (placed system-approved)")
+    lines.append(
+        f"  W-L-P ....................... {base['wins']}-{base['losses']}-{base['pushes']}"
+        f"  ({base['pending']} pending)"
+    )
+    lines.append(f"  Win % (settled) ............. {_fmt_pct(base['win_pct'])}")
+    lines.append(f"  ROI % (settled) ............. {_fmt_pct(base['roi_pct'])}")
+    lines.append(f"  Net P/L ..................... {_fmt_money(base['net_pl'])}")
+    lines.append(f"  Settled stake ............... ${base['total_stake']:,.2f}")
+    lines.append("")
+    lines.append("CLV  (primary-source odds_api only)")
+    lines.append("-" * 100)
+    s = base['clv_sample']
+    if s:
+        lines.append(
+            f"  Beat / Matched / Lost ....... {base['clv_beat']} / "
+            f"{base['clv_matched']} / {base['clv_lost']}   (n={s})"
+        )
+        lines.append(f"  Beat-market % ............... {_fmt_pct(base['clv_plus_pct'])}")
+        lines.append(f"  Avg CLV ..................... {_fmt_clv(base['avg_clv_cents'])}")
+    else:
+        lines.append("  (no primary-source CLV rows this window)")
+    lines.append("")
+    lines.append("FAVORITE vs UNDERDOG  (favorite = priced < +100)")
+    lines.append("-" * 100)
+    lines.append(_splits_metric_line('Favorites (< +100)', sc['favorites']))
+    lines.append(_splits_metric_line('Underdogs (≥ +100)', sc['underdogs']))
+    lines.append("")
+    lines.append("ODDS BUCKET BREAKDOWN")
+    lines.append("-" * 100)
+    for label, m in sc['odds_buckets']:
+        lines.append(_splits_metric_line(label, m))
+    lines.append("")
+    return "\n".join(lines) + "\n"

@@ -4625,6 +4625,36 @@ class ThreePopulationAuditTests(TestCase):
         self.assertTrue(any('-131..-150' in l for l in bucket_labels))
         self.assertTrue(any('+101..+150' in l for l in bucket_labels))
 
+    def test_weekly_scorecard_bucket_classification(self):
+        """weekly_scorecard partitions system-approved bets into the 4
+        favorite/dog buckets by placed-side price."""
+        from apps.mockbets.services.three_population_audit import weekly_scorecard
+
+        def _b(ext, odds, result='win', payout=Decimal('60.00')):
+            g = self._game(ext=ext)
+            rec = self._rec(g, lane='core')
+            bet = self._bet(g, recommendation=rec, result=result, payout=payout)
+            bet.odds_american = odds
+            bet.save(update_fields=['odds_american'])
+            return MockBet.objects.get(mlb_game=g)
+
+        bets = [
+            _b('sc_h', -220),   # heavy fav
+            _b('sc_m', -170),   # mid fav
+            _b('sc_s', -120),   # short fav
+            _b('sc_p', 99),     # short fav (+99 boundary)
+            _b('sc_d', 130, result='loss', payout=Decimal('0.00')),  # underdog
+        ]
+        sc = weekly_scorecard(bets)
+        by = dict(sc['odds_buckets'])
+        self.assertEqual(by['Heavy fav (≤ -200)']['count'], 1)
+        self.assertEqual(by['Mid fav (-150..-199)']['count'], 1)
+        self.assertEqual(by['Short fav (-149..+99)']['count'], 2)
+        self.assertEqual(by['Underdog (≥ +100)']['count'], 1)
+        self.assertEqual(sc['favorites']['count'], 4)
+        self.assertEqual(sc['underdogs']['count'], 1)
+        self.assertEqual(sc['base']['count'], 5)
+
     def test_answers_block_resolves(self):
         """A/B/C verdicts populate; no None text where data exists."""
         from apps.mockbets.services.three_population_audit import build_audit, render_report
@@ -4753,3 +4783,29 @@ class ThreePopulationAuditViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.content.decode('utf-8')
         self.assertIn('Since 2026-05-22', body)
+
+    def test_scorecard_mode_returns_weekly_readout(self):
+        """?detail=scorecard returns the system-approved weekly scorecard
+        with the required odds buckets."""
+        self.client.force_login(self.staff)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=scorecard'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        body = resp.content.decode('utf-8')
+        self.assertIn('WEEKLY SCORECARD', body)
+        self.assertIn('SYSTEM-APPROVED', body)
+        self.assertIn('Heavy fav (≤ -200)', body)
+        self.assertIn('Mid fav (-150..-199)', body)
+        self.assertIn('Short fav (-149..+99)', body)
+        self.assertIn('Underdog (≥ +100)', body)
+        # Defaults to a 7-day window.
+        self.assertIn('Last 7 days', body)
+
+    def test_scorecard_non_staff_404(self):
+        self.client.force_login(self.normal)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=scorecard'
+        )
+        self.assertEqual(resp.status_code, 404)

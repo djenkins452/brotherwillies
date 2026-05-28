@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-28 — Blend 0.55 validation: weekly scorecard + observation plan
+
+**No methodology change.** The blend `0.40 → 0.55` was already live (commit `411f78d`, deployed 2026-05-26) — verified by reading the constant + git blame + grepping for overrides; no second edit was needed (it would have been a no-op). Added the validation scaffolding for a clean 30-day production measurement.
+
+### Weekly scorecard (read-only, staff-only)
+`GET /mockbets/audit/three-populations/?detail=scorecard` — SYSTEM-APPROVED bets only (status=recommended AND lane=core AND post-rules AND complete snapshot). Default 7-day window (`?days`/`?since` override). Emits: total bets, recommendation count, W-L-P, win%, ROI, net P/L, settled stake; CLV beat/matched/lost mix + beat-market % + avg CLV (primary-source only); favorite vs underdog (favorite = priced < +100); odds buckets heavy(≤-200)/mid(-150..-199)/short(-149..+99)/dog(≥+100) — matching the favorites-experiment definitions exactly.
+
+- `weekly_scorecard()` + `render_scorecard()` in `three_population_audit.py` (reuses `compute_metrics`; no new math).
+- Fav/dog split aligned to the +100 cutoff for consistency across scorecard / splits / replay.
+
+### Docs
+`docs/blend_055_validation_2026_05_28.md` — exact change, verification, one-line rollback (`MARKET_BLEND_WEIGHT`/`_CAP` → 0.40), scorecard URL, frozen-methodology 30-day plan with pre-registered rollback triggers (CLV+ < 33% for 7d OR Health −5pts), and recommendation-count expectations (~2/day, ~35–40% fewer than 0.40, underdogs ≈ 0).
+
+Tests: `test_weekly_scorecard_bucket_classification`, `test_scorecard_mode_returns_weekly_readout`, `test_scorecard_non_staff_404`. 690 tests across mockbets+core+mlb+analytics pass.
+
+---
+
 ## 2026-05-28 — Favorites-only diagnostic experiment (read-only)
 
 **Read-only. No methodology/threshold/constant/production-behavior changes.**

@@ -933,21 +933,24 @@ def three_population_audit_view(request):
         build_audit, render_report,
         clv_lineage, render_clv_lineage,
         compute_splits, render_splits,
+        weekly_scorecard, render_scorecard,
         is_true_system_approved,
     )
     from django.http import HttpResponse
 
+    detail = (request.GET.get('detail') or '').lower()
+    # Weekly scorecard defaults to a 7-day window; other modes to 30.
+    _default_days = 7 if detail == 'scorecard' else 30
     try:
-        days = int(request.GET.get('days', 30))
+        days = int(request.GET.get('days', _default_days))
     except (TypeError, ValueError):
-        days = 30
+        days = _default_days
     days = max(1, min(days, 90))  # cap at 90 to keep queries bounded
 
     username = request.GET.get('user') or None
     sport = request.GET.get('sport') or 'mlb'
     settled_only = request.GET.get('settled_only') == '1'
     fmt = (request.GET.get('format') or 'text').lower()
-    detail = (request.GET.get('detail') or '').lower()
 
     now = timezone.now()
     # Absolute `since` date wins over trailing `days` when supplied + parseable.
@@ -969,7 +972,7 @@ def three_population_audit_view(request):
     )
 
     # --- Detail modes (read-only measurement audit) ----------------------
-    if detail in ('clv', 'splits'):
+    if detail in ('clv', 'splits', 'scorecard'):
         qs = MockBet.objects.filter(
             bet_type='moneyline', sport=sport, placed_at__gte=cutoff,
         ).select_related('recommendation', 'mlb_game', 'cfb_game',
@@ -977,6 +980,17 @@ def three_population_audit_view(request):
         if username:
             qs = qs.filter(user__username=username)
         all_bets = list(qs)
+
+        # The weekly scorecard is SYSTEM-APPROVED ONLY by definition — scope
+        # is not user-selectable for it.
+        if detail == 'scorecard':
+            pop = [b for b in all_bets if is_true_system_approved(b)]
+            sc = weekly_scorecard(pop)
+            return HttpResponse(
+                render_scorecard(sc, window_desc=window_desc),
+                content_type='text/plain; charset=utf-8',
+            )
+
         scope = (request.GET.get('scope') or 'system').lower()
         if scope == 'manual':
             sys_ids = {b.id for b in all_bets if is_true_system_approved(b)}
