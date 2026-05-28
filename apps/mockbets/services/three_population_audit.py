@@ -94,6 +94,9 @@ def compute_metrics(bets: list) -> dict:
             'avg_clv_cents': None,
             'clv_plus_pct': None,
             'clv_sample': 0,
+            'clv_beat': 0,
+            'clv_matched': 0,
+            'clv_lost': 0,
         }
 
     counter = Counter(b.result for b in bets)
@@ -147,12 +150,19 @@ def compute_metrics(bets: list) -> dict:
         b for b in bets
         if b.clv_cents is not None and (getattr(b, 'odds_source', '') == 'odds_api')
     ]
+    # CLV MIX — beat / matched / lost the close. "matched" (clv==0) is
+    # surfaced separately so it is NOT silently lumped into "lost"; the
+    # integrity audit showed clv==0 is a real, common state under coarse
+    # snapshot cadence.
     if clv_rows:
         avg_clv_cents = round(sum(b.clv_cents for b in clv_rows) / len(clv_rows), 4)
-        pluses = sum(1 for b in clv_rows if b.clv_cents > 0)
-        clv_plus_pct = round(100.0 * pluses / len(clv_rows), 1)
+        clv_beat = sum(1 for b in clv_rows if b.clv_cents > 0)
+        clv_lost = sum(1 for b in clv_rows if b.clv_cents < 0)
+        clv_matched = sum(1 for b in clv_rows if b.clv_cents == 0)
+        clv_plus_pct = round(100.0 * clv_beat / len(clv_rows), 1)
     else:
         avg_clv_cents = None
+        clv_beat = clv_lost = clv_matched = 0
         clv_plus_pct = None
 
     return {
@@ -170,6 +180,55 @@ def compute_metrics(bets: list) -> dict:
         'avg_clv_cents': avg_clv_cents,
         'clv_plus_pct': clv_plus_pct,
         'clv_sample': len(clv_rows),
+        'clv_beat': clv_beat,
+        'clv_matched': clv_matched,
+        'clv_lost': clv_lost,
+    }
+
+
+# ---------------------------------------------------------------------------
+# SPLITS — odds buckets + favorite/underdog (read-only diagnostic)
+# ---------------------------------------------------------------------------
+#
+# Pure re-partitioning of a population by the PLACED price (odds_american =
+# the price of the side the bet was on). Each sub-slice is run through the
+# SAME compute_metrics, so W-L / ROI / CLV math is identical to the headline.
+# No new math, no thresholds, no methodology.
+
+# (label, predicate on american odds). Ordered favorite→dog. Matches the
+# price-bucket scheme used in the earlier diagnostic discussion.
+ODDS_BUCKETS = [
+    ('Heavy fav (≤ -181)',      lambda o: o is not None and o <= -181),
+    ('Fav (-151..-180)',        lambda o: o is not None and -180 <= o <= -151),
+    ('Fav (-131..-150)',        lambda o: o is not None and -150 <= o <= -131),
+    ('Short fav (-101..-130)',  lambda o: o is not None and -130 <= o <= -101),
+    ('Pick (-100..+100)',       lambda o: o is not None and -100 <= o <= 100),
+    ('Dog (+101..+150)',        lambda o: o is not None and 101 <= o <= 150),
+    ('Long dog (≥ +151)',       lambda o: o is not None and o >= 151),
+]
+
+
+def compute_splits(bets: list) -> dict:
+    """Return headline metrics + odds-bucket + favorite/underdog breakdowns.
+
+    `bets` is a materialized list (already the population/window of interest).
+    """
+    base = compute_metrics(bets)
+
+    buckets = []
+    for label, pred in ODDS_BUCKETS:
+        sub = [b for b in bets if pred(b.odds_american)]
+        if sub:
+            buckets.append((label, compute_metrics(sub)))
+
+    favorites = [b for b in bets if (b.odds_american or 0) < 0]
+    underdogs = [b for b in bets if (b.odds_american or 0) > 0]
+
+    return {
+        'base': base,
+        'odds_buckets': buckets,
+        'favorites': compute_metrics(favorites),
+        'underdogs': compute_metrics(underdogs),
     }
 
 
@@ -561,5 +620,78 @@ def render_clv_lineage(lineage: dict, *, label: str = 'SYSTEM-APPROVED') -> str:
             f"{(r['closing_source'] or '—')[:9]:>9} {clb:>9} {clv:>9} {snaps:>11} "
             f"{(r['result'] or '')[:5]:>5}"
         )
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# SPLITS rendering
+# ---------------------------------------------------------------------------
+
+def _splits_metric_line(label: str, m: dict) -> str:
+    wlp = f"{m['wins']}-{m['losses']}-{m['pushes']}"
+    win = f"{m['win_pct']:.1f}%" if m['win_pct'] is not None else '—'
+    roi = f"{m['roi_pct']:+.1f}%" if m['roi_pct'] is not None else '—'
+    clv = f"{m['avg_clv_cents']:+.4f}" if m['avg_clv_cents'] is not None else '—'
+    mix = f"{m['clv_beat']}/{m['clv_matched']}/{m['clv_lost']}"
+    return (
+        f"  {label:<24} n={m['count']:<4} {wlp:>9}  win {win:>6}  "
+        f"ROI {roi:>7}  avgCLV {clv:>9}  beat/match/lost {mix:>10}  "
+        f"(clv n={m['clv_sample']})"
+    )
+
+
+def render_splits(splits: dict, *, label: str, window_desc: str) -> str:
+    """Plaintext render of compute_splits() for the staff HTTP view."""
+    base = splits['base']
+    lines = []
+    lines.append("#" * 110)
+    lines.append(f"#  SPLITS DIAGNOSTIC — {label} population")
+    lines.append(f"#  {window_desc}")
+    lines.append("#" * 110)
+    lines.append("")
+    lines.append("HEADLINE")
+    lines.append("-" * 110)
+    lines.append(_splits_metric_line('TOTAL', base))
+    avg_edge_txt = f"{base['avg_edge_pp']:.2f} pp" if base['avg_edge_pp'] is not None else '—'
+    lines.append(
+        f"  Net P/L ${float(base['net_pl']):+,.2f}   "
+        f"settled stake ${float(base['total_stake']):,.2f}   "
+        f"avg edge {avg_edge_txt}"
+    )
+    lines.append("")
+    lines.append("CLV MIX  (primary-source odds_api only)")
+    lines.append("-" * 110)
+    if base['clv_sample']:
+        s = base['clv_sample']
+        lines.append(
+            f"  Beat market ... {base['clv_beat']:>4}  ({100.0*base['clv_beat']/s:.1f}%)"
+        )
+        lines.append(
+            f"  Matched ....... {base['clv_matched']:>4}  ({100.0*base['clv_matched']/s:.1f}%)"
+            f"   ← clv==0; NOT counted as 'beat'"
+        )
+        lines.append(
+            f"  Lost market ... {base['clv_lost']:>4}  ({100.0*base['clv_lost']/s:.1f}%)"
+        )
+        lines.append(
+            f"  Avg CLV ....... {base['avg_clv_cents']:+.4f}   "
+            f"CLV+ {base['clv_plus_pct']:.1f}%   sample n={s}"
+        )
+    else:
+        lines.append("  (no primary-source CLV rows in this window)")
+    lines.append("")
+    lines.append("BY ODDS BUCKET  (placed-side price)")
+    lines.append("-" * 110)
+    if splits['odds_buckets']:
+        for blabel, m in splits['odds_buckets']:
+            lines.append(_splits_metric_line(blabel, m))
+    else:
+        lines.append("  (no bets in window)")
+    lines.append("")
+    lines.append("FAVORITE vs UNDERDOG  (by placed-side price sign)")
+    lines.append("-" * 110)
+    lines.append(_splits_metric_line('Favorites (odds < 0)', splits['favorites']))
+    lines.append(_splits_metric_line('Underdogs (odds > 0)', splits['underdogs']))
     lines.append("")
     return "\n".join(lines) + "\n"

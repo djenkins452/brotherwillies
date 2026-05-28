@@ -4586,6 +4586,45 @@ class ThreePopulationAuditTests(TestCase):
         self.assertEqual(agg['single_snapshot_games'], 1)   # g1 has 1 snapshot
         self.assertEqual(len(lineage['rows']), 2)
 
+    def test_clv_mix_beat_matched_lost(self):
+        """compute_metrics must split CLV into beat/matched/lost, with
+        matched (clv==0) NOT counted as beat."""
+        from apps.mockbets.services.three_population_audit import compute_metrics
+        g1 = self._game(ext='mx1'); r1 = self._rec(g1, lane='core')
+        b1 = self._bet(g1, recommendation=r1, clv_cents=0.05, odds_source='odds_api')
+        g2 = self._game(ext='mx2'); r2 = self._rec(g2, lane='core')
+        b2 = self._bet(g2, recommendation=r2, clv_cents=0.0, odds_source='odds_api')
+        g3 = self._game(ext='mx3'); r3 = self._rec(g3, lane='core')
+        b3 = self._bet(g3, recommendation=r3, clv_cents=-0.03, odds_source='odds_api')
+        m = compute_metrics([b1, b2, b3])
+        self.assertEqual(m['clv_beat'], 1)
+        self.assertEqual(m['clv_matched'], 1)
+        self.assertEqual(m['clv_lost'], 1)
+        self.assertEqual(m['clv_plus_pct'], round(100.0/3, 1))  # only the beat
+
+    def test_compute_splits_buckets_and_fav_dog(self):
+        """Splits partition by placed price; favorites vs underdogs by sign."""
+        from apps.mockbets.services.three_population_audit import compute_splits
+        # Favorite bet -140
+        g1 = self._game(ext='sp1'); r1 = self._rec(g1, lane='core')
+        b1 = self._bet(g1, recommendation=r1)
+        b1.odds_american = -140; b1.save(update_fields=['odds_american'])
+        # Underdog bet +120
+        g2 = self._game(ext='sp2'); r2 = self._rec(g2, lane='core')
+        b2 = self._bet(g2, recommendation=r2, result='loss', payout=Decimal('0.00'))
+        b2.odds_american = 120; b2.save(update_fields=['odds_american'])
+
+        splits = compute_splits([
+            MockBet.objects.get(mlb_game=g1),
+            MockBet.objects.get(mlb_game=g2),
+        ])
+        self.assertEqual(splits['base']['count'], 2)
+        self.assertEqual(splits['favorites']['count'], 1)
+        self.assertEqual(splits['underdogs']['count'], 1)
+        bucket_labels = [lbl for lbl, _ in splits['odds_buckets']]
+        self.assertTrue(any('-131..-150' in l for l in bucket_labels))
+        self.assertTrue(any('+101..+150' in l for l in bucket_labels))
+
     def test_answers_block_resolves(self):
         """A/B/C verdicts populate; no None text where data exists."""
         from apps.mockbets.services.three_population_audit import build_audit, render_report
@@ -4690,3 +4729,27 @@ class ThreePopulationAuditViewTests(TestCase):
             '/mockbets/audit/three-populations/?detail=clv'
         )
         self.assertEqual(resp.status_code, 404)
+
+    def test_splits_detail_mode(self):
+        """?detail=splits returns odds-bucket + fav/dog + CLV-mix breakdown."""
+        self.client.force_login(self.staff)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=splits&scope=system'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        body = resp.content.decode('utf-8')
+        self.assertIn('SPLITS DIAGNOSTIC', body)
+        self.assertIn('CLV MIX', body)
+        self.assertIn('BY ODDS BUCKET', body)
+        self.assertIn('FAVORITE vs UNDERDOG', body)
+
+    def test_since_param_overrides_days(self):
+        """?since=YYYY-MM-DD is accepted and echoed in the splits window."""
+        self.client.force_login(self.staff)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=splits&since=2026-05-22'
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        self.assertIn('Since 2026-05-22', body)

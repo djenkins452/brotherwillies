@@ -916,9 +916,11 @@ def three_population_audit_view(request):
         sport        — sport filter (default 'mlb')
         settled_only — exclude pending bets ('1' to enable)
         format       — 'text' (default) or 'json'
-        detail        — 'clv' to emit the per-bet CLV lineage diagnostic
-                        (read-only; for the measurement-integrity audit)
-        scope        — with detail=clv: 'system' (default), 'manual', 'actual'
+        detail        — 'clv' to emit the per-bet CLV lineage diagnostic;
+                        'splits' for odds-bucket + favorite/dog + CLV-mix
+                        breakdown (read-only; measurement-integrity audit)
+        scope        — with detail: 'system' (default), 'manual', 'actual'
+        since        — absolute cutoff date 'YYYY-MM-DD' (overrides days)
 
     Designed for Railway where there is no interactive shell. Hit
     /mockbets/audit/three-populations/ as a staff user.
@@ -926,10 +928,11 @@ def three_population_audit_view(request):
     if not request.user.is_staff:
         raise Http404
 
-    from datetime import timedelta as _td
+    from datetime import timedelta as _td, datetime as _dt
     from .services.three_population_audit import (
         build_audit, render_report,
         clv_lineage, render_clv_lineage,
+        compute_splits, render_splits,
         is_true_system_approved,
     )
     from django.http import HttpResponse
@@ -947,10 +950,26 @@ def three_population_audit_view(request):
     detail = (request.GET.get('detail') or '').lower()
 
     now = timezone.now()
-    cutoff = now - _td(days=days)
+    # Absolute `since` date wins over trailing `days` when supplied + parseable.
+    since_raw = (request.GET.get('since') or '').strip()
+    since_used = None
+    if since_raw:
+        try:
+            parsed = _dt.strptime(since_raw, '%Y-%m-%d')
+            cutoff = timezone.make_aware(parsed) if timezone.is_naive(parsed) else parsed
+            since_used = since_raw
+        except (TypeError, ValueError):
+            cutoff = now - _td(days=days)
+    else:
+        cutoff = now - _td(days=days)
+    window_desc = (
+        f"Since {since_used}  →  {now:%Y-%m-%d %H:%M %Z}"
+        if since_used else
+        f"Last {days} days  ({cutoff:%Y-%m-%d} → {now:%Y-%m-%d})"
+    )
 
-    # --- CLV lineage detail mode (read-only measurement audit) -----------
-    if detail == 'clv':
+    # --- Detail modes (read-only measurement audit) ----------------------
+    if detail in ('clv', 'splits'):
         qs = MockBet.objects.filter(
             bet_type='moneyline', sport=sport, placed_at__gte=cutoff,
         ).select_related('recommendation', 'mlb_game', 'cfb_game',
@@ -969,6 +988,14 @@ def three_population_audit_view(request):
         else:
             pop = [b for b in all_bets if is_true_system_approved(b)]
             label = 'SYSTEM-APPROVED'
+
+        if detail == 'splits':
+            splits = compute_splits(pop)
+            return HttpResponse(
+                render_splits(splits, label=label, window_desc=window_desc),
+                content_type='text/plain; charset=utf-8',
+            )
+
         lineage = clv_lineage(pop, limit=80)
         return HttpResponse(
             render_clv_lineage(lineage, label=label),
