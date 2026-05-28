@@ -424,6 +424,44 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- Favorites-only experiment mode (read-only, plaintext) -----------
+    # Standard 0.55 (A) vs 0.55 + favorites-only (B) on the EXACT SAME slate.
+    if (request.GET.get('experiment') or '').lower() == 'favorites':
+        from django.http import HttpResponse
+        from apps.analytics.services.method_replay import (
+            run_favorites_experiment, render_favorites_experiment,
+        )
+
+        try:
+            blend = float(request.GET.get('blend', 0.55))
+            if not (0.0 <= blend <= 0.80):
+                blend = 0.55
+        except (TypeError, ValueError):
+            blend = 0.55
+
+        windows_raw = request.GET.get('windows', '30,60,90')
+        try:
+            windows = tuple(
+                w for w in (int(x.strip()) for x in windows_raw.split(','))
+                if 1 <= w <= 180
+            ) or (30, 60, 90)
+        except (TypeError, ValueError):
+            windows = (30, 60, 90)
+
+        try:
+            exp = run_favorites_experiment(blend=blend, windows=windows)
+            body = render_favorites_experiment(exp)
+        except Exception:
+            import traceback
+            body = (
+                "FAVORITES EXPERIMENT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"blend={blend} windows={windows}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     today = timezone.localdate()
     quick_range = (request.GET.get('range') or '').lower()
 

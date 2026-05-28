@@ -976,3 +976,155 @@ class BlendExperimentProductionShapeTests(TestCase):
         self.assertIn('THIN DATA', txt)
         for w in exp['windows']:
             self.assertEqual(w['a']['metrics']['count'], 0)
+
+
+def _make_sim(*, pick_odds, won=True, clv=0.02):
+    """Minimal SimulatedRecommendation factory for filter/bucket unit tests."""
+    from apps.analytics.services.method_replay import SimulatedRecommendation
+    return SimulatedRecommendation(
+        sport='mlb', game_id='x', game_label='A @ B',
+        first_pitch_iso='2026-05-20T18:00:00+00:00',
+        method_label='0.55', blend_weight=0.55,
+        home_rating_pregame=70.0, away_rating_pregame=40.0,
+        home_pitcher_rating=70.0, away_pitcher_rating=40.0,
+        raw_score=27.0, raw_prob_pre_blend=0.74,
+        market_prob_pregame=0.55, blended_prob=0.64, final_prob=0.64,
+        opening_moneyline_home=pick_odds, opening_moneyline_away=120,
+        fair_home_prob=0.56, fair_away_prob=0.44,
+        pick_side='home', pick_odds=pick_odds, pick_prob=0.64,
+        edge_pp=7.0, status='recommended', status_reason='', tier='strong',
+        lane='core', is_lane_corrected_recommended=True,
+        home_score=5, away_score=3, won=won,
+        closing_moneyline_home=-150, closing_moneyline_away=130,
+        clv_decimal=clv,
+    )
+
+
+class FavoritesExperimentTests(TestCase):
+    """0.55 standard (A) vs 0.55 + favorites-only (B). Read-only. Only the
+    underdog-allowed flag differs; B is strictly a subset of A."""
+
+    def test_is_favorite_only_filter(self):
+        from apps.analytics.services.method_replay import _is_favorite_only
+        self.assertTrue(_is_favorite_only(_make_sim(pick_odds=-150)))
+        self.assertTrue(_is_favorite_only(_make_sim(pick_odds=99)))   # +99 = fav
+        self.assertFalse(_is_favorite_only(_make_sim(pick_odds=100)))  # +100 = dog
+        self.assertFalse(_is_favorite_only(_make_sim(pick_odds=130)))
+
+    def test_favorite_subrange_classification(self):
+        from apps.analytics.services.method_replay import _favorite_subrange_performance
+        sims = [
+            _make_sim(pick_odds=-220),   # heavy
+            _make_sim(pick_odds=-170),   # mid
+            _make_sim(pick_odds=-120),   # short
+            _make_sim(pick_odds=-100),   # short
+            _make_sim(pick_odds=140),    # underdog
+        ]
+        r = _favorite_subrange_performance(sims)
+        self.assertEqual(r['heavy_fav (≤ -200)']['count'], 1)
+        self.assertEqual(r['mid_fav (-150..-199)']['count'], 1)
+        self.assertEqual(r['short_fav (-149..+99)']['count'], 2)
+        self.assertEqual(r['underdog (≥ +100)']['count'], 1)
+
+    def _team_pair(self, s, hr, ar):
+        from apps.mlb.models import Conference, Team
+        c = Conference.objects.create(
+            name=f'C{s}', slug=f'c{s}-{timezone.now().timestamp()}')
+        h = Team.objects.create(
+            name=f'H{s}', slug=f'h{s}-{timezone.now().timestamp()}',
+            conference=c, rating=hr, elo_rating=1500)
+        a = Team.objects.create(
+            name=f'A{s}', slug=f'a{s}-{timezone.now().timestamp()}',
+            conference=c, rating=ar, elo_rating=1500)
+        return h, a
+
+    def _game(self, h, a, days_ago, hs, as_):
+        from apps.mlb.models import Game
+        return Game.objects.create(
+            home_team=h, away_team=a,
+            first_pitch=timezone.now() - timedelta(days=days_ago),
+            status='final', home_score=hs, away_score=as_)
+
+    def _snap(self, g, hours, mlh, mla, mhp):
+        from apps.mlb.models import OddsSnapshot
+        return OddsSnapshot.objects.create(
+            game=g, captured_at=g.first_pitch - timedelta(hours=hours),
+            market_home_win_prob=mhp, moneyline_home=mlh, moneyline_away=mla,
+            odds_source='odds_api', source_quality='primary')
+
+    def test_b_removes_recommended_underdog_pick(self):
+        """A game where the model strongly favors a team the MARKET prices as
+        a dog (+odds) → recommended DOG pick. B must drop it; A must keep it."""
+        from apps.analytics.services.method_replay import run_favorites_experiment
+        # Model loves home (rating 88 vs 14) but market prices home +130 (dog).
+        h, a = self._team_pair('dog', hr=88, ar=14)
+        g = self._game(h, a, days_ago=10, hs=6, as_=2)
+        self._snap(g, 6, mlh=130, mla=-150, mhp=0.43)  # home is a price dog
+
+        exp = run_favorites_experiment(
+            blend=0.55, windows=(30,), min_games_for_window=1,
+        )
+        w = exp['windows'][0]
+        # A recommended the +130 home pick; B removed it.
+        if w['a']['metrics']['count'] >= 1:
+            self.assertGreaterEqual(w['underdogs_removed'], 1)
+            self.assertLess(w['b']['metrics']['count'], w['a']['metrics']['count'])
+            self.assertTrue(
+                w['a']['metrics']['count'] == 0
+                or w['delta']['count'] is not None
+            )
+
+    def test_b_is_subset_no_op_when_no_underdogs(self):
+        """When A holds only favorites, B == A (no-op) and delta count is 0."""
+        from apps.analytics.services.method_replay import (
+            run_favorites_experiment, render_favorites_experiment,
+        )
+        # Strong home favorite, priced as favorite (-160). Recommended FAV pick.
+        h, a = self._team_pair('fav', hr=88, ar=14)
+        g = self._game(h, a, days_ago=12, hs=6, as_=2)
+        self._snap(g, 6, mlh=-160, mla=140, mhp=0.60)
+
+        exp = run_favorites_experiment(
+            blend=0.55, windows=(30, 60, 90), min_games_for_window=1,
+        )
+        w = exp['windows'][0]
+        self.assertEqual(w['underdogs_removed'], 0)
+        self.assertEqual(w['b']['metrics']['count'], w['a']['metrics']['count'])
+        self.assertEqual(w['delta']['count'], 0)
+        txt = render_favorites_experiment(exp)
+        self.assertIn('FAVORITES-ONLY EXPERIMENT', txt)
+        self.assertIn('NO-OP', txt)
+
+    def test_view_favorites_mode_returns_200(self):
+        from django.urls import reverse
+        u = User.objects.create_user('staff_fav', password='x', is_staff=True)
+        c = Client()
+        c.force_login(u)
+        resp = c.get(reverse('analytics:method_replay') + '?experiment=favorites')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        self.assertIn('FAVORITES-ONLY EXPERIMENT', resp.content.decode('utf-8'))
+
+    def test_view_favorites_non_staff_forbidden(self):
+        from django.urls import reverse
+        u = User.objects.create_user('reg_fav', password='x')
+        c = Client()
+        c.force_login(u)
+        resp = c.get(reverse('analytics:method_replay') + '?experiment=favorites')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_view_favorites_captures_exception(self):
+        from unittest.mock import patch
+        from django.urls import reverse
+        u = User.objects.create_user('staff_favd', password='x', is_staff=True)
+        c = Client()
+        c.force_login(u)
+        with patch(
+            'apps.analytics.services.method_replay.run_favorites_experiment',
+            side_effect=RuntimeError('fav kaboom'),
+        ):
+            resp = c.get(reverse('analytics:method_replay') + '?experiment=favorites')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        self.assertIn('STAFF DIAGNOSTIC', body)
+        self.assertIn('fav kaboom', body)

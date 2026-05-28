@@ -948,6 +948,31 @@ def _bucket_performance(sims: List[SimulatedRecommendation]) -> dict:
     }
 
 
+# Favorite sub-ranges per the favorites-only experiment definition. Ordered
+# heavy → short → (underdog, shown for transparency on the standard set).
+# "Favorites only" = pick_odds < +100 (the first three ranges); underdogs
+# are pick_odds >= +100.
+FAV_SUBRANGES = [
+    ('heavy_fav (≤ -200)',    lambda o: o is not None and o <= -200),
+    ('mid_fav (-150..-199)',  lambda o: o is not None and -199 <= o <= -150),
+    ('short_fav (-149..+99)', lambda o: o is not None and -149 <= o <= 99),
+    ('underdog (≥ +100)',     lambda o: o is not None and o >= 100),
+]
+
+
+def _is_favorite_only(sim) -> bool:
+    """Favorites-only filter: keep picks priced below +100 (drop underdogs)."""
+    return sim.pick_odds is not None and sim.pick_odds < 100
+
+
+def _favorite_subrange_performance(sims: List[SimulatedRecommendation]) -> dict:
+    """Per favorite sub-range performance (heavy/mid/short + underdog)."""
+    return {
+        label: _perf([s for s in sims if pred(s.pick_odds)])
+        for label, pred in FAV_SUBRANGES
+    }
+
+
 _DELTA_KEYS = (
     'count', 'wins', 'losses', 'win_rate', 'roi', 'net_pl', 'avg_edge',
     'avg_clv', 'positive_clv_rate', 'clv_beat', 'clv_matched', 'clv_lost',
@@ -1070,6 +1095,99 @@ def run_blend_experiment(
     }
 
 
+def run_favorites_experiment(
+    *,
+    blend: float = 0.55,
+    windows: Tuple[int, ...] = (30, 60, 90),
+    reference_date: Optional[date] = None,
+    min_games_for_window: int = 20,
+) -> dict:
+    """Favorites-only diagnostic — A = standard 0.55, B = 0.55 + favorites-only.
+
+    SAME methodology and slates as the blend experiment. The ONLY variable is
+    whether underdogs (pick_odds >= +100) are allowed:
+        A (standard)        = lane-corrected recommended set at `blend`
+        B (favorites-only)  = A, with underdog picks removed (pick_odds < +100)
+
+    B is strictly a SUBSET of A. If A already contains no underdogs (the 0.55
+    blend tends to suppress them), B == A and every delta is zero — which is
+    itself the answer: the favorites-only rule adds nothing on top of 0.55.
+
+    Read-only. Simulate-once-and-slice + per-game isolation (same hardening as
+    run_blend_experiment). No production constants changed.
+    """
+    from apps.mlb.models import Game
+
+    ref = reference_date or timezone.localdate()
+    date_to = ref - timedelta(days=1)
+    widest = max(windows) if windows else 90
+    date_from_widest = ref - timedelta(days=widest)
+
+    games = list(
+        Game.objects.filter(
+            status='final',
+            home_score__isnull=False,
+            away_score__isnull=False,
+            first_pitch__date__gte=date_from_widest,
+            first_pitch__date__lte=date_to,
+        )
+        .select_related('home_team', 'away_team', 'home_pitcher', 'away_pitcher')
+        .order_by('first_pitch')
+    )
+
+    sims = []          # (game_date, sim) for lane-corrected recommended only
+    sim_errors = 0
+    for g in games:
+        try:
+            sim = _simulate_recommendation(g, blend, f'{blend:.2f}')
+        except Exception:
+            sim_errors += 1
+            logger.exception(
+                'run_favorites_experiment: sim failed game=%s', getattr(g, 'id', None),
+            )
+            continue
+        if sim is not None and sim.is_lane_corrected_recommended:
+            sims.append((g.first_pitch.date(), sim))
+
+    window_results = []
+    for w in windows:
+        date_from = ref - timedelta(days=w)
+        a_sims = [s for (gd, s) in sims if date_from <= gd <= date_to]
+        b_sims = [s for s in a_sims if _is_favorite_only(s)]
+        a_metrics = _compute_metrics(a_sims)
+        b_metrics = _compute_metrics(b_sims)
+        games_evaluable = sum(
+            1 for g in games if date_from <= g.first_pitch.date() <= date_to
+        )
+        window_results.append({
+            'days': w,
+            'date_from': date_from,
+            'date_to': date_to,
+            'games_evaluable': games_evaluable,
+            'data_ok': games_evaluable >= min_games_for_window,
+            'underdogs_removed': len(a_sims) - len(b_sims),
+            'a': {
+                'label': 'standard 0.55', 'metrics': a_metrics,
+                'buckets': _bucket_performance(a_sims),
+                'fav_subranges': _favorite_subrange_performance(a_sims),
+            },
+            'b': {
+                'label': 'favorites-only', 'metrics': b_metrics,
+                'buckets': _bucket_performance(b_sims),
+                'fav_subranges': _favorite_subrange_performance(b_sims),
+            },
+            'delta': _delta(b_metrics, a_metrics),
+        })
+
+    return {
+        'blend': blend,
+        'reference_date': ref,
+        'min_games_for_window': min_games_for_window,
+        'sim_errors': sim_errors,
+        'windows': window_results,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Blend experiment — plaintext renderer (staff HTTP view)
 
@@ -1187,6 +1305,90 @@ def render_blend_experiment(exp: dict) -> str:
         lines.append("  FAVORITE vs DOG (a / b):")
         lines.append(f"    Favorites  {_bucket_cell('a', af)}  {_bucket_cell('b', bf)}")
         lines.append(f"    Underdogs  {_bucket_cell('a', ad)}  {_bucket_cell('b', bd)}")
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def render_favorites_experiment(exp: dict) -> str:
+    """Plaintext render of run_favorites_experiment() for the staff view."""
+    blend = exp['blend']
+    lines = []
+    lines.append("#" * 118)
+    lines.append(
+        f"#  FAVORITES-ONLY EXPERIMENT — standard {blend:.2f} (A) vs "
+        f"{blend:.2f}+favorites-only (B) on the EXACT SAME slate"
+    )
+    lines.append(
+        "#  Read-only. ONLY variable: underdogs allowed (A) vs removed "
+        "(B, pick_odds < +100). B ⊆ A. Population = lane-corrected recommended."
+    )
+    lines.append(f"#  Reference date: {exp['reference_date'].isoformat()}  "
+                 f"(windows end the prior day)")
+    lines.append("#" * 118)
+
+    for wr in exp['windows']:
+        d = wr['delta']
+        lines.append("")
+        lines.append("=" * 118)
+        lines.append(
+            f"  WINDOW: {wr['days']} days   "
+            f"({wr['date_from'].isoformat()} → {wr['date_to'].isoformat()})   "
+            f"games evaluable: {wr['games_evaluable']}   "
+            f"underdogs removed by B: {wr['underdogs_removed']}"
+            + ("" if wr['data_ok'] else
+               f"   ⚠ THIN DATA (< {exp['min_games_for_window']} games) — directional at best")
+        )
+        lines.append("=" * 118)
+        lines.append(_metric_row('A standard', wr['a']['metrics']))
+        lines.append(_metric_row('B favs-only', wr['b']['metrics']))
+
+        def dd(key, pct=False, money=False):
+            v = d.get(key)
+            if v is None:
+                return '—'
+            if money:
+                return f"${v:+,.2f}"
+            if pct:
+                return f"{v:+.2f}pp"
+            return f"{v:+g}"
+        lines.append(
+            f"  Δ (B−A)        count {dd('count')}   "
+            f"win% {dd('win_rate', pct=True)}   "
+            f"ROI {dd('roi', pct=True)}   "
+            f"P/L {dd('net_pl', money=True)}   "
+            f"avgCLV {dd('avg_clv')}   "
+            f"beat {dd('clv_beat')}  matched {dd('clv_matched')}  lost {dd('clv_lost')}"
+        )
+        if wr['underdogs_removed'] == 0:
+            lines.append(
+                "  NOTE: B removed 0 picks — the 0.55 set already contains no "
+                "underdogs, so favorites-only is a NO-OP in this window."
+            )
+
+        # Favorite sub-range performance (the experiment's headline breakdown)
+        lines.append("")
+        lines.append("  FAVORITE SUB-RANGE PERFORMANCE (a / b):")
+        for label, _ in FAV_SUBRANGES:
+            am = wr['a']['fav_subranges'][label]
+            bm = wr['b']['fav_subranges'][label]
+            if am['count'] == 0 and bm['count'] == 0:
+                continue
+            lines.append(
+                f"    {label:<22} {_bucket_cell('a', am)}  {_bucket_cell('b', bm)}"
+            )
+
+        # Per-confidence-bucket performance
+        lines.append("")
+        lines.append("  BY CONFIDENCE BUCKET (a / b):")
+        for k in CONF_BUCKET_ORDER:
+            am = wr['a']['buckets']['by_confidence_bucket'][k]
+            bm = wr['b']['buckets']['by_confidence_bucket'][k]
+            if am['count'] == 0 and bm['count'] == 0:
+                continue
+            lines.append(
+                f"    {k:<8} {_bucket_cell('a', am)}  {_bucket_cell('b', bm)}"
+            )
 
     lines.append("")
     return "\n".join(lines) + "\n"

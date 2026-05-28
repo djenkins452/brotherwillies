@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-28 — Favorites-only diagnostic experiment (read-only)
+
+**Read-only. No methodology/threshold/constant/production-behavior changes.**
+
+New diagnostic: `run_favorites_experiment` + `render_favorites_experiment`, exposed at `GET /analytics/method-replay/?experiment=favorites` (staff-only, plaintext). Compares, on the EXACT SAME historical slate and methodology as the blend experiment:
+
+- **A** = standard 0.55 lane-corrected recommended set
+- **B** = A with underdogs removed (favorites-only: `pick_odds < +100`)
+
+B is strictly a subset of A. Per window (default 30/60/90): count, W-L, win%, ROI, net P/L, avg edge, avg CLV, CLV beat/match/lost, by-odds-bucket and by-confidence-bucket performance, plus the headline **favorite sub-range** breakdown (heavy ≤ -200 / mid -150..-199 / short -149..+99 / underdog ≥ +100), and Δ (B − A). Surfaces `underdogs_removed` per window and flags the no-op case (B removed 0 picks because 0.55 already produces no underdogs).
+
+Reuses the hardened infra: simulate-once-and-slice (widest window once per the nested-window set), per-game try/except isolation, and staff diagnostic capture on the view.
+
+Tests: `FavoritesExperimentTests` (7) — filter cutoff at +100, favorite sub-range classification, B drops a recommended dog pick, B==A no-op when no underdogs, view 200/403, view exception capture. 65 analytics tests pass.
+
+---
+
 ## 2026-05-28 — Fix: blend experiment 500 (timeout-hardening + diagnostics)
 
 **Read-only. No methodology/threshold/constant changes.**
