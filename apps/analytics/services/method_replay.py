@@ -54,12 +54,15 @@ INTENTIONALLY NOT TOUCHED:
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 # Blend-weight history. Updated when MARKET_BLEND_WEIGHT changes in
@@ -732,11 +735,22 @@ def run_replay(
 
     variants = []
     for weight, label in zip(blend_weights, method_labels):
-        simulations = [
-            sim for sim in (
-                _simulate_recommendation(g, weight, label) for g in games
-            ) if sim is not None
-        ]
+        # Per-game isolation: a single pathological game (unexpected data
+        # shape) must never 500 the whole replay. Skip + log + count.
+        simulations = []
+        sim_errors = 0
+        for g in games:
+            try:
+                sim = _simulate_recommendation(g, weight, label)
+            except Exception:
+                sim_errors += 1
+                logger.exception(
+                    'method_replay: _simulate_recommendation failed '
+                    'game=%s weight=%s', getattr(g, 'id', None), weight,
+                )
+                continue
+            if sim is not None:
+                simulations.append(sim)
         # Uncorrected set — compute_status='recommended' only. Same as
         # the original replay; kept for delta comparison.
         recommended_only = [s for s in simulations if s.status == 'recommended']
@@ -773,6 +787,7 @@ def run_replay(
             'metrics_corrected': metrics_corrected,
             'demoted_count': len(demoted),
             'demoted_by_flag': demoted_by_flag,
+            'sim_errors': sim_errors,
         })
 
     out = {
@@ -959,32 +974,81 @@ def run_blend_experiment(
 ) -> dict:
     """Compare two blend weights on the SAME historical slate across windows.
 
-    For each window: simulate both weights over the identical final-game set,
-    take the LANE-CORRECTED (production-equivalent) recommended population per
-    weight, compute headline + per-bucket performance, and the b−a delta.
-    Read-only; no production constants changed.
+    PERFORMANCE: the windows are nested with the SAME end date (7 ⊂ 14 ⊂ 30
+    ⊂ 60). The earlier version called run_replay once PER window, re-simulating
+    overlapping games up to 4× — a query fan-out that scales with production
+    volume and could exceed the gunicorn worker timeout (surfacing as a 500).
+    This version simulates the WIDEST window ONCE per weight, then slices the
+    sub-windows by first_pitch date. Output is mathematically identical
+    (nested same-end-date windows) but the work is ~halved.
+
+    ROBUSTNESS: each game's simulation is isolated in try/except so a single
+    pathological row degrades to a skip (logged + counted), never a 500.
     """
+    from apps.mlb.models import Game
+
     ref = reference_date or timezone.localdate()
+    date_to = ref - timedelta(days=1)        # exclude today (games not final)
+    widest = max(windows) if windows else 60
+    date_from_widest = ref - timedelta(days=widest)
+
+    games = list(
+        Game.objects.filter(
+            status='final',
+            home_score__isnull=False,
+            away_score__isnull=False,
+            first_pitch__date__gte=date_from_widest,
+            first_pitch__date__lte=date_to,
+        )
+        .select_related('home_team', 'away_team', 'home_pitcher', 'away_pitcher')
+        .order_by('first_pitch')
+    )
+
+    # Simulate ONCE per weight over the widest game set. Store (game_date, sim)
+    # so sub-windows can be sliced without re-querying or re-simulating.
+    def _simulate_all(weight: float):
+        out = []          # list of (game_date, SimulatedRecommendation)
+        errors = 0
+        for g in games:
+            try:
+                sim = _simulate_recommendation(g, weight, f'{weight:.2f}')
+            except Exception:
+                errors += 1
+                logger.exception(
+                    'run_blend_experiment: sim failed game=%s weight=%s',
+                    getattr(g, 'id', None), weight,
+                )
+                continue
+            if sim is not None:
+                out.append((g.first_pitch.date(), sim))
+        return out, errors
+
+    a_all, a_errors = _simulate_all(blend_a)
+    b_all, b_errors = _simulate_all(blend_b)
+
     window_results = []
     for w in windows:
         date_from = ref - timedelta(days=w)
-        date_to = ref - timedelta(days=1)   # exclude today (games not final)
-        replay = run_replay(
-            date_from, date_to,
-            blend_weights=[blend_a, blend_b],
-            method_labels=[f'{blend_a:.2f}', f'{blend_b:.2f}'],
+
+        def _slice(all_sims):
+            return [
+                sim for (gd, sim) in all_sims
+                if date_from <= gd <= date_to and sim.is_lane_corrected_recommended
+            ]
+
+        a_sims = _slice(a_all)
+        b_sims = _slice(b_all)
+        a_metrics = _compute_metrics(a_sims)
+        b_metrics = _compute_metrics(b_sims)
+        games_evaluable = sum(
+            1 for g in games if date_from <= g.first_pitch.date() <= date_to
         )
-        va, vb = replay['variants'][0], replay['variants'][1]
-        a_sims = [s for s in va['simulations'] if s.is_lane_corrected_recommended]
-        b_sims = [s for s in vb['simulations'] if s.is_lane_corrected_recommended]
-        a_metrics = va['metrics_corrected']
-        b_metrics = vb['metrics_corrected']
         window_results.append({
             'days': w,
             'date_from': date_from,
             'date_to': date_to,
-            'games_evaluable': replay['total_games_evaluable'],
-            'data_ok': replay['total_games_evaluable'] >= min_games_for_window,
+            'games_evaluable': games_evaluable,
+            'data_ok': games_evaluable >= min_games_for_window,
             'a': {
                 'blend': blend_a, 'metrics': a_metrics,
                 'buckets': _bucket_performance(a_sims),
@@ -994,13 +1058,14 @@ def run_blend_experiment(
                 'buckets': _bucket_performance(b_sims),
             },
             'delta': _delta(b_metrics, a_metrics),
-            'diff_corrected': replay.get('diff_first_two_corrected'),
         })
+
     return {
         'blend_a': blend_a,
         'blend_b': blend_b,
         'reference_date': ref,
         'min_games_for_window': min_games_for_window,
+        'sim_errors': {'a': a_errors, 'b': b_errors},
         'windows': window_results,
     }
 

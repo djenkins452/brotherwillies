@@ -400,13 +400,29 @@ def method_replay(request):
         except (TypeError, ValueError):
             windows = (7, 14, 30, 60)
 
-        exp = run_blend_experiment(
-            blend_a=blend_a, blend_b=blend_b, windows=windows,
-        )
-        return HttpResponse(
-            render_blend_experiment(exp),
-            content_type='text/plain; charset=utf-8',
-        )
+        # Staff-only diagnostic capture. DEBUG is False in production, so an
+        # uncaught exception here returns an opaque 500 whose traceback only
+        # reaches logs we can't always see. Catch it and return the exact
+        # exception + traceback as plaintext so the precise failure (type /
+        # file / line) is visible to the staff operator. NOTE: a gunicorn
+        # WORKER TIMEOUT kills the process and is NOT catchable here — the
+        # simulate-once-and-slice refactor in run_blend_experiment is what
+        # addresses that path.
+        try:
+            exp = run_blend_experiment(
+                blend_a=blend_a, blend_b=blend_b, windows=windows,
+            )
+            body = render_blend_experiment(exp)
+        except Exception:
+            import traceback
+            body = (
+                "BLEND EXPERIMENT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"blend_a={blend_a} blend_b={blend_b} windows={windows}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
     today = timezone.localdate()
     quick_range = (request.GET.get('range') or '').lower()

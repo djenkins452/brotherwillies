@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-28 — Fix: blend experiment 500 (timeout-hardening + diagnostics)
+
+**Read-only. No methodology/threshold/constant changes.**
+
+`/analytics/method-replay/?experiment=blend` returned a production 500. Could not be reproduced locally even with production-shaped data (20 games over 60 days, Elo-history rows, multi-snapshot movement, neutral sites, missing pitchers, partial/0-odds/push/long-dog rows) driven through the real staff view — all returned 200. That ruled out the data-shape exception classes and pointed to **performance: the experiment called `run_replay` once PER window (7/14/30/60), re-simulating overlapping games up to 4×**. At production volume (~hundreds of games × 2 weights × ~4–5 queries each × 4 windows) the query fan-out plausibly exceeds the gunicorn worker timeout, surfacing as a 500. (A worker timeout is not a catchable Python exception, which is why local unit tests — small slate, in-memory SQLite — never tripped it.)
+
+### Fixes (minimum change, no feature redesign)
+
+1. **Eliminate 4× redundant simulation** (`run_blend_experiment`): the windows are nested with the same end date, so simulate the WIDEST window ONCE per weight, then slice sub-windows by `first_pitch` date. Output is mathematically identical; work is ~halved and the dominant timeout vector is removed.
+2. **Per-game isolation** (`run_replay` + `run_blend_experiment`): each `_simulate_recommendation` call is wrapped in try/except — one pathological game is skipped + logged + counted (`sim_errors`), never fatal.
+3. **Staff diagnostic capture** (view): on any exception the experiment view returns the exact traceback (type/file/line) as plaintext instead of an opaque 500. (Does not catch a worker timeout — fix #1 addresses that path.)
+
+### Why production failed but tests passed
+Local tests used a small, uniform slate and never exercised the 30/60-day windows through the experiment, nor production volume. The failure is load-dependent (timeout), not data-shape — so it could only appear against the real dataset. The new regression suite closes that gap.
+
+### Regression coverage (`BlendExperimentProductionShapeTests`, 7 tests)
+Production-shaped slate over 60 days (Elo history, multi-snapshot movement, neutral sites, missing pitchers, partial/push/long-dog rows): full 7/14/30/60 experiment renders; staff view returns 200; nested-window subset/monotonicity (slicing correctness); single bad game skipped in both `run_replay` and `run_blend_experiment`; view captures an injected exception as a diagnostic; empty windows degrade gracefully.
+
+450 tests across analytics+mockbets+core pass.
+
+**Follow-up lever (not yet applied):** each game is still simulated twice (once per weight) and snapshot/Elo/movement queries repeat per call. If timeout recurs at higher volume, fetch per-game inputs once and apply both weights, and prefetch snapshots — a larger change deferred per minimum-change scope.
+
+---
+
 ## 2026-05-28 — Method Replay: blend-weight counterfactual experiment
 
 **Read-only diagnostic. No production constants, thresholds, or methodology changed.**

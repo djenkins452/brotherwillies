@@ -786,3 +786,193 @@ class BlendExperimentViewTests(TestCase):
         c.force_login(u)
         resp = c.get(reverse('analytics:method_replay') + '?experiment=blend')
         self.assertEqual(resp.status_code, 403)
+
+
+class BlendExperimentProductionShapeTests(TestCase):
+    """Regression tests for the production 500 on ?experiment=blend.
+
+    The local unit tests originally used a small, uniform slate that never
+    exercised: (a) multi-snapshot movement signals, (b) Elo history rows,
+    (c) the full 30/60-day windows, (d) graceful degradation when a single
+    game's simulation raises. These tests reproduce production-shaped data
+    and lock the hardening (per-game isolation + simulate-once-and-slice +
+    staff diagnostic capture)."""
+
+    def _team_pair(self, s, hr=85, ar=20):
+        from apps.mlb.models import Conference, Team
+        c = Conference.objects.create(
+            name=f'C{s}', slug=f'c{s}-{timezone.now().timestamp()}')
+        h = Team.objects.create(
+            name=f'H{s}', slug=f'h{s}-{timezone.now().timestamp()}',
+            conference=c, rating=hr, elo_rating=1560)
+        a = Team.objects.create(
+            name=f'A{s}', slug=f'a{s}-{timezone.now().timestamp()}',
+            conference=c, rating=ar, elo_rating=1440)
+        return h, a
+
+    def _game(self, h, a, days_ago, hs, as_, neutral=False):
+        from apps.mlb.models import Game
+        fp = timezone.now() - timedelta(days=days_ago)
+        return Game.objects.create(
+            home_team=h, away_team=a, first_pitch=fp, status='final',
+            home_score=hs, away_score=as_, neutral_site=neutral)
+
+    def _snap(self, g, hours_before, mlh, mla, mhp=0.55):
+        from apps.mlb.models import OddsSnapshot
+        return OddsSnapshot.objects.create(
+            game=g, captured_at=g.first_pitch - timedelta(hours=hours_before),
+            market_home_win_prob=mhp, moneyline_home=mlh, moneyline_away=mla,
+            odds_source='odds_api', source_quality='primary')
+
+    def _elo(self, team, game, pre, post):
+        from apps.analytics.models import TeamEloHistory
+        return TeamEloHistory.objects.create(
+            sport='mlb', mlb_team=team, mlb_game=game, pre_rating=pre,
+            post_rating=post, k_factor=4.0,
+            is_home=(team == game.home_team), won=False)
+
+    def _build_production_shape(self, n=18):
+        """Heterogeneous slate spanning 60 days: multi-snapshot movement,
+        Elo history rows, neutral sites, missing pitchers, partial snapshots,
+        long dogs, pushes."""
+        for i in range(n):
+            h, a = self._team_pair(f'ps{i}', hr=80 + (i % 10), ar=10 + (i % 15))
+            hs, as_ = (6, 2) if i % 3 else (2, 6)
+            if i % 9 == 0:
+                hs = as_ = 4  # push/tie
+            g = self._game(h, a, days_ago=2 + i * 3, hs=hs, as_=as_,
+                           neutral=(i % 7 == 0))
+            # Multi-snapshot → exercises _pregame_movement_signal/_per_market_signal
+            self._snap(g, 18, -120 - i, 100 + i)
+            self._snap(g, 6, -130 - i, 110 + i)
+            if i % 5 == 0:
+                self._snap(g, 4, None, None)        # partial snapshot
+            self._snap(g, 1, -140 - i, 120 + i)
+            self._elo(h, g, 1560 + i, 1564 + i)
+            self._elo(a, g, 1440 - i, 1436 - i)
+
+    def test_full_experiment_production_shape_does_not_crash(self):
+        """The exact production call: windows 7/14/30/60 over heterogeneous
+        data with Elo history + multi-snapshots. Must render, not 500."""
+        from apps.analytics.services.method_replay import (
+            run_blend_experiment, render_blend_experiment,
+        )
+        self._build_production_shape()
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7, 14, 30, 60),
+            min_games_for_window=2,
+        )
+        txt = render_blend_experiment(exp)
+        self.assertIn('BLEND EXPERIMENT', txt)
+        self.assertEqual(len(exp['windows']), 4)
+        self.assertEqual([w['days'] for w in exp['windows']], [7, 14, 30, 60])
+
+    def test_view_production_shape_returns_200(self):
+        from django.urls import reverse
+        self._build_production_shape()
+        u = User.objects.create_user('staff_ps', password='x', is_staff=True)
+        c = Client()
+        c.force_login(u)
+        resp = c.get(reverse('analytics:method_replay') + '?experiment=blend')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        self.assertIn('BLEND EXPERIMENT', resp.content.decode('utf-8'))
+
+    def test_nested_windows_are_subsets(self):
+        """7d ⊆ 14d ⊆ 30d ⊆ 60d — sub-window games_evaluable is monotonic
+        non-decreasing as the window widens (slicing correctness)."""
+        from apps.analytics.services.method_replay import run_blend_experiment
+        self._build_production_shape()
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7, 14, 30, 60),
+            min_games_for_window=2,
+        )
+        counts = [w['games_evaluable'] for w in exp['windows']]
+        self.assertEqual(counts, sorted(counts))  # monotonic non-decreasing
+        # Recommended counts also monotonic (subset property).
+        a_counts = [w['a']['metrics']['count'] for w in exp['windows']]
+        self.assertEqual(a_counts, sorted(a_counts))
+
+    def test_single_bad_game_is_skipped_not_fatal(self):
+        """If _simulate_recommendation raises on one game, the experiment
+        skips it (counts the error) and still renders the rest."""
+        from unittest.mock import patch
+        from apps.analytics.services import method_replay as mr
+
+        self._build_production_shape(n=6)
+        real = mr._simulate_recommendation
+        calls = {'n': 0}
+
+        def flaky(game, weight, label):
+            calls['n'] += 1
+            if calls['n'] == 2:  # blow up on the 2nd sim call
+                raise ValueError('simulated bad game data')
+            return real(game, weight, label)
+
+        with patch.object(mr, '_simulate_recommendation', side_effect=flaky):
+            exp = mr.run_blend_experiment(
+                blend_a=0.40, blend_b=0.55, windows=(60,),
+                min_games_for_window=2,
+            )
+        # Did not raise; error was counted.
+        self.assertGreaterEqual(exp['sim_errors']['a'] + exp['sim_errors']['b'], 1)
+        txt = mr.render_blend_experiment(exp)
+        self.assertIn('BLEND EXPERIMENT', txt)
+
+    def test_run_replay_skips_bad_game(self):
+        """run_replay (regular path) also isolates a per-game failure."""
+        from unittest.mock import patch
+        from apps.analytics.services import method_replay as mr
+
+        self._build_production_shape(n=4)
+        real = mr._simulate_recommendation
+        calls = {'n': 0}
+
+        def flaky(game, weight, label):
+            calls['n'] += 1
+            if calls['n'] == 1:   # blow up on the first game
+                raise RuntimeError('boom')
+            return real(game, weight, label)
+
+        with patch.object(mr, '_simulate_recommendation', side_effect=flaky):
+            result = mr.run_replay(
+                timezone.localdate() - timedelta(days=60),
+                timezone.localdate() - timedelta(days=1),
+                [0.55],
+            )
+        # Did not raise; the variant records sim_errors.
+        self.assertGreaterEqual(result['variants'][0]['sim_errors'], 1)
+
+    def test_view_captures_exception_as_diagnostic(self):
+        """If run_blend_experiment raises (non-timeout), the staff view
+        returns the traceback as plaintext rather than an opaque 500."""
+        from unittest.mock import patch
+        from django.urls import reverse
+
+        u = User.objects.create_user('staff_diag', password='x', is_staff=True)
+        c = Client()
+        c.force_login(u)
+        with patch(
+            'apps.analytics.services.method_replay.run_blend_experiment',
+            side_effect=RuntimeError('kaboom in experiment'),
+        ):
+            resp = c.get(reverse('analytics:method_replay') + '?experiment=blend')
+        # View did not propagate an uncaught 500; it returned the diagnostic.
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode('utf-8')
+        self.assertIn('STAFF DIAGNOSTIC', body)
+        self.assertIn('kaboom in experiment', body)
+
+    def test_empty_windows_degrade_gracefully(self):
+        """No games at all → every window renders with zeros, no crash."""
+        from apps.analytics.services.method_replay import (
+            run_blend_experiment, render_blend_experiment,
+        )
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7, 14, 30, 60),
+            min_games_for_window=20,
+        )
+        txt = render_blend_experiment(exp)
+        self.assertIn('THIN DATA', txt)
+        for w in exp['windows']:
+            self.assertEqual(w['a']['metrics']['count'], 0)
