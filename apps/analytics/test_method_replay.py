@@ -644,3 +644,145 @@ class ProductionEquivalenceAssertionTests(TestCase):
                 f'lane-corrected sim should pass is_bulk_moneyline_eligible, '
                 f'but didn\'t. sim={sim}',
             )
+
+
+class BlendExperimentTests(TestCase):
+    """0.40 vs 0.55 on the EXACT SAME slate. Read-only counterfactual.
+
+    The contract that matters: same game population for both weights, only
+    the blend weight differs, and the delta is computed b − a.
+    """
+
+    def _build_slate(self):
+        """A handful of settled games with pre-game snapshots, all within
+        the last few days so they fall inside every test window."""
+        for i in range(4):
+            _, h, a = _mlb_setup(f'be{i}')
+            h.rating = 88; h.save()
+            a.rating = 14; a.save()
+            g = _settled_game(
+                h, a, hours_ago=24 + i * 6,
+                home_score=(6 if i % 2 == 0 else 2),
+                away_score=(2 if i % 2 == 0 else 6),
+            )
+            _snapshot(g, market_home_prob=0.55, ml_home=-135, ml_away=115)
+
+    def test_perf_helper_wl_roi_clv_mix(self):
+        from apps.analytics.services.method_replay import (
+            _perf, SimulatedRecommendation,
+        )
+
+        def _sim(won, odds, clv):
+            return SimulatedRecommendation(
+                sport='mlb', game_id='x', game_label='A @ B',
+                first_pitch_iso='2026-05-20T18:00:00+00:00',
+                method_label='t', blend_weight=0.55,
+                home_rating_pregame=70.0, away_rating_pregame=40.0,
+                home_pitcher_rating=70.0, away_pitcher_rating=40.0,
+                raw_score=27.0, raw_prob_pre_blend=0.74,
+                market_prob_pregame=0.55, blended_prob=0.64,
+                final_prob=0.64,
+                opening_moneyline_home=odds, opening_moneyline_away=120,
+                fair_home_prob=0.56, fair_away_prob=0.44,
+                pick_side='home', pick_odds=odds, pick_prob=0.64,
+                edge_pp=7.0, status='recommended', status_reason='', tier='strong',
+                home_score=5, away_score=3, won=won,
+                closing_moneyline_home=-150, closing_moneyline_away=130,
+                clv_decimal=clv,
+            )
+
+        sims = [
+            _sim(True, -140, 0.05),    # win, beat
+            _sim(False, -140, 0.0),    # loss, matched
+            _sim(True, +120, -0.03),   # win, lost
+        ]
+        p = _perf(sims)
+        self.assertEqual(p['count'], 3)
+        self.assertEqual(p['wins'], 2)
+        self.assertEqual(p['losses'], 1)
+        self.assertEqual(p['clv_beat'], 1)
+        self.assertEqual(p['clv_matched'], 1)
+        self.assertEqual(p['clv_lost'], 1)
+
+    def test_experiment_structure_and_delta(self):
+        from apps.analytics.services.method_replay import run_blend_experiment
+
+        self._build_slate()
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7,),
+            min_games_for_window=2,
+        )
+        self.assertEqual(exp['blend_a'], 0.40)
+        self.assertEqual(exp['blend_b'], 0.55)
+        self.assertEqual(len(exp['windows']), 1)
+        wr = exp['windows'][0]
+        self.assertEqual(wr['days'], 7)
+        self.assertIn('metrics', wr['a'])
+        self.assertIn('buckets', wr['b'])
+        self.assertIn('by_odds_type', wr['a']['buckets'])
+        self.assertIn('by_confidence_bucket', wr['b']['buckets'])
+        self.assertIn('favorites', wr['a']['buckets'])
+        # Delta is b − a on a numeric field.
+        am = wr['a']['metrics']
+        bm = wr['b']['metrics']
+        if am['roi'] is not None and bm['roi'] is not None:
+            self.assertAlmostEqual(
+                wr['delta']['roi'], round(bm['roi'] - am['roi'], 4), places=2,
+            )
+
+    def test_same_population_both_weights(self):
+        """Both weights must evaluate the identical game set — only the
+        blend differs. Game-evaluable count is shared; recommended counts
+        may differ but neither variant can exceed the slate size."""
+        from apps.analytics.services.method_replay import run_blend_experiment
+        self._build_slate()
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7,), min_games_for_window=2,
+        )
+        wr = exp['windows'][0]
+        self.assertGreaterEqual(wr['games_evaluable'], 1)
+        self.assertLessEqual(wr['a']['metrics']['count'], wr['games_evaluable'])
+        self.assertLessEqual(wr['b']['metrics']['count'], wr['games_evaluable'])
+
+    def test_render_blend_experiment_text(self):
+        from apps.analytics.services.method_replay import (
+            run_blend_experiment, render_blend_experiment,
+        )
+        self._build_slate()
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7, 14), min_games_for_window=2,
+        )
+        txt = render_blend_experiment(exp)
+        self.assertIn('BLEND EXPERIMENT', txt)
+        self.assertIn('WINDOW: 7 days', txt)
+        self.assertIn('Δ (b−a)', txt)
+        self.assertIn('BY ODDS BUCKET', txt)
+        self.assertIn('BY CONFIDENCE BUCKET', txt)
+        self.assertIn('FAVORITE vs DOG', txt)
+
+    def test_thin_data_flag(self):
+        from apps.analytics.services.method_replay import run_blend_experiment
+        # No games built → every window is thin.
+        exp = run_blend_experiment(
+            blend_a=0.40, blend_b=0.55, windows=(7,), min_games_for_window=20,
+        )
+        self.assertFalse(exp['windows'][0]['data_ok'])
+
+
+class BlendExperimentViewTests(TestCase):
+    def test_experiment_mode_staff_plaintext(self):
+        u = User.objects.create_user('staff_be', password='x', is_staff=True)
+        c = Client()
+        c.force_login(u)
+        resp = c.get(reverse('analytics:method_replay') + '?experiment=blend&windows=7,14')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        body = resp.content.decode('utf-8')
+        self.assertIn('BLEND EXPERIMENT', body)
+
+    def test_experiment_mode_non_staff_forbidden(self):
+        u = User.objects.create_user('reg_be', password='x')
+        c = Client()
+        c.force_login(u)
+        resp = c.get(reverse('analytics:method_replay') + '?experiment=blend')
+        self.assertEqual(resp.status_code, 403)

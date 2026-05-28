@@ -373,6 +373,41 @@ def method_replay(request):
 
     from apps.analytics.services.method_replay import run_replay
 
+    # --- Blend experiment mode (read-only counterfactual, plaintext) -----
+    # 0.40 vs 0.55 on the EXACT SAME slate across multiple windows.
+    if (request.GET.get('experiment') or '').lower() == 'blend':
+        from django.http import HttpResponse
+        from apps.analytics.services.method_replay import (
+            run_blend_experiment, render_blend_experiment,
+        )
+
+        def _parse_blend(name, default):
+            try:
+                v = float(request.GET.get(name, default))
+                return v if 0.0 <= v <= 0.80 else default
+            except (TypeError, ValueError):
+                return default
+
+        blend_a = _parse_blend('a', 0.40)
+        blend_b = _parse_blend('b', 0.55)
+
+        windows_raw = request.GET.get('windows', '7,14,30,60')
+        try:
+            windows = tuple(
+                w for w in (int(x.strip()) for x in windows_raw.split(','))
+                if 1 <= w <= 120
+            ) or (7, 14, 30, 60)
+        except (TypeError, ValueError):
+            windows = (7, 14, 30, 60)
+
+        exp = run_blend_experiment(
+            blend_a=blend_a, blend_b=blend_b, windows=windows,
+        )
+        return HttpResponse(
+            render_blend_experiment(exp),
+            content_type='text/plain; charset=utf-8',
+        )
+
     today = timezone.localdate()
     quick_range = (request.GET.get('range') or '').lower()
 

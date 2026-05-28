@@ -496,6 +496,7 @@ def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
             'total_stake': 0.0,
             'avg_edge': None, 'avg_clv': None, 'positive_clv_rate': None,
             'clv_sample': 0,
+            'clv_beat': 0, 'clv_matched': 0, 'clv_lost': 0,
             'favorites_count': 0, 'underdogs_count': 0,
             'by_tier': {'elite': 0, 'strong': 0, 'standard': 0},
             'by_edge_bucket': {'0-4': 0, '4-6': 0, '6-8': 0, '8+': 0},
@@ -515,6 +516,8 @@ def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
     clv_sum = 0.0
     clv_count = 0
     clv_positive = 0
+    clv_matched = 0
+    clv_lost = 0
     favorites_count = underdogs_count = 0
     by_tier = {'elite': 0, 'strong': 0, 'standard': 0}
     by_edge_bucket = {'0-4': 0, '4-6': 0, '6-8': 0, '8+': 0}
@@ -590,6 +593,10 @@ def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
             clv_count += 1
             if s.clv_decimal > 0:
                 clv_positive += 1
+            elif s.clv_decimal < 0:
+                clv_lost += 1
+            else:
+                clv_matched += 1
 
     net_pl = payout_total - stake_total
     decisive = wins + losses
@@ -605,6 +612,9 @@ def _compute_metrics(recommended_sims: List[SimulatedRecommendation]) -> dict:
         'avg_clv': round(clv_sum / clv_count, 4) if clv_count else None,
         'positive_clv_rate': round(clv_positive / clv_count * 100, 2) if clv_count else None,
         'clv_sample': clv_count,
+        'clv_beat': clv_positive,
+        'clv_matched': clv_matched,
+        'clv_lost': clv_lost,
         'favorites_count': favorites_count,
         'underdogs_count': underdogs_count,
         'by_tier': by_tier,
@@ -784,3 +794,334 @@ def run_replay(
         )
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# BLEND EXPERIMENT — 0.40 vs 0.55 on the EXACT SAME slate, multi-window.
+#
+# Read-only. Both variants are simulated over the identical `games` list
+# inside run_replay (same population / outcomes / snapshots / pre-game info /
+# replay rules). The ONLY variable is the blend weight. This module adds:
+#   - per-bucket PERFORMANCE (W-L / ROI / CLV), not just counts
+#   - multi-window orchestration (7 / 14 / 30 / 60 days)
+#   - delta tables (blend_b − blend_a)
+# No production constants are touched; the live MARKET_BLEND_WEIGHT is
+# never read here — the weight is passed explicitly to _simulate_recommendation.
+# ---------------------------------------------------------------------------
+
+ODDS_TYPE_ORDER = [
+    'heavy_fav', 'mid_fav', 'short_fav', 'short_dog', 'mid_dog', 'long_dog',
+]
+ODDS_TYPE_LABELS = {
+    'heavy_fav': 'Heavy fav (≤ -200)',
+    'mid_fav': 'Mid fav (-150..-199)',
+    'short_fav': 'Short fav (-149..+99)',
+    'short_dog': 'Short dog (+100..+150)',
+    'mid_dog': 'Mid dog (+151..+250)',
+    'long_dog': 'Long dog (≥ +251)',
+}
+CONF_BUCKET_ORDER = ['60-65', '65-70', '70-75', '75-80', '80+']
+
+
+def _odds_type(o) -> Optional[str]:
+    if o is None:
+        return None
+    o = int(o)
+    if o <= -200:
+        return 'heavy_fav'
+    if -199 <= o <= -150:
+        return 'mid_fav'
+    if -149 <= o <= 99:
+        return 'short_fav'
+    if 100 <= o <= 150:
+        return 'short_dog'
+    if 151 <= o <= 250:
+        return 'mid_dog'
+    return 'long_dog'
+
+
+def _conf_bucket(p) -> Optional[str]:
+    if p is None:
+        return None
+    pct = p * 100
+    if pct < 65:
+        return '60-65'
+    if pct < 70:
+        return '65-70'
+    if pct < 75:
+        return '70-75'
+    if pct < 80:
+        return '75-80'
+    return '80+'
+
+
+def _perf(sims: List[SimulatedRecommendation]) -> dict:
+    """Lightweight W-L / ROI / CLV-mix for an arbitrary sims list.
+
+    Uses the SAME $100 flat-stake convention and decimal-odds payout as
+    _compute_metrics, so bucket numbers reconcile with the headline.
+    """
+    from apps.core.utils.odds import american_to_decimal
+
+    n = len(sims)
+    wins = losses = pushes = pending = 0
+    stake = payout = 0.0
+    edge_sum = 0.0
+    edge_n = 0
+    clv_sum = 0.0
+    clv_n = clv_beat = clv_matched = clv_lost = 0
+
+    for s in sims:
+        stake += 100.0
+        if s.won is True:
+            wins += 1
+            payout += 100.0 * american_to_decimal(s.pick_odds)
+        elif s.won is False:
+            losses += 1
+        elif s.won is None and s.home_score is None:
+            pending += 1
+        else:
+            pushes += 1
+            payout += 100.0
+        if s.edge_pp is not None:
+            edge_sum += s.edge_pp
+            edge_n += 1
+        if s.clv_decimal is not None:
+            clv_sum += s.clv_decimal
+            clv_n += 1
+            if s.clv_decimal > 0:
+                clv_beat += 1
+            elif s.clv_decimal < 0:
+                clv_lost += 1
+            else:
+                clv_matched += 1
+
+    decisive = wins + losses
+    net = payout - stake
+    return {
+        'count': n,
+        'wins': wins, 'losses': losses, 'pushes': pushes, 'pending': pending,
+        'win_rate': round(wins / decisive * 100, 2) if decisive else None,
+        'roi': round(net / stake * 100, 2) if stake else None,
+        'net_pl': round(net, 2),
+        'avg_edge': round(edge_sum / edge_n, 2) if edge_n else None,
+        'avg_clv': round(clv_sum / clv_n, 4) if clv_n else None,
+        'clv_sample': clv_n,
+        'clv_beat': clv_beat, 'clv_matched': clv_matched, 'clv_lost': clv_lost,
+    }
+
+
+def _bucket_performance(sims: List[SimulatedRecommendation]) -> dict:
+    """Per odds-type and per confidence-bucket performance, plus fav/dog."""
+    odds_groups = {k: [] for k in ODDS_TYPE_ORDER}
+    conf_groups = {k: [] for k in CONF_BUCKET_ORDER}
+    fav, dog = [], []
+    for s in sims:
+        ot = _odds_type(s.pick_odds)
+        if ot:
+            odds_groups[ot].append(s)
+        cb = _conf_bucket(s.pick_prob)
+        if cb:
+            conf_groups[cb].append(s)
+        if s.pick_odds is not None:
+            (fav if s.pick_odds < 0 else dog).append(s)
+    return {
+        'by_odds_type': {k: _perf(v) for k, v in odds_groups.items()},
+        'by_confidence_bucket': {k: _perf(v) for k, v in conf_groups.items()},
+        'favorites': _perf(fav),
+        'underdogs': _perf(dog),
+    }
+
+
+_DELTA_KEYS = (
+    'count', 'wins', 'losses', 'win_rate', 'roi', 'net_pl', 'avg_edge',
+    'avg_clv', 'positive_clv_rate', 'clv_beat', 'clv_matched', 'clv_lost',
+    'favorites_count', 'underdogs_count',
+)
+
+
+def _delta(b: dict, a: dict) -> dict:
+    """b − a for numeric scalars; None when either side is None."""
+    out = {}
+    for key in _DELTA_KEYS:
+        av, bv = a.get(key), b.get(key)
+        out[key] = None if (av is None or bv is None) else round(bv - av, 4)
+    return out
+
+
+def run_blend_experiment(
+    *,
+    blend_a: float = 0.40,
+    blend_b: float = 0.55,
+    windows: Tuple[int, ...] = (7, 14, 30, 60),
+    reference_date: Optional[date] = None,
+    min_games_for_window: int = 20,
+) -> dict:
+    """Compare two blend weights on the SAME historical slate across windows.
+
+    For each window: simulate both weights over the identical final-game set,
+    take the LANE-CORRECTED (production-equivalent) recommended population per
+    weight, compute headline + per-bucket performance, and the b−a delta.
+    Read-only; no production constants changed.
+    """
+    ref = reference_date or timezone.localdate()
+    window_results = []
+    for w in windows:
+        date_from = ref - timedelta(days=w)
+        date_to = ref - timedelta(days=1)   # exclude today (games not final)
+        replay = run_replay(
+            date_from, date_to,
+            blend_weights=[blend_a, blend_b],
+            method_labels=[f'{blend_a:.2f}', f'{blend_b:.2f}'],
+        )
+        va, vb = replay['variants'][0], replay['variants'][1]
+        a_sims = [s for s in va['simulations'] if s.is_lane_corrected_recommended]
+        b_sims = [s for s in vb['simulations'] if s.is_lane_corrected_recommended]
+        a_metrics = va['metrics_corrected']
+        b_metrics = vb['metrics_corrected']
+        window_results.append({
+            'days': w,
+            'date_from': date_from,
+            'date_to': date_to,
+            'games_evaluable': replay['total_games_evaluable'],
+            'data_ok': replay['total_games_evaluable'] >= min_games_for_window,
+            'a': {
+                'blend': blend_a, 'metrics': a_metrics,
+                'buckets': _bucket_performance(a_sims),
+            },
+            'b': {
+                'blend': blend_b, 'metrics': b_metrics,
+                'buckets': _bucket_performance(b_sims),
+            },
+            'delta': _delta(b_metrics, a_metrics),
+            'diff_corrected': replay.get('diff_first_two_corrected'),
+        })
+    return {
+        'blend_a': blend_a,
+        'blend_b': blend_b,
+        'reference_date': ref,
+        'min_games_for_window': min_games_for_window,
+        'windows': window_results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Blend experiment — plaintext renderer (staff HTTP view)
+
+def _fmt(v, pct=False, money=False, places=2):
+    if v is None:
+        return '—'
+    if money:
+        return f"${v:+,.2f}"
+    if pct:
+        return f"{v:+.2f}%" if isinstance(v, float) else f"{v}%"
+    return f"{v}"
+
+
+def _metric_row(label, m):
+    wlp = f"{m['wins']}-{m['losses']}-{m['pushes']}"
+    win = f"{m['win_rate']:.1f}%" if m['win_rate'] is not None else '—'
+    roi = f"{m['roi']:+.2f}%" if m['roi'] is not None else '—'
+    npl = f"${m['net_pl']:+,.2f}"
+    edge = f"{m['avg_edge']:.2f}" if m.get('avg_edge') is not None else '—'
+    clv = f"{m['avg_clv']:+.4f}" if m.get('avg_clv') is not None else '—'
+    mix = f"{m.get('clv_beat',0)}/{m.get('clv_matched',0)}/{m.get('clv_lost',0)}"
+    return (
+        f"  {label:<14} n={m['count']:<4} {wlp:>9} win {win:>6} "
+        f"ROI {roi:>8} P/L {npl:>11} edge {edge:>6} avgCLV {clv:>9} "
+        f"beat/match/lost {mix:>9}"
+    )
+
+
+def _roi_str(m) -> str:
+    return f"{m['roi']:+.1f}%" if m.get('roi') is not None else '—'
+
+
+def _bucket_cell(tag, m) -> str:
+    """e.g. 'a[n=12 7-5 ROI +4.2%]'."""
+    return f"{tag}[n={m['count']} {m['wins']}-{m['losses']} ROI {_roi_str(m)}]"
+
+
+def render_blend_experiment(exp: dict) -> str:
+    a_w, b_w = exp['blend_a'], exp['blend_b']
+    lines = []
+    lines.append("#" * 118)
+    lines.append(
+        f"#  BLEND EXPERIMENT — {a_w:.2f} vs {b_w:.2f} on the EXACT SAME historical MLB slate"
+    )
+    lines.append(
+        f"#  Read-only counterfactual. Only the blend weight differs. "
+        f"Population = LANE-CORRECTED recommended (production-equivalent)."
+    )
+    lines.append(f"#  Reference date: {exp['reference_date'].isoformat()}  "
+                 f"(windows end the prior day; today excluded — games not final)")
+    lines.append("#" * 118)
+
+    for wr in exp['windows']:
+        d = wr['delta']
+        lines.append("")
+        lines.append("=" * 118)
+        lines.append(
+            f"  WINDOW: {wr['days']} days   "
+            f"({wr['date_from'].isoformat()} → {wr['date_to'].isoformat()})   "
+            f"games evaluable: {wr['games_evaluable']}"
+            + ("" if wr['data_ok'] else
+               f"   ⚠ THIN DATA (< {exp['min_games_for_window']} games) — directional at best")
+        )
+        lines.append("=" * 118)
+        lines.append(_metric_row(f"{a_w:.2f}", wr['a']['metrics']))
+        lines.append(_metric_row(f"{b_w:.2f}", wr['b']['metrics']))
+        # Delta line
+        def dd(key, pct=False, money=False):
+            v = d.get(key)
+            if v is None:
+                return '—'
+            if money:
+                return f"${v:+,.2f}"
+            if pct:
+                return f"{v:+.2f}pp"
+            return f"{v:+g}"
+        lines.append(
+            f"  Δ (b−a)        count {dd('count')}   "
+            f"win% {dd('win_rate', pct=True)}   "
+            f"ROI {dd('roi', pct=True)}   "
+            f"P/L {dd('net_pl', money=True)}   "
+            f"avgCLV {dd('avg_clv')}   "
+            f"beat {dd('clv_beat')}  matched {dd('clv_matched')}  lost {dd('clv_lost')}"
+        )
+
+        # Per-odds-bucket performance
+        lines.append("")
+        lines.append("  BY ODDS BUCKET (a / b):")
+        for k in ODDS_TYPE_ORDER:
+            am = wr['a']['buckets']['by_odds_type'][k]
+            bm = wr['b']['buckets']['by_odds_type'][k]
+            if am['count'] == 0 and bm['count'] == 0:
+                continue
+            lines.append(
+                f"    {ODDS_TYPE_LABELS[k]:<22} "
+                f"{_bucket_cell('a', am)}  {_bucket_cell('b', bm)}"
+            )
+
+        # Per-confidence-bucket performance
+        lines.append("")
+        lines.append("  BY CONFIDENCE BUCKET (a / b):")
+        for k in CONF_BUCKET_ORDER:
+            am = wr['a']['buckets']['by_confidence_bucket'][k]
+            bm = wr['b']['buckets']['by_confidence_bucket'][k]
+            if am['count'] == 0 and bm['count'] == 0:
+                continue
+            lines.append(
+                f"    {k:<8} {_bucket_cell('a', am)}  {_bucket_cell('b', bm)}"
+            )
+
+        # Favorite vs dog
+        af, ad = wr['a']['buckets']['favorites'], wr['a']['buckets']['underdogs']
+        bf, bd = wr['b']['buckets']['favorites'], wr['b']['buckets']['underdogs']
+        lines.append("")
+        lines.append("  FAVORITE vs DOG (a / b):")
+        lines.append(f"    Favorites  {_bucket_cell('a', af)}  {_bucket_cell('b', bf)}")
+        lines.append(f"    Underdogs  {_bucket_cell('a', ad)}  {_bucket_cell('b', bd)}")
+
+    lines.append("")
+    return "\n".join(lines) + "\n"

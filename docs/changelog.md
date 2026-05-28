@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-28 — Method Replay: blend-weight counterfactual experiment
+
+**Read-only diagnostic. No production constants, thresholds, or methodology changed.**
+
+Compares two `MARKET_BLEND_WEIGHT` values (default 0.40 vs 0.55) on the EXACT SAME historical MLB slate, across multiple windows, so "is newer Brother Willie better?" can be answered today instead of waiting weeks for the ~2-day-old 0.55 production sample to mature.
+
+Why the replay (not production): the 0.55 blend deployed 2026-05-26 (commit `411f78d`), so production has <3 days of 0.55 bets — almost all still pending. The replay re-simulates identical games under both weights; the only variable is the blend, so any delta is attributable to the change with zero sample-timing confound.
+
+### What changed
+
+`apps/analytics/services/method_replay.py`:
+- `_compute_metrics` now also returns `clv_beat / clv_matched / clv_lost` (CLV mix; "matched" = clv==0, never lumped into "lost").
+- `_perf(sims)` — lightweight W-L / ROI / net P/L / CLV-mix for any sims list (same $100 flat-stake + decimal-odds payout convention as `_compute_metrics`).
+- `_bucket_performance(sims)` — per odds-type and per confidence-bucket PERFORMANCE (W-L/ROI), plus favorite/underdog performance. (Previously buckets were counts only.)
+- `run_blend_experiment(blend_a, blend_b, windows=(7,14,30,60), …)` — orchestrates `run_replay([a,b])` per window over the same final-game set, takes the LANE-CORRECTED (production-equivalent) recommended population per weight, and computes the `b − a` delta. Flags `data_ok` when a window has < `min_games_for_window` evaluable games.
+- `render_blend_experiment()` — plaintext side-by-side + delta + bucket tables.
+
+`apps/analytics/views.py`:
+- `method_replay` view gains `?experiment=blend` mode → plaintext. Params: `a`, `b` (blend weights), `windows` (CSV). Staff-only (existing guard).
+
+### Leakage safeguards preserved
+All five (L1–L5) are unchanged; both variants share the identical pre-game inputs. The documented pitcher-rating drift affects both weights identically, so the relative 0.40-vs-0.55 delta stays unbiased.
+
+### Tests
+7 new (`BlendExperimentTests`, `BlendExperimentViewTests`): `_perf` CLV mix, experiment structure + delta = b−a, same-population invariant, thin-data flag, renderer headers, staff/non-staff gates. 34 replay tests total; 443 across analytics+mockbets+core all pass.
+
+**Operator next step:** as staff, hit `/analytics/method-replay/?experiment=blend` and paste the output. Read `data_ok` per window — the 60-day window is the one most likely to have enough games to be conclusive.
+
+---
+
 ## 2026-05-28 — Measurement-integrity audit: edge display fix + CLV lineage tool
 
 **Read-only / instrument-only. No methodology, threshold, blend, or CLV-math change.**
