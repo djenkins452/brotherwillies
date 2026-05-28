@@ -4456,6 +4456,75 @@ class ThreePopulationAuditTests(TestCase):
         # The 0.99 ESPN value did NOT enter the average.
         self.assertAlmostEqual(sys_pop['avg_clv_cents'], 0.05, places=4)
 
+    def test_win_pl_uses_profit_only_not_double_subtracting_stake(self):
+        """REGRESSION LOCK: simulated_payout stores PROFIT only.
+
+        A winning bet's net P/L is exactly simulated_payout (the profit) —
+        NOT (simulated_payout - stake). The earlier harness double-subtracted
+        the stake on wins, producing a phantom ROI ~= true_roi - win_rate.
+
+        Construct a clean 2-win / 1-loss flat-$100 book where the math is
+        hand-checkable:
+            win  +150 → profit $150
+            win  -200 → profit $50
+            loss      → -$100
+        net P/L = 150 + 50 - 100 = +$100 on $300 stake → ROI +33.3%.
+
+        Under the OLD bug this would have been 150-100 + 50-100 + 0-100
+        = -$100 → ROI -33.3%. The sign itself flips, so this test is a
+        hard guard.
+        """
+        from apps.mockbets.services.three_population_audit import compute_metrics
+
+        g1 = self._game(ext='pl1')
+        rec1 = self._rec(g1, lane='core')
+        b1 = self._bet(g1, recommendation=rec1, result='win',
+                       payout=Decimal('150.00'))   # +150 profit
+        b1.odds_american = 150
+        b1.save(update_fields=['odds_american'])
+
+        g2 = self._game(ext='pl2')
+        rec2 = self._rec(g2, lane='core')
+        b2 = self._bet(g2, recommendation=rec2, result='win',
+                       payout=Decimal('50.00'))    # -200 profit
+        b2.odds_american = -200
+        b2.save(update_fields=['odds_american'])
+
+        g3 = self._game(ext='pl3')
+        rec3 = self._rec(g3, lane='core')
+        self._bet(g3, recommendation=rec3, result='loss',
+                  payout=Decimal('0.00'))
+
+        m = compute_metrics([b1, b2, MockBet.objects.get(mlb_game=g3)])
+        self.assertEqual(m['net_pl'], Decimal('100.00'))
+        self.assertEqual(m['total_stake'], Decimal('300.00'))
+        self.assertEqual(m['roi_pct'], 33.3)
+
+    def test_roi_matches_canonical_group_stats(self):
+        """The harness ROI must equal recommendation_performance._group_stats
+        on the same bet set — they are the same convention."""
+        from apps.mockbets.services.three_population_audit import compute_metrics
+        from apps.mockbets.services.recommendation_performance import _group_stats
+
+        g1 = self._game(ext='cn1')
+        rec1 = self._rec(g1, lane='core')
+        b1 = self._bet(g1, recommendation=rec1, result='win',
+                       payout=Decimal('76.92'))
+        g2 = self._game(ext='cn2')
+        rec2 = self._rec(g2, lane='core')
+        b2 = self._bet(g2, recommendation=rec2, result='loss',
+                       payout=Decimal('0.00'))
+        g3 = self._game(ext='cn3')
+        rec3 = self._rec(g3, lane='core')
+        b3 = self._bet(g3, recommendation=rec3, result='win',
+                       payout=Decimal('120.00'))
+
+        bets = [b1, b2, b3]
+        mine = compute_metrics(bets)
+        canon = _group_stats(bets)
+        self.assertEqual(float(mine['net_pl']), float(canon['net_pl']))
+        self.assertAlmostEqual(mine['roi_pct'], round(canon['roi'], 1), places=1)
+
     def test_answers_block_resolves(self):
         """A/B/C verdicts populate; no None text where data exists."""
         from apps.mockbets.services.three_population_audit import build_audit, render_report

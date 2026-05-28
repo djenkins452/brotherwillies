@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-27 — Three-Population Audit: CRITICAL P/L bug fix
+
+**Measurement-instrument fix. The first cut of the audit harness reported a phantom ROI.**
+
+The initial `compute_metrics` in `three_population_audit.py` computed net P/L as `(simulated_payout - stake)` for every settled bet. But `MockBet.simulated_payout` stores **profit only** on a win (see `MockBet.calculate_payout`: +150 / $100 → $150 profit, not $250 total return; `settlement.py:370` writes that value). Subtracting the stake again double-counts it on every win.
+
+**Effect:** the harness understated net P/L by exactly (sum of stakes on winning bets). For a flat-staked book the reported ROI came out ≈ `true_roi − win_rate`. On the first production run this turned a roughly breakeven book into a fake −57.4% ROI (the error term ≈ the 54.7% win rate).
+
+**Fix:** net P/L now follows the canonical convention in `recommendation_performance._group_stats` — win → `+simulated_payout` (profit), push → 0, loss → `−stake`. Equivalent to the `MockBet.net_result` property.
+
+**New regression locks:**
+- `test_win_pl_uses_profit_only_not_double_subtracting_stake` — hand-checked 2W/1L book; sign flips under the old bug.
+- `test_roi_matches_canonical_group_stats` — harness ROI must equal `_group_stats` on the same bet set.
+
+Any prior run of `/mockbets/audit/three-populations/` MUST be re-run; its ROI / net P/L figures were wrong (counts, win%, CLV+ were unaffected — those don't depend on the P/L math).
+
+---
+
 ## 2026-05-27 — Three-Population Audit (Production Truth Test)
 
 **Read-only diagnostic. No engine changes. No live behavior change.**

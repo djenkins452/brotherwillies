@@ -105,15 +105,29 @@ def compute_metrics(bets: list) -> dict:
 
     win_pct = round(100.0 * wins / (wins + losses), 1) if (wins + losses) > 0 else None
 
+    # P/L convention — MUST match the canonical math in
+    # recommendation_performance._group_stats (lines 69-93):
+    #   simulated_payout stores PROFIT ONLY on a win (see
+    #   MockBet.calculate_payout: +150 / $100 → $150 profit, NOT $250 return).
+    #   So a winning bet's net P/L is exactly simulated_payout; a loss is
+    #   -stake; a push is 0. Equivalently: net_result property on the model.
+    #
+    #   The earlier version computed (simulated_payout - stake) for ALL
+    #   settled rows, which double-subtracts the stake on wins and produced
+    #   a phantom ROI ~= true_roi - win_rate. Do NOT reintroduce that.
     total_stake_settled = Decimal('0.00')
     net_pl = Decimal('0.00')
     for b in bets:
         if b.result == 'pending':
             continue
         stake = b.stake_amount or Decimal('0.00')
-        payout = b.simulated_payout if b.simulated_payout is not None else Decimal('0.00')
         total_stake_settled += stake
-        net_pl += (payout - stake)
+        if b.result == 'win':
+            net_pl += (b.simulated_payout or Decimal('0.00'))   # profit only
+        elif b.result == 'push':
+            net_pl += Decimal('0.00')
+        else:  # loss
+            net_pl += (-stake)
     roi_pct = (
         round(float(net_pl) / float(total_stake_settled) * 100.0, 1)
         if total_stake_settled > 0 else None
