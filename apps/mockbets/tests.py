@@ -4525,6 +4525,67 @@ class ThreePopulationAuditTests(TestCase):
         self.assertEqual(float(mine['net_pl']), float(canon['net_pl']))
         self.assertAlmostEqual(mine['roi_pct'], round(canon['roi'], 1), places=1)
 
+    def test_avg_edge_is_pp_not_double_scaled(self):
+        """REGRESSION LOCK: expected_edge is stored in PERCENTAGE POINTS.
+
+        The harness must report it as-is (e.g. 11.3), NOT ×100 (1130.80).
+        expected_edge=11.30 means 11.3pp; avg of [11.30, 7.00] must be 9.15.
+        """
+        from apps.mockbets.services.three_population_audit import compute_metrics
+
+        g1 = self._game(ext='ed1')
+        rec1 = self._rec(g1, lane='core')
+        b1 = self._bet(g1, recommendation=rec1, edge=Decimal('11.30'))
+        g2 = self._game(ext='ed2')
+        rec2 = self._rec(g2, lane='core')
+        b2 = self._bet(g2, recommendation=rec2, edge=Decimal('7.00'))
+
+        m = compute_metrics([b1, b2])
+        self.assertEqual(m['avg_edge_pp'], 9.15)   # NOT 915.0
+
+    def test_clv_lineage_counts_zero_and_artifacts(self):
+        """CLV lineage must separate clv==0 (matched) from clv>0 (beat) and
+        flag single-snapshot games + source mismatch."""
+        from apps.mockbets.services.three_population_audit import clv_lineage
+        from apps.mlb.models import OddsSnapshot as MLBOdds
+
+        # Bet whose closing snapshot is the SAME as placement → clv 0.
+        g1 = self._game(ext='lz1')
+        rec1 = self._rec(g1, lane='core')
+        MLBOdds.objects.create(
+            game=g1, captured_at=g1.first_pitch - timedelta(hours=2),
+            moneyline_home=-130, moneyline_away=110, odds_source='odds_api',
+            market_home_win_prob=0.57,
+        )
+        b1 = self._bet(g1, recommendation=rec1, clv_cents=0.0,
+                       odds_source='odds_api')
+        b1.clv_direction = ''
+        b1.save(update_fields=['clv_direction'])
+
+        # Bet that beat the close → clv +.
+        g2 = self._game(ext='lz2')
+        rec2 = self._rec(g2, lane='core')
+        MLBOdds.objects.create(
+            game=g2, captured_at=g2.first_pitch - timedelta(hours=3),
+            moneyline_home=-130, moneyline_away=110, odds_source='odds_api',
+            market_home_win_prob=0.57,
+        )
+        MLBOdds.objects.create(
+            game=g2, captured_at=g2.first_pitch - timedelta(minutes=20),
+            moneyline_home=-150, moneyline_away=130, odds_source='odds_api',
+            market_home_win_prob=0.60,
+        )
+        b2 = self._bet(g2, recommendation=rec2, clv_cents=0.06,
+                       odds_source='odds_api')
+
+        lineage = clv_lineage([b1, b2])
+        agg = lineage['aggregate']
+        self.assertEqual(agg['n'], 2)
+        self.assertEqual(agg['clv_zero'], 1)
+        self.assertEqual(agg['clv_positive'], 1)
+        self.assertEqual(agg['single_snapshot_games'], 1)   # g1 has 1 snapshot
+        self.assertEqual(len(lineage['rows']), 2)
+
     def test_answers_block_resolves(self):
         """A/B/C verdicts populate; no None text where data exists."""
         from apps.mockbets.services.three_population_audit import build_audit, render_report
@@ -4609,3 +4670,23 @@ class ThreePopulationAuditViewTests(TestCase):
         import json as _json
         data = _json.loads(resp.content.decode('utf-8'))
         self.assertEqual(data['window']['days'], 90)
+
+    def test_clv_detail_mode_returns_lineage(self):
+        """?detail=clv returns the per-bet CLV lineage diagnostic."""
+        self.client.force_login(self.staff)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=clv&scope=system'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('text/plain', resp['Content-Type'])
+        body = resp.content.decode('utf-8')
+        self.assertIn('CLV LINEAGE DIAGNOSTIC', body)
+        self.assertIn('AGGREGATE ARTIFACT COUNTERS', body)
+        self.assertIn('matched the close', body)
+
+    def test_clv_detail_non_staff_404(self):
+        self.client.force_login(self.normal)
+        resp = self.client.get(
+            '/mockbets/audit/three-populations/?detail=clv'
+        )
+        self.assertEqual(resp.status_code, 404)

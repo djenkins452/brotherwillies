@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-28 — Measurement-integrity audit: edge display fix + CLV lineage tool
+
+**Read-only / instrument-only. No methodology, threshold, blend, or CLV-math change.**
+
+Two suspicious figures in the audit output were traced to root cause.
+
+### Problem 1 — "Avg edge = 1130.80 pp" (impossible)
+
+**Root cause: display-only double-scaling in the audit harness. Decisions are NOT affected.**
+
+Full edge lineage traced end-to-end:
+
+| Stage | Code | Value | Units | Correct? |
+|---|---|---|---|---|
+| Model prob | `home_prob` | 0.66 | decimal | ✓ |
+| De-vigged market | `devig_two_way` → `fair_home` | 0.547 | decimal | ✓ |
+| Raw edge | `home_prob − fair_home` | 0.113 | decimal | ✓ |
+| To pp | `model_edge_pp = round(edge*100,1)` (`recommendations.py:689`) | 11.3 | pp | ✓ |
+| Stored | `BettingRecommendation.model_edge` | 11.30 | pp | ✓ |
+| Snapshot | `MockBet.expected_edge` | 11.30 | pp | ✓ |
+| Decision gate | `compute_status(model_edge_pp)` vs `MIN_EDGE=6.0` | 11.3 ≥ 6.0 | pp vs pp | ✓ |
+| **Audit display** | `compute_metrics`: `mean(expected_edge) * 100` | **1130.80** | **pp×100** | **✗** |
+
+The engine multiplies the prob-difference by 100 **once** to get pp and compares against a pp threshold. The harness multiplied the already-pp value by 100 again. Fixed `three_population_audit.compute_metrics` to report `expected_edge` as-is. Regression lock: `test_avg_edge_is_pp_not_double_scaled`. **Answer to "display bug or corrupted decisions?": display bug, isolated to the audit harness.**
+
+### Problem 2 — CLV+ = 17.3% (CLV lineage diagnostic added)
+
+CLV math verified sign-correct (`closing_line_value = bet_dec − close_dec`; positive = beat close; a prior sign inversion was already caught/fixed in `utils/odds.py`). The concern is the **inputs**, not the formula. Structural findings from code:
+
+- System bets record **`rec.odds_american`** (recommendation-compute-time price; `bulk_actions.py:236`); manual bets record the **live POST price** at manual-placement time (`views.place_bet:126`). Different capture time + mechanism → explains why manual CLV (42.5%) > system CLV (17.3%).
+- `_closing_snapshot` (`clv.py:34`) takes the latest pre-game snapshot of **any source** — no source filter — so an odds_api placement can be scored against an ESPN close.
+- `CLV+ %` counts `clv_cents == 0` (matched the close) as NOT-positive — coarse snapshot cadence (placement snapshot == closing snapshot) forces clv≈0 and deflates the metric structurally.
+
+Added a **read-only** per-bet CLV lineage diagnostic to answer "is 17.3% real or an artifact":
+
+- `three_population_audit.clv_lineage(bets)` / `render_clv_lineage()` — per-bet: placement odds+source, closing odds+source, clv_cents, clv_direction, snapshot count (total/pre-game), placement-vs-first-pitch timing, closing-vs-first-pitch timing, source match. Aggregate counters: clv==0 / >0 / <0, single-snapshot games, no-pre-game-snapshot, source mismatch, closing==placement price, avg snapshots/game.
+- New view mode: `GET /mockbets/audit/three-populations/?detail=clv&scope=system|manual|actual`.
+
+Tests: `test_clv_lineage_counts_zero_and_artifacts`, `test_clv_detail_mode_returns_lineage`, `test_clv_detail_non_staff_404`. 264 mockbets tests pass.
+
+**Operator next step:** run `?detail=clv&scope=system` and `?detail=clv&scope=manual` on Railway to spot-check 20 bets and confirm whether 17.3% is genuine line-fade or a cadence/source/zero-counting artifact.
+
+---
+
 ## 2026-05-27 — Three-Population Audit: CRITICAL P/L bug fix
 
 **Measurement-instrument fix. The first cut of the audit harness reported a phantom ROI.**

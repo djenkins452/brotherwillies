@@ -133,8 +133,14 @@ def compute_metrics(bets: list) -> dict:
         if total_stake_settled > 0 else None
     )
 
+    # UNIT NOTE: expected_edge is stored in PERCENTAGE POINTS already
+    # (BettingRecommendation.model_edge = round(prob_diff * 100, 1); copied
+    # verbatim to MockBet.expected_edge). e.g. 11.3 means 11.3 pp. The engine
+    # compares it against MIN_EDGE = 6.0 (also pp). Do NOT multiply by 100
+    # here — an earlier version did, producing impossible "1130.80 pp"
+    # displays. The value is already in pp.
     edges = [float(b.expected_edge) for b in bets if b.expected_edge is not None]
-    avg_edge_pp = round(sum(edges) / len(edges) * 100.0, 2) if edges else None
+    avg_edge_pp = round(sum(edges) / len(edges), 2) if edges else None
 
     # CLV trust contract: only primary-source (odds_api) rows count.
     clv_rows = [
@@ -369,4 +375,191 @@ def render_report(audit: dict) -> str:
             f"Manual-vs-system comparison may be unstable."
         )
 
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# CLV LINEAGE DIAGNOSTIC  (read-only — measurement integrity audit)
+# ---------------------------------------------------------------------------
+#
+# Surfaces the raw inputs to every CLV computation so an operator can
+# spot-check whether CLV+ is real or a measurement artifact. Investigates
+# the failure modes flagged in the integrity audit:
+#
+#   - clv_cents == 0  → bet "matched the market"; counted as NOT-positive by
+#     CLV+ %. If many system bets sit at 0, CLV+ is deflated by definition,
+#     not by the model.
+#   - single-snapshot games → placement snapshot IS the closing snapshot, so
+#     CLV is structurally forced to ~0 (coarse ingestion cadence).
+#   - source mismatch → placement priced off odds_api but the closing snapshot
+#     is from a different provider, contaminating the raw-odds delta.
+#   - timing → how early the bet was placed vs first pitch, and how close to
+#     first pitch the "closing" snapshot actually was.
+#
+# NO methodology, threshold, or CLV-math changes. Pure read.
+
+def _game_start(game):
+    if game is None:
+        return None
+    return (
+        getattr(game, 'first_pitch', None)
+        or getattr(game, 'kickoff', None)
+        or getattr(game, 'tipoff', None)
+    )
+
+
+def _minutes_between(later, earlier):
+    if later is None or earlier is None:
+        return None
+    return round((later - earlier).total_seconds() / 60.0, 1)
+
+
+def clv_lineage(bets: list, *, limit: int = 50) -> dict:
+    """Per-bet CLV input lineage + aggregate artifact counters.
+
+    `bets` should already be the population of interest (e.g. system-approved).
+    Read-only. Issues a few small queries per bet (snapshot counts); fine for
+    staff-scale diagnostics over a 30–90 day window.
+    """
+    rows = []
+    n = 0
+    n_clv_none = n_clv_zero = n_clv_pos = n_clv_neg = 0
+    n_single_snap = n_no_pregame = 0
+    n_source_mismatch = 0
+    n_closing_is_placement_snap = 0
+    snap_counts = []
+
+    for b in bets:
+        n += 1
+        game = b.game
+        start = _game_start(game)
+
+        snaps = list(game.odds_snapshots.all()) if game is not None else []
+        snap_counts.append(len(snaps))
+        pregame = [s for s in snaps if start is not None and s.captured_at < start]
+        closing_snap = pregame[0] if pregame else None  # latest pre-game (-captured_at)
+
+        clv = b.clv_cents
+        if clv is None:
+            n_clv_none += 1
+        elif clv > 0:
+            n_clv_pos += 1
+        elif clv < 0:
+            n_clv_neg += 1
+        else:
+            n_clv_zero += 1
+
+        if len(snaps) <= 1:
+            n_single_snap += 1
+        if not pregame:
+            n_no_pregame += 1
+
+        closing_source = getattr(closing_snap, 'odds_source', None)
+        source_match = (
+            closing_source is not None
+            and b.odds_source is not None
+            and closing_source == b.odds_source
+        )
+        if closing_source and b.odds_source and closing_source != b.odds_source:
+            n_source_mismatch += 1
+
+        # Is the stored closing price identical to the placement price?
+        # (proxy for "the closing snapshot was the same line we placed at")
+        if (b.closing_odds_american is not None
+                and b.closing_odds_american == b.odds_american):
+            n_closing_is_placement_snap += 1
+
+        if len(rows) < limit:
+            rows.append({
+                'selection': b.selection,
+                'placed_at': b.placed_at,
+                'first_pitch': start,
+                'min_placed_before_fp': _minutes_between(start, b.placed_at),
+                'odds_placement': b.odds_american,
+                'source_placement': b.odds_source,
+                'odds_closing': b.closing_odds_american,
+                'closing_source': closing_source or '—',
+                'closing_captured_at': getattr(closing_snap, 'captured_at', None),
+                'min_closing_before_fp': _minutes_between(
+                    start, getattr(closing_snap, 'captured_at', None)),
+                'clv_cents': clv,
+                'clv_direction': b.clv_direction or '—',
+                'snap_total': len(snaps),
+                'snap_pregame': len(pregame),
+                'source_match': source_match,
+                'result': b.result,
+            })
+
+    avg_snaps = round(sum(snap_counts) / len(snap_counts), 2) if snap_counts else 0
+
+    return {
+        'rows': rows,
+        'shown': len(rows),
+        'aggregate': {
+            'n': n,
+            'clv_none': n_clv_none,
+            'clv_zero': n_clv_zero,
+            'clv_positive': n_clv_pos,
+            'clv_negative': n_clv_neg,
+            'single_snapshot_games': n_single_snap,
+            'no_pregame_snapshot': n_no_pregame,
+            'source_mismatch': n_source_mismatch,
+            'closing_equals_placement': n_closing_is_placement_snap,
+            'avg_snapshots_per_game': avg_snaps,
+        },
+    }
+
+
+def render_clv_lineage(lineage: dict, *, label: str = 'SYSTEM-APPROVED') -> str:
+    """Plaintext render of clv_lineage() for the staff HTTP view."""
+    agg = lineage['aggregate']
+    n = agg['n'] or 1
+    lines = []
+    lines.append("#" * 100)
+    lines.append(f"#  CLV LINEAGE DIAGNOSTIC — {label} population  (read-only)")
+    lines.append("#" * 100)
+    lines.append("")
+    lines.append("AGGREGATE ARTIFACT COUNTERS")
+    lines.append("-" * 100)
+    lines.append(f"  Bets in population ............... {agg['n']}")
+    lines.append(f"  CLV not captured (None) .......... {agg['clv_none']}  "
+                 f"({100.0*agg['clv_none']/n:.1f}%)")
+    lines.append(f"  CLV == 0 (matched the close) ..... {agg['clv_zero']}  "
+                 f"({100.0*agg['clv_zero']/n:.1f}%)  ← counted as NOT-positive by CLV+%")
+    lines.append(f"  CLV  > 0 (beat the close) ........ {agg['clv_positive']}  "
+                 f"({100.0*agg['clv_positive']/n:.1f}%)")
+    lines.append(f"  CLV  < 0 (close beat us) ......... {agg['clv_negative']}  "
+                 f"({100.0*agg['clv_negative']/n:.1f}%)")
+    lines.append("")
+    lines.append(f"  Single-snapshot games ............ {agg['single_snapshot_games']}  "
+                 f"({100.0*agg['single_snapshot_games']/n:.1f}%)  "
+                 f"← placement snapshot IS the closing snapshot → CLV forced ~0")
+    lines.append(f"  No pre-game snapshot ............. {agg['no_pregame_snapshot']}")
+    lines.append(f"  Closing price == placement price . {agg['closing_equals_placement']}  "
+                 f"({100.0*agg['closing_equals_placement']/n:.1f}%)")
+    lines.append(f"  Placement/closing SOURCE mismatch  {agg['source_mismatch']}  "
+                 f"({100.0*agg['source_mismatch']/n:.1f}%)  ← raw-odds delta contaminated")
+    lines.append(f"  Avg snapshots per game ........... {agg['avg_snapshots_per_game']}")
+    lines.append("")
+    lines.append(f"PER-BET LINEAGE  (showing {lineage['shown']} of {agg['n']})")
+    lines.append("-" * 100)
+    hdr = (
+        f"{'selection':<22} {'plc_before_fp':>13} {'place':>7} {'src':>9} "
+        f"{'close':>7} {'cl_src':>9} {'cl_b4_fp':>9} {'clv':>9} {'snaps(pre)':>11} {'res':>5}"
+    )
+    lines.append(hdr)
+    for r in lineage['rows']:
+        plc = f"{r['min_placed_before_fp']}m" if r['min_placed_before_fp'] is not None else '—'
+        clb = f"{r['min_closing_before_fp']}m" if r['min_closing_before_fp'] is not None else '—'
+        clv = f"{r['clv_cents']:+.4f}" if r['clv_cents'] is not None else '—'
+        place = str(r['odds_placement']) if r['odds_placement'] is not None else '—'
+        close = str(r['odds_closing']) if r['odds_closing'] is not None else '—'
+        snaps = f"{r['snap_total']}({r['snap_pregame']})"
+        lines.append(
+            f"{(r['selection'] or '')[:22]:<22} {plc:>13} {place:>7} "
+            f"{(r['source_placement'] or '—')[:9]:>9} {close:>7} "
+            f"{(r['closing_source'] or '—')[:9]:>9} {clb:>9} {clv:>9} {snaps:>11} "
+            f"{(r['result'] or '')[:5]:>5}"
+        )
+    lines.append("")
     return "\n".join(lines) + "\n"

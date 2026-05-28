@@ -916,6 +916,9 @@ def three_population_audit_view(request):
         sport        — sport filter (default 'mlb')
         settled_only — exclude pending bets ('1' to enable)
         format       — 'text' (default) or 'json'
+        detail        — 'clv' to emit the per-bet CLV lineage diagnostic
+                        (read-only; for the measurement-integrity audit)
+        scope        — with detail=clv: 'system' (default), 'manual', 'actual'
 
     Designed for Railway where there is no interactive shell. Hit
     /mockbets/audit/three-populations/ as a staff user.
@@ -924,7 +927,11 @@ def three_population_audit_view(request):
         raise Http404
 
     from datetime import timedelta as _td
-    from .services.three_population_audit import build_audit, render_report
+    from .services.three_population_audit import (
+        build_audit, render_report,
+        clv_lineage, render_clv_lineage,
+        is_true_system_approved,
+    )
     from django.http import HttpResponse
 
     try:
@@ -937,9 +944,36 @@ def three_population_audit_view(request):
     sport = request.GET.get('sport') or 'mlb'
     settled_only = request.GET.get('settled_only') == '1'
     fmt = (request.GET.get('format') or 'text').lower()
+    detail = (request.GET.get('detail') or '').lower()
 
     now = timezone.now()
     cutoff = now - _td(days=days)
+
+    # --- CLV lineage detail mode (read-only measurement audit) -----------
+    if detail == 'clv':
+        qs = MockBet.objects.filter(
+            bet_type='moneyline', sport=sport, placed_at__gte=cutoff,
+        ).select_related('recommendation', 'mlb_game', 'cfb_game',
+                         'cbb_game', 'college_baseball_game')
+        if username:
+            qs = qs.filter(user__username=username)
+        all_bets = list(qs)
+        scope = (request.GET.get('scope') or 'system').lower()
+        if scope == 'manual':
+            sys_ids = {b.id for b in all_bets if is_true_system_approved(b)}
+            pop = [b for b in all_bets if b.id not in sys_ids]
+            label = 'MANUAL / CONTAMINATED'
+        elif scope == 'actual':
+            pop = all_bets
+            label = 'ALL ACTUAL'
+        else:
+            pop = [b for b in all_bets if is_true_system_approved(b)]
+            label = 'SYSTEM-APPROVED'
+        lineage = clv_lineage(pop, limit=80)
+        return HttpResponse(
+            render_clv_lineage(lineage, label=label),
+            content_type='text/plain; charset=utf-8',
+        )
 
     audit = build_audit(
         MockBet.objects.all(),
