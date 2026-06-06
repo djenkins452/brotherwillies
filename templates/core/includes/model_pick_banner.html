@@ -1,3 +1,4 @@
+{% load tz_extras %}
 {% comment %}
 Render the decision-layer pick for a single game.
 
@@ -12,6 +13,10 @@ NOT RECOMMENDED / Why This Is a Top Play"), which contradicted the engine
 and nudged users to override. The display_tier_label / model_lean_reasons
 / passed_reasons / approved_reasons / verdict_summary properties all
 derive from already-stored fields — no logic in this template.
+
+2026-05-30 game-timing panel: a small "⏰ GAME START" + (on recommended
+picks only) "BETTING WINDOW" block, inserted between the meta row and the
+reason sections. Behavioral guidance only; no methodology impact.
 {% endcomment %}
 {% if recommendation %}
 <div class="card model-pick-banner model-pick-banner-{{ recommendation.tier }} model-pick-banner-{{ recommendation.status }} mb-2"
@@ -43,6 +48,10 @@ derive from already-stored fields — no logic in this template.
         Edge vs market:
         <strong class="{% if recommendation.model_edge > 0 %}edge-positive{% elif recommendation.model_edge < 0 %}edge-negative{% else %}edge-neutral{% endif %}">{{ recommendation.model_edge|floatformat:1 }}%</strong>
     </div>
+
+    {# --- Game Timing panel: behavioral guidance, not predictive ----- #}
+    {% game_timing recommendation as timing %}
+    {% include 'core/includes/game_timing_panel.html' with timing=timing %}
 
     {# --- RECOMMENDED branch: positive, action-oriented (kept ~ same) --- #}
     {% if recommendation.is_recommended %}

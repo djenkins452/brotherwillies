@@ -2,6 +2,57 @@
 
 ---
 
+## 2026-05-30 — Game Timing panel (behavioral guidance, not predictive)
+
+**UI/UX enhancement only. NO methodology / recommendation-engine / threshold / blend / Elo / calibration / lane changes.**
+
+Adds a lightweight Game Timing panel to recommendation banners so the user can answer "*when* should I bet this?" — not just "should I bet this?". V1 is intentionally simple; it is **behavioral discipline guidance, not a predictive timing engine**.
+
+### Where it appears
+Between the "Confidence / Edge vs market" row and the "What the Model Likes" / "Why Brother Willie Approved This" sections on the existing `model_pick_banner.html`. Priority slot per the user's spec — higher than explanatory copy, lower than recommendation status.
+
+### Timing status (intentionally simple)
+| Status | Color | Trigger |
+|---|---|---|
+| 🟢 Good to Bet Now | green | game starts in ≤ **90 min** AND no `market_warning` |
+| 🟡 Review Later | amber | game starts in > 90 min AND no `market_warning` |
+| 🔴 Hold / Wait | red | `market_warning` is True (sharp money against the pick) — overrides time |
+| (Game time unavailable) | slate | no `first_pitch` / `kickoff` / `tipoff` available |
+
+**HOLD is signal-driven, not predictive.** The only trigger in v1 is the already-persisted `market_warning` flag — a real, computed signal. No line-movement forecasting, no CLV optimization. Per spec.
+
+### Anti-contradiction guarantee
+Critical discipline carried from the banner UX correction: **the BETTING WINDOW row is suppressed on `not_recommended` cards**. Showing "🟢 Good to Bet Now" on a card the engine just rejected would re-create the exact "secretly likes this" contradiction we eliminated last week. On rejected cards the panel shows only the GAME START countdown (informational), no betting-window status. Locked by `test_banner_omits_betting_window_on_not_recommended`.
+
+### Best review window
+`45–90 minutes before first pitch`, rendered in the user's local timezone (e.g. "Best review window: **6:05–6:25 PM CDT**"). Pure formatting of the existing game-start datetime — no new data, no new model.
+
+### Countdown formatting
+- `< 60 min`: `Starts in 47m`
+- `< 24h`: `Starts in 2h 14m`, `Starts in 5h 04m`
+- `≥ 24h, next day`: `Tomorrow at 1:10 PM`
+- `≥ 24h, further`: `Sat at 7:10 PM`
+- `game already underway`: `Game in progress`
+- `no game time`: `Game time unavailable`
+
+### Cross-sport duck-typing
+`game_start_time(game)` reads `first_pitch` (MLB) → `kickoff` (CFB) → `tipoff` (CBB). Returns None for golf events and unscheduled games. No crash path.
+
+### Files
+- `apps/core/services/game_timing.py` (NEW) — pure helpers: `timing_status`, `format_countdown`, `best_review_window`, `format_best_review_window`, `game_start_time`, `build_timing_context`.
+- `apps/core/templatetags/tz_extras.py` — new `{% game_timing recommendation as timing %}` simple-tag.
+- `templates/core/includes/game_timing_panel.html` (NEW) — the panel itself.
+- `templates/core/includes/model_pick_banner.html` — one include at the priority slot.
+- `static/css/style.css` — `.game-timing-*` rules. Mobile-first: rows stack vertically on phones (`max-width: 600px`); GAME START row becomes side-by-side on wider viewports. Status colors mirror the betting-window state (green / amber / red / slate).
+
+### Tests
+`GameTimingServiceTests` (9): status boundaries at 89/90/91 min, market_warning override, past/None game, countdown format brackets, tomorrow/weekday branch, 45–90-min best review window, cross-sport `game_start_time` duck-typing, recommended-vs-not_recommended `build_timing_context` returns. `GameTimingTemplateTests` (4): banner renders the panel on recommended; **omits BETTING WINDOW on not_recommended (anti-contradiction lock)**; HOLD on market_warning; graceful degradation when game is None. **722 tests across core + mockbets + mlb + analytics pass.**
+
+### Methodology confirmation
+Zero changes to: recommendation engine, model probability, thresholds, market blend, recommendation rules, Elo, calibration, lane logic. Verified by absence of edits in `recommendations.py` decision-rule code paths, `probability_calibration.py`, `elo_service.py`, `model_service.py`, sport prioritization services. The only edits to `recommendations.py` in this commit are the previously-shipped UX-correction helpers, untouched.
+
+---
+
 ## 2026-05-29 — Banner UX polish pass: audit fixes + adversarial verification
 
 **Follow-up to the earlier UX correction. UI/copy + one safety-default change only. No methodology touched.**

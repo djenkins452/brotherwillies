@@ -1,0 +1,62 @@
+{% load tz_extras %}
+{% comment %}
+Game Timing panel. Behavioral guidance only — NOT a predictive engine.
+
+Expects a `timing` dict in context built by the {% game_timing rec %} tag.
+Renders nothing controversial when game_start is missing — graceful
+degradation is required, no crash path.
+
+Two distinct cases, on purpose:
+  - On RECOMMENDED cards: show the full panel (GAME START + countdown +
+    BETTING WINDOW status + reason + best review window).
+  - On NON-RECOMMENDED cards: show ONLY the GAME START + countdown. Hiding
+    the "BETTING WINDOW" status row avoids re-introducing the "engine said
+    no but UI says 'good to bet now'" contradiction the banner UX
+    correction eliminated.
+{% endcomment %}
+{% if timing.has_game_start or not timing.has_betting_window %}
+<div class="card game-timing-panel game-timing-{{ timing.status_key }} mb-2"
+     data-timing-status="{{ timing.status_key }}">
+
+    {% comment %}
+    GAME START row — always shown when we have a time. Falls back to
+    graceful "Game time unavailable" copy otherwise.
+    {% endcomment %}
+    {% if timing.has_game_start %}
+    <div class="game-timing-row">
+        <div class="game-timing-label">&#x23F0; GAME START</div>
+        <div class="game-timing-value">
+            <strong>{{ timing.game_start|date:"g:i A" }}</strong>
+            <span class="game-timing-tz">{% tz_abbr %}</span>
+        </div>
+        <div class="game-timing-countdown">{{ timing.countdown }}</div>
+    </div>
+    {% else %}
+    <div class="game-timing-row game-timing-unavailable-row">
+        <div class="game-timing-label">&#x23F0; GAME START</div>
+        <div class="game-timing-value text-sm">Game time unavailable</div>
+    </div>
+    {% endif %}
+
+    {% comment %}
+    BETTING WINDOW row — ONLY on recommended picks. On not_recommended
+    cards we deliberately omit this to avoid contradiction.
+    {% endcomment %}
+    {% if timing.has_betting_window %}
+    <div class="game-timing-row game-timing-window-row mt-1">
+        <div class="game-timing-label">BETTING WINDOW</div>
+        <div class="game-timing-status game-timing-status-{{ timing.status_key }}">
+            {{ timing.status_label }}
+        </div>
+    </div>
+    {% if timing.reason %}
+    <div class="game-timing-reason text-sm mt-1">{{ timing.reason }}</div>
+    {% endif %}
+    {% if timing.best_window %}
+    <div class="game-timing-best-window text-sm mt-1">
+        Best review window: <strong>{{ timing.best_window }} {% tz_abbr %}</strong>
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+{% endif %}

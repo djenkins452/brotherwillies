@@ -2053,3 +2053,194 @@ class ModelLeanUXCorrectionTests(TestCase):
             src = f.read()
         self.assertIn('display_tier_label', src)
         self.assertNotIn('elite-play-tier">{{ rec.tier_label', src)
+
+
+class GameTimingServiceTests(TestCase):
+    """Pure logic tests for apps.core.services.game_timing — behavioral
+    timing guidance, NOT a predictive engine."""
+
+    def _t(self, minutes_ahead):
+        """A datetime `minutes_ahead` minutes after `self.now`."""
+        return self.now + timedelta(minutes=minutes_ahead)
+
+    def setUp(self):
+        # A fixed reference moment so countdown formatting is deterministic.
+        # Use timezone.now() as base then strip seconds for stable strings.
+        self.now = timezone.now().replace(second=0, microsecond=0)
+
+    def test_timing_status_good_to_bet_at_or_within_90_min(self):
+        from apps.core.services.game_timing import (
+            timing_status, STATUS_GOOD_TO_BET,
+        )
+        self.assertEqual(timing_status(self._t(30), now=self.now), STATUS_GOOD_TO_BET)
+        self.assertEqual(timing_status(self._t(89), now=self.now), STATUS_GOOD_TO_BET)
+        self.assertEqual(timing_status(self._t(90), now=self.now), STATUS_GOOD_TO_BET)
+
+    def test_timing_status_review_later_beyond_90_min(self):
+        from apps.core.services.game_timing import (
+            timing_status, STATUS_REVIEW_LATER,
+        )
+        self.assertEqual(timing_status(self._t(91), now=self.now), STATUS_REVIEW_LATER)
+        self.assertEqual(timing_status(self._t(240), now=self.now), STATUS_REVIEW_LATER)
+        self.assertEqual(timing_status(self._t(720), now=self.now), STATUS_REVIEW_LATER)
+
+    def test_timing_status_hold_when_market_warning(self):
+        """market_warning overrides time — even with 30 min to go, HOLD."""
+        from apps.core.services.game_timing import (
+            timing_status, STATUS_HOLD,
+        )
+        self.assertEqual(
+            timing_status(self._t(30), market_warning=True, now=self.now),
+            STATUS_HOLD,
+        )
+        # And on a far-future game too.
+        self.assertEqual(
+            timing_status(self._t(600), market_warning=True, now=self.now),
+            STATUS_HOLD,
+        )
+
+    def test_timing_status_unavailable_for_none_or_past_game(self):
+        from apps.core.services.game_timing import (
+            timing_status, STATUS_UNAVAILABLE,
+        )
+        self.assertEqual(timing_status(None, now=self.now), STATUS_UNAVAILABLE)
+        self.assertEqual(timing_status(self._t(-30), now=self.now), STATUS_UNAVAILABLE)
+
+    def test_format_countdown_brackets(self):
+        from apps.core.services.game_timing import format_countdown
+        self.assertEqual(format_countdown(self._t(47), now=self.now), 'Starts in 47m')
+        self.assertEqual(format_countdown(self._t(134), now=self.now), 'Starts in 2h 14m')
+        self.assertEqual(format_countdown(self._t(304), now=self.now), 'Starts in 5h 04m')
+        self.assertEqual(format_countdown(None, now=self.now), 'Game time unavailable')
+        self.assertEqual(format_countdown(self._t(-30), now=self.now), 'Game in progress')
+
+    def test_format_countdown_tomorrow_and_weekday(self):
+        from apps.core.services.game_timing import format_countdown
+        tomorrow = format_countdown(self._t(60 * 30), now=self.now)  # 30h away
+        # Should start with "Tomorrow at " or a weekday name; either is OK
+        # depending on the test-run local time. The key contract is "not
+        # 'Starts in Xh Ym'" — the >24h branch fires.
+        self.assertFalse(tomorrow.startswith('Starts in'))
+        self.assertIn('at ', tomorrow)
+
+    def test_best_review_window_45_to_90_min_before(self):
+        from apps.core.services.game_timing import best_review_window
+        game = self._t(180)  # 3h ahead
+        earliest, latest = best_review_window(game)
+        self.assertEqual((game - earliest).total_seconds() / 60, 90)
+        self.assertEqual((game - latest).total_seconds() / 60, 45)
+
+    def test_game_start_time_cross_sport_duck_type(self):
+        """MLB→first_pitch, CFB→kickoff, CBB→tipoff."""
+        from apps.core.services.game_timing import game_start_time
+        from types import SimpleNamespace
+        t = self.now
+        self.assertEqual(game_start_time(SimpleNamespace(first_pitch=t)), t)
+        self.assertEqual(game_start_time(SimpleNamespace(kickoff=t)), t)
+        self.assertEqual(game_start_time(SimpleNamespace(tipoff=t)), t)
+        self.assertIsNone(game_start_time(SimpleNamespace()))
+        self.assertIsNone(game_start_time(None))
+
+    def test_build_timing_context_recommended_shows_betting_window(self):
+        from apps.core.services.game_timing import build_timing_context
+        from types import SimpleNamespace
+        rec = SimpleNamespace(
+            game=SimpleNamespace(first_pitch=self._t(45)),
+            market_warning=False,
+            is_recommended=True,
+        )
+        ctx = build_timing_context(rec, now=self.now)
+        self.assertTrue(ctx['has_betting_window'])
+        self.assertEqual(ctx['status_key'], 'good_to_bet')
+        self.assertIn('Good to Bet Now', ctx['status_label'])
+
+    def test_build_timing_context_not_recommended_hides_betting_window(self):
+        """CRITICAL anti-contradiction: a not_recommended card must NEVER
+        show 'Good to Bet Now'. The betting-window row is suppressed; only
+        the GAME START countdown (informational) renders."""
+        from apps.core.services.game_timing import build_timing_context
+        from types import SimpleNamespace
+        rec = SimpleNamespace(
+            game=SimpleNamespace(first_pitch=self._t(45)),
+            market_warning=False,
+            is_recommended=False,        # ← not recommended
+        )
+        ctx = build_timing_context(rec, now=self.now)
+        self.assertFalse(ctx['has_betting_window'])
+        # Game start info is still available (informational).
+        self.assertTrue(ctx['has_game_start'])
+        self.assertEqual(ctx['countdown'], 'Starts in 45m')
+
+    def test_build_timing_context_unavailable_when_no_game(self):
+        from apps.core.services.game_timing import build_timing_context
+        from types import SimpleNamespace
+        rec = SimpleNamespace(
+            game=None,
+            market_warning=False,
+            is_recommended=True,
+        )
+        ctx = build_timing_context(rec, now=self.now)
+        self.assertEqual(ctx['status_key'], 'unavailable')
+        self.assertFalse(ctx['has_betting_window'])
+        self.assertFalse(ctx['has_game_start'])
+
+
+class GameTimingTemplateTests(TestCase):
+    """Banner integration + render guarantees."""
+
+    def _rec(self, *, status, hours_to_game=4, market_warning=False, tier='strong'):
+        from types import SimpleNamespace
+        game_start = timezone.now() + timedelta(hours=hours_to_game)
+        # Use a SimpleNamespace mimicking a game with first_pitch.
+        game = SimpleNamespace(first_pitch=game_start)
+        return Recommendation(
+            sport='mlb', game=game, bet_type='moneyline', pick='Yankees',
+            line='-130', odds_american=-130,
+            confidence_score=65, model_edge=7.0,
+            model_source='house', tier=tier, status=status,
+            market_warning=market_warning,
+        )
+
+    def test_banner_renders_timing_panel_on_recommended(self):
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_RECOMMENDED, hours_to_game=4)
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        self.assertIn('GAME START', html)
+        self.assertIn('BETTING WINDOW', html)
+        # 4h away → Review Later.
+        self.assertIn('Review Later', html)
+        self.assertIn('Best review window', html)
+
+    def test_banner_omits_betting_window_on_not_recommended(self):
+        """Regression: a not_recommended card must NOT show a green
+        'Good to Bet Now' line. Same anti-contradiction discipline as the
+        rest of the banner UX correction."""
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_NOT_RECOMMENDED, hours_to_game=1)
+        rec.status_reason = 'low_edge'
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        # Game-start info IS shown (informational).
+        self.assertIn('GAME START', html)
+        # BETTING WINDOW status row is NOT shown.
+        self.assertNotIn('BETTING WINDOW', html)
+        self.assertNotIn('Good to Bet Now', html)
+
+    def test_banner_renders_hold_when_market_warning(self):
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_RECOMMENDED, hours_to_game=1,
+                        market_warning=True)
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        self.assertIn('Hold', html)
+        self.assertNotIn('Good to Bet Now', html)
+
+    def test_banner_graceful_when_game_missing(self):
+        """No crash path when game / first_pitch is unavailable."""
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_RECOMMENDED)
+        rec.game = None
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        self.assertIn('Game time unavailable', html)

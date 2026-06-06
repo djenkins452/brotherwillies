@@ -1110,6 +1110,52 @@ select.form-control {
     font-size: 0.92rem; font-style: italic; color: #e2e8f0;
 }
 
+/* 2026-05-30 Game Timing panel — behavioral guidance for the user.
+   Mobile-first: each row stacks vertically on phone. ≥600px the GAME
+   START row uses label / time / countdown side-by-side; BETTING WINDOW
+   keeps label + status side-by-side at all sizes. Color signals match
+   the betting-window status (green = bet now, amber = wait, red = hold)
+   so the read is unambiguous even at a glance. */
+.game-timing-panel {
+    padding: 10px 12px;
+    border-left: 3px solid #94a3b8;        /* slate by default */
+    background: rgba(148, 163, 184, 0.06);
+    border-radius: 4px;
+}
+.game-timing-good_to_bet  { border-left-color: #22c55e; background: rgba(34, 197, 94, 0.06); }
+.game-timing-review_later { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.06); }
+.game-timing-hold         { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.06); }
+.game-timing-unavailable  { border-left-color: #64748b; background: rgba(100, 116, 139, 0.06); }
+
+.game-timing-row {
+    display: flex; flex-direction: column; gap: 2px;
+}
+@media (min-width: 600px) {
+    .game-timing-row { flex-direction: row; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .game-timing-row .game-timing-value { flex: 1; }
+}
+.game-timing-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: #94a3b8;
+    min-width: 110px;
+}
+.game-timing-value { font-size: 0.95rem; color: #e2e8f0; }
+.game-timing-tz { color: #94a3b8; font-size: 0.85rem; margin-left: 2px; }
+.game-timing-countdown {
+    font-size: 0.85rem; color: #cbd5e1; font-style: italic;
+}
+.game-timing-window-row { padding-top: 6px; border-top: 1px solid rgba(148, 163, 184, 0.15); margin-top: 6px; }
+.game-timing-status     { font-weight: 700; font-size: 0.95rem; }
+.game-timing-status-good_to_bet  { color: #22c55e; }
+.game-timing-status-review_later { color: #f59e0b; }
+.game-timing-status-hold         { color: #ef4444; }
+.game-timing-reason       { color: #cbd5e1; }
+.game-timing-best-window  { color: #e2e8f0; }
+.game-timing-unavailable-row .game-timing-value { color: #94a3b8; font-style: italic; }
+
 /* ===== Mock Bet Analytics Command Center ===== */
 
 /* Quick time-filter chips above the filter form */

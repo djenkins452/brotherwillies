@@ -69,3 +69,19 @@ def spread_display(spread, side):
         return 'PK'
     else:
         return '{:.1f}'.format(val)
+
+
+@register.simple_tag
+def game_timing(recommendation):
+    """Build the Game Timing panel context for a Recommendation (dataclass
+    or BettingRecommendation row).
+
+    Returns a dict the panel template renders directly. Pure read —
+    no recommendation-engine fields are mutated. Safe to call with None.
+
+    Usage:
+        {% game_timing recommendation as timing %}
+        {% include 'core/includes/game_timing_panel.html' with timing=timing %}
+    """
+    from apps.core.services.game_timing import build_timing_context
+    return build_timing_context(recommendation)
