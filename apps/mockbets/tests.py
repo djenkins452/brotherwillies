@@ -775,10 +775,21 @@ class ActionLabelTests(TestCase):
         from apps.core.services.recommendations import action_label, STATUS_NOT_RECOMMENDED
         self.assertEqual(action_label(STATUS_NOT_RECOMMENDED), 'Model Lean')
 
-    def test_unknown_status_falls_back_to_recommended(self):
-        """Defensive: a blank/unknown status shouldn't produce empty UI copy."""
+    def test_unknown_status_falls_back_to_cautious_label(self):
+        """2026-05-29 SAFETY (banner UX correction polish pass): a blank /
+        unknown / corrupted status MUST fall back to the CAUTIOUS label
+        ('Model Lean'), never the RECOMMENDED CTA. Showing
+        '✅ High Probability Play' on an unknown status would re-create the
+        exact "approves what it rejected" contradiction the UX correction
+        was built to eliminate.
+
+        Previously this test asserted the unsafe direction (fallback ==
+        RECOMMENDED). Audit found that path leaks the recommended CTA when
+        upstream data is corrupted; flipped to the cautious-side default."""
         from apps.core.services.recommendations import action_label
-        self.assertEqual(action_label(''), '✅ High Probability Play')
+        self.assertEqual(action_label(''), 'Model Lean')
+        self.assertEqual(action_label(None), 'Model Lean')
+        self.assertEqual(action_label('garbage'), 'Model Lean')
 
 
 class StalePendingRegressionTests(TestCase):

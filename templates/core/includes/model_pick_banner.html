@@ -75,7 +75,7 @@ derive from already-stored fields — no logic in this template.
         {% endif %}
         {% if recommendation.passed_reasons %}
         <div class="model-pick-passed mt-2">
-            <div class="model-pick-section-label">Why Brother Willie Passed</div>
+            <div class="model-pick-section-label">Why Brother Willie Passed on This Play</div>
             <ul class="model-pick-passed-list">
                 {% for r in recommendation.passed_reasons %}<li>&#10007; {{ r }}</li>{% endfor %}
             </ul>

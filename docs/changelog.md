@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-29 — Banner UX polish pass: audit fixes + adversarial verification
+
+**Follow-up to the earlier UX correction. UI/copy + one safety-default change only. No methodology touched.**
+
+A parallel audit workflow (4 agents) swept every UI surface for residual "Brother Willie secretly likes this" paths after the initial banner rewrite. 5 high-severity findings + 1 medium + 3 low — all fixed. A second workflow rendered the three user scenarios live + ran a 6-hypothesis adversarial pass attempting to disprove the correction; result: `ux_correction_complete: true`, zero remaining contradiction paths.
+
+### Wording refinement
+- "Why Brother Willie Passed" → **"Why Brother Willie Passed on This Play"**. "Passed" alone reads as "approved" in betting parlance; the full phrase is unambiguous.
+
+### High-severity audit fixes
+- `templates/core/value_board.html:160` — `tier_label` → `display_tier_label` (status-aware; no "🔥 High Confidence" on rejected picks).
+- `templates/core/includes/elite_plays_section.html:23` — same fix.
+- `apps/core/views.py _partition_elite` — now filters on **both** `tier == 'elite'` AND `status == 'recommended'`. The "🔥 High Confidence Plays" featured section can no longer contain a rejected elite pick.
+- `apps/core/services/recommendations.py action_label()` — **safer default**. Unknown/None/typo status now falls back to `Model Lean` (the cautious label), not `✅ High Probability Play`. Same fix on the dataclass property. Matching `BettingRecommendation` inherits via the function call. **Inverted an existing test** (`test_unknown_status_falls_back_to_recommended` → `test_unknown_status_falls_back_to_cautious_label`) that was previously locking the unsafe direction.
+
+### Medium-severity audit fix
+- `templates/mlb/_tile_actions.html` movement-chip tooltip — neutral copy ("the pick" / "this side") instead of "the recommended pick" / "the recommended side", so the tooltip never contradicts a rejected card the chip happens to render on.
+
+### Low-severity polish
+- `_TIER_LABELS` (recommendations.py) — explicit docstring warning: `tier_label` is the raw value for analytics/non-UI; UI must route through `display_tier_label(tier, status)`.
+- `whats_new.html` — removed overly technical meta-commentary about word choice.
+- Converted two new `{# … #}` multi-line comments to `{% comment %}…{% endcomment %}` blocks (Django `{# #}` is single-line only — caught by the existing template-comment test).
+
+### Render verification (the three scenarios)
+
+| Scenario | User target | Verdict |
+|---|---|---|
+| **A** — Recommended elite (Braves -142, edge 7.2pp, conf 64%, lane=core) | "confident, clear, actionable" → "Bet this" | ✅ matches |
+| **B** — Near-miss / Rockies (+130, edge 10.2pp, conf 52%, low_probability, lane=qualified) | "interesting, but skip" → "Interesting signal, not strong enough" | ✅ matches; the previously-broken contradictory case now reads correctly |
+| **C** — Weak (Padres -115, edge 1.8pp, conf 53%, low_edge, lane=pass) | "obvious no" → "No reason to touch this" | ✅ matches |
+
+### Adversarial verification
+6 hypotheses probed — empty `status_reason`, corrupted `lane='core'` on rejected, `movement_supports_pick=True` on rejected, stacked risk flags, raw `tier_label` references in templates, AI-commentary / view-layer surfaces. Zero contradictions found. Verdict: **UX correction complete**.
+
+### Regression coverage
+5 new tests in `ModelLeanUXCorrectionTests` (audit-finding locks): `action_label` fallback safety on the function AND the property, `_partition_elite` status filter, template structural guards for `value_board.html` and `elite_plays_section.html`. **707 tests across core + mockbets + mlb + analytics pass.**
+
+---
+
 ## 2026-05-29 — Banner UX: model view vs production decision
 
 **UI / copy change only. No methodology, threshold, calibration, or recommendation-logic edit.**

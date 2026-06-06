@@ -1983,7 +1983,7 @@ class ModelLeanUXCorrectionTests(TestCase):
         self.assertIn('⚠️ Model Lean', html)
         self.assertIn('Not Recommended', html)
         self.assertIn('What the Model Likes', html)
-        self.assertIn('Why Brother Willie Passed', html)
+        self.assertIn('Why Brother Willie Passed on This Play', html)
         self.assertIn('Brother Willie Verdict', html)
 
     def test_banner_template_recommended_still_positive(self):
@@ -1998,5 +1998,58 @@ class ModelLeanUXCorrectionTests(TestCase):
         self.assertIn('Recommended', html)
         self.assertIn('Why This Is a Top Play', html)
         self.assertIn('Why Brother Willie Approved This', html)
-        # 'Why Brother Willie Passed' must NOT appear on recommended.
-        self.assertNotIn('Why Brother Willie Passed', html)
+        # 'Why Brother Willie Passed on This Play' must NOT appear on recommended.
+        self.assertNotIn('Why Brother Willie Passed on This Play', html)
+
+    # --- Polish-pass audit findings (final pass) ------------------------
+
+    def test_action_label_fallback_is_not_recommended_label(self):
+        """REGRESSION (audit, high): action_label() default for an
+        unknown/None status MUST be the cautious 'Model Lean' label, never
+        '✅ High Probability Play' — otherwise a corrupted snapshot could
+        display the recommended CTA on a card that should read as a fade."""
+        from apps.core.services.recommendations import action_label
+        self.assertEqual(action_label(None), 'Model Lean')
+        self.assertEqual(action_label('typo'), 'Model Lean')
+        self.assertEqual(action_label(''), 'Model Lean')
+        self.assertEqual(action_label(STATUS_RECOMMENDED), '✅ High Probability Play')
+
+    def test_recommendation_action_label_property_fallback(self):
+        """Same safety on the Recommendation dataclass property."""
+        r = self._rec(status='', tier='standard', edge=1.0)
+        self.assertEqual(r.action_label, 'Model Lean')
+
+    def test_partition_elite_filters_by_status_recommended(self):
+        """REGRESSION (audit, high): _partition_elite must skip elite-tier
+        picks whose status is not 'recommended'. Otherwise an elite-tier-
+        but-low-probability pick lands in the '🔥 High Confidence Plays'
+        featured section — header contradicts the pick."""
+        from apps.core.views import _partition_elite
+        from types import SimpleNamespace
+        ok = self._rec(status=STATUS_RECOMMENDED, tier='elite',
+                       edge=10.0, confidence=70)
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability',
+                        tier='elite', edge=10.0, confidence=52)
+        g_ok = {'recommendation': ok, 'game': SimpleNamespace(id='G_OK')}
+        g_rej = {'recommendation': rej, 'game': SimpleNamespace(id='G_REJ')}
+        elite_games, *_ = _partition_elite([g_ok, g_rej], [])
+        elite_ids = {g['game'].id for g in elite_games}
+        self.assertIn('G_OK', elite_ids)
+        self.assertNotIn('G_REJ', elite_ids)
+
+    def test_value_board_template_uses_display_tier_label(self):
+        """REGRESSION (audit, high): the Value Board card must NOT render
+        '🔥 High Confidence' on a rejected elite-tier pick."""
+        from django.template.loader import get_template
+        with open(get_template('core/value_board.html').origin.name) as f:
+            src = f.read()
+        self.assertIn('display_tier_label', src)
+        self.assertNotIn('gc-pick-tier">{{ g.recommendation.tier_label', src)
+
+    def test_elite_plays_section_template_uses_display_tier_label(self):
+        from django.template.loader import get_template
+        with open(get_template('core/includes/elite_plays_section.html').origin.name) as f:
+            src = f.read()
+        self.assertIn('display_tier_label', src)
+        self.assertNotIn('elite-play-tier">{{ rec.tier_label', src)

@@ -103,6 +103,12 @@ LANE_HARD_GATES_EDGE_MIN = 0.06          # decimal — edge floor 6pp (was 0.05 
 LANE_HARD_GATES_MAX_ABS_ODDS = 300       # |american odds| ceiling
 LANE_RISK_FLAGS_MAX_FOR_QUALIFIED = 2    # >=3 flags drops the pick to 'pass'
 
+# NOTE: the 'elite' label ("🔥 High Confidence") is a recommendation-positive
+# label. NEVER bind it directly in a UI surface — route through
+# display_tier_label(tier, status) so a not_recommended pick can never read
+# as "🔥 High Confidence". The dataclass property `tier_label` is the raw
+# value and exists for analytics / non-UI consumers; UI must use
+# `display_tier_label` (status-aware) instead.
 _TIER_LABELS = {
     'elite': '🔥 High Confidence',
     'strong': 'Strong Edge',
@@ -457,8 +463,15 @@ def status_label(status: str) -> str:
 
 
 def action_label(status: str) -> str:
-    """Actionable CTA copy — 'Recommended Bet' vs 'Model Lean'."""
-    return _STATUS_ACTION_LABELS.get(status, _STATUS_ACTION_LABELS[STATUS_RECOMMENDED])
+    """Actionable CTA copy — '✅ High Probability Play' vs 'Model Lean'.
+
+    SAFETY: the fallback is the NOT_RECOMMENDED label (not RECOMMENDED).
+    Showing "✅ High Probability Play" on an unknown / corrupted / typo
+    status would be the same class of contradiction the banner UX
+    correction (2026-05-29) was built to eliminate. Default to the
+    cautious-side label so unknown states never read as "bet this".
+    """
+    return _STATUS_ACTION_LABELS.get(status, _STATUS_ACTION_LABELS[STATUS_NOT_RECOMMENDED])
 
 
 def status_reason_label(status_reason: str) -> str:
@@ -536,7 +549,9 @@ class Recommendation:
 
     @property
     def action_label(self) -> str:
-        return _STATUS_ACTION_LABELS.get(self.status, _STATUS_ACTION_LABELS[STATUS_RECOMMENDED])
+        # See action_label() above — fallback is the NOT_RECOMMENDED label so
+        # an unknown/corrupted status never reads as "✅ High Probability Play".
+        return _STATUS_ACTION_LABELS.get(self.status, _STATUS_ACTION_LABELS[STATUS_NOT_RECOMMENDED])
 
     @property
     def status_reason_label(self) -> str:

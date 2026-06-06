@@ -358,11 +358,17 @@ def _partition_elite(games_data, live_data):
     cap. Preserves ordering of returned lists; elites are sorted by confidence
     desc, edge desc so the strongest pick leads the featured section.
     """
+    # 2026-05-29 UX correction: the featured "🔥 High Confidence Plays"
+    # section must ONLY contain recommended elite picks. An elite-tier pick
+    # with status='not_recommended' (e.g. high edge but low probability)
+    # appearing here would contradict the section header. Filter on BOTH
+    # tier AND status.
+    from apps.core.services.recommendations import STATUS_RECOMMENDED
     elite_ids = set()
     elite_games = []
     for g in list(live_data) + list(games_data):
         rec = g.get('recommendation')
-        if rec is not None and rec.tier == 'elite':
+        if rec is not None and rec.tier == 'elite' and rec.status == STATUS_RECOMMENDED:
             game_obj = g.get('game')
             gid = getattr(game_obj, 'id', None)
             if gid is None or gid in elite_ids:

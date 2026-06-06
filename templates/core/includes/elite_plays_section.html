@@ -20,7 +20,12 @@ All tier + explanation logic is computed upstream — this partial is pure rende
                 <span class="badge elite-play-sport-badge">{{ active_sport|upper }}</span>
                 <span class="elite-play-matchup">{{ game.away_team.name }} @ {{ game.home_team.name }}</span>
             </div>
-            <div class="elite-play-tier">{{ rec.tier_label }}</div>
+            {% comment %}
+            display_tier_label is status-aware (defense in depth — _partition_elite
+            also filters on status=='recommended', so this should always be the
+            elite label, never "⚠️ Model Lean").
+            {% endcomment %}
+            <div class="elite-play-tier">{{ rec.display_tier_label }}</div>
             <div class="elite-play-pick">
                 <span class="elite-play-icon">&#x1F3AF;</span>
                 <strong>{{ rec.pick }} {{ rec.bet_type|title }}</strong>

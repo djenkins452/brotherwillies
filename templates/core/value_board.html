@@ -157,7 +157,8 @@
             {% if g.recommendation %}
             <div class="gc-pick gc-pick-{{ g.recommendation.tier }} gc-pick-{{ g.recommendation.status }} text-sm mt-1">
                 <div class="gc-pick-header">
-                    <span class="gc-pick-tier">{{ g.recommendation.tier_label }}</span>
+                    {# display_tier_label is status-aware (no fire emoji on rejected picks). #}
+                    <span class="gc-pick-tier">{{ g.recommendation.display_tier_label }}</span>
                     <span class="gc-pick-status gc-pick-status-{{ g.recommendation.status }}">{{ g.recommendation.status_label }}</span>
                     {% if g.recommendation.status_reason_label %}
                     <span class="gc-pick-reason">{{ g.recommendation.status_reason_label }}</span>
