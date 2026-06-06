@@ -229,3 +229,60 @@ def _empty_context() -> dict:
         'has_betting_window': False,
         'has_game_start': False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Chronological section sort (2026-05-30 UX spec)
+#
+# After the Game Timing panel surfaced first-pitch times on every card, the
+# natural user expectation flipped from "show me the engine's ranking" to
+# "show me the slate in chronological order — I act on the next game first."
+#
+# Rules per spec:
+#   1. Primary:    game_start_time ASC
+#   2. Secondary:  recommendation tier priority ASC (elite > strong > standard)
+#   3. Games with no start time render at the bottom of their section
+#   4. Sort is INTRA-section only — never collapse sections together
+#
+# This helper is the single source of truth. Every section partitioner /
+# view that builds card lists should call it (or factor through it).
+
+def sort_by_game_start_then_priority(items, *, game_getter, tier_getter=None):
+    """Sort `items` chronologically by game start time, with recommendation
+    tier as the tiebreaker. Items with no resolvable game start go LAST
+    (never crash). Returns a new list — does not mutate input.
+
+    Args:
+        items: list of card-like things (dicts, dataclasses, MLB signals).
+        game_getter: callable(item) → game-like object (with first_pitch /
+                     kickoff / tipoff) or None.
+        tier_getter: optional callable(item) → tier string or None. When
+                     omitted, the secondary key is constant — sort is
+                     purely chronological.
+
+    Sort is stable: Python's sort preserves original ordering on ties beyond
+    the supplied keys. That means in practice a `tier_getter` is only
+    necessary when two cards share the same start time AND the input order
+    is undefined (e.g. coming out of a set).
+    """
+    from datetime import datetime as _dt, timezone as _utc
+    from apps.core.services.recommendations import TIER_ORDER
+
+    # Sentinel for None-game-start so those items reliably land at the
+    # bottom while still allowing a stable tier secondary sort.
+    LAST_TIER_PRIORITY = max(TIER_ORDER.values()) + 1   # 4 — past 'None': 3
+    FAR_FUTURE = _dt.max.replace(tzinfo=_utc.utc)
+
+    def _key(item):
+        game = game_getter(item)
+        start = game_start_time(game) if game is not None else None
+        tier = tier_getter(item) if tier_getter is not None else None
+        tier_priority = TIER_ORDER.get(tier, LAST_TIER_PRIORITY)
+        if start is None:
+            # None bucket = 1, far-future timestamp keeps the secondary key
+            # comparison well-defined even if Python ever changes how None
+            # compares in mixed tuples.
+            return (1, FAR_FUTURE, tier_priority)
+        return (0, start, tier_priority)
+
+    return sorted(items, key=_key)

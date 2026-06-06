@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-30 — Chronological sort within recommendation sections
+
+**Presentation-layer reorder. NO methodology / engine / threshold / blend / Elo / calibration / lane changes.**
+
+Once the Game Timing panel surfaced first-pitch times on every card, the natural user mental model flipped from "show me the engine's ranking" → "show me the slate by time — I act on the next game first." Every recommendation section now sorts chronologically within itself.
+
+### Sort rule (single source of truth)
+```
+primary:   game_start_time ASC        (earliest → latest)
+secondary: TIER_ORDER ASC             (elite > strong > standard, tiebreaker)
+tail:      games with no start time render at the BOTTOM
+```
+Stable sort: same-keys preserve input order. Intra-section only — **section grouping is preserved**.
+
+### Canonical helper
+`apps/core/services/game_timing.py::sort_by_game_start_then_priority(items, *, game_getter, tier_getter=None)`. Reuses the existing cross-sport `game_start_time()` (first_pitch / kickoff / tipoff) and the canonical `TIER_ORDER` from recommendations. Pure function — does not mutate input. Returns a new list.
+
+### Touchpoints (audit found 28; one helper, one helper changed, two callers updated)
+- `apps/core/views.py::_sort_games_by_tier_then_edge` — implementation flipped to chronological. Name retained for API compat (drives all 6 lobby sections: live / today / tomorrow / this_week / coming_up / big_games).
+- `apps/core/views.py::_partition_elite` — featured elite plays now flow chronologically.
+- `apps/mlb/services/prioritization.py::_decision_sort_key` — partition-time sort key flipped to (first_pitch ASC, tier ASC). Drives elite / recommended / not_recommended sections of the MLB hub.
+- `apps/mlb/views.py mlb_hub` — explicit re-sort on `recommended_tiles` / `potential_tiles` / `not_recommended_tiles` and on all four spread / total sections (recommended + signal). Removed the old `(_tier_rank, -_edge_value)` and `-_edge_value` keys.
+
+### Tests
+`ChronologicalSortTests` (5): primary chronological key, same-time tier tiebreaker, None-game-time-last, no input mutation, intra-section grouping preserved. `LobbySortByChronologicalTests` (1): elite-late-game does NOT outrank standard-early-game under the new spec. **Two pre-existing tests** that locked the old edge-DESC order updated to assert the new chronological semantics (`test_elite_sorted_chronologically_by_game_start`, `test_sort_order_within_section_is_chronological`). **728 tests across core + mockbets + mlb + analytics pass.**
+
+### Live demo (verified via Django shell)
+| User-spec input | After sort |
+|---|---|
+| `7:10 PM, 2:10 PM, 9:40 PM, 4:05 PM` | `2:10 PM, 4:05 PM, 7:10 PM, 9:40 PM` ✓ |
+| All at 7:10 PM, mixed tiers | `elite → strong → standard` ✓ |
+| Has 2:10 PM, NO TIME, 7:10 PM | `2:10 PM → 7:10 PM → NO TIME` ✓ |
+
+### Methodology confirmation
+Zero edits to recommendation engine, model probability, thresholds, market blend, recommendation rules, Elo, calibration, lane logic. Only sort *keys* changed. Engine outputs identical; only the *order* the user sees them in is different.
+
+---
+
 ## 2026-05-30 — Game Timing panel (behavioral guidance, not predictive)
 
 **UI/UX enhancement only. NO methodology / recommendation-engine / threshold / blend / Elo / calibration / lane changes.**

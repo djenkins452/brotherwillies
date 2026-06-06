@@ -454,14 +454,17 @@ class ElitePartitionTests(TestCase):
     """Ensure the lobby view partitions elite games into elite_games and keeps
     them out of the main board."""
 
-    def _game_dict(self, game_id, tier, house_edge=1.0, confidence=70.0, rec_edge=1.0):
+    def _game_dict(self, game_id, tier, house_edge=1.0, confidence=70.0,
+                   rec_edge=1.0, status='recommended', first_pitch=None):
         """Minimal shape compatible with _partition_elite."""
         class _Stub:
             pass
         g = _Stub()
         g.id = game_id
+        g.first_pitch = first_pitch
         rec = _fake_rec(confidence=confidence, edge=rec_edge)
-        rec.tier = tier  # bypass assign_tiers — test is about partitioning
+        rec.tier = tier              # bypass assign_tiers — test is about partitioning
+        rec.status = status          # _partition_elite filters on status='recommended'
         return {'game': g, 'house_edge': house_edge, 'recommendation': rec}
 
     def test_partitions_elite_from_upcoming(self):
@@ -486,17 +489,24 @@ class ElitePartitionTests(TestCase):
         self.assertEqual([g['game'].id for g in remaining_up], ['u1'])
         self.assertEqual(remaining_live, [])
 
-    def test_elite_sorted_by_edge_then_confidence(self):
-        """Global ranking is edge DESC, confidence DESC — edge wins first."""
+    def test_elite_sorted_chronologically_by_game_start(self):
+        """2026-05-30 spec: featured elite plays now flow by game start time
+        ASC (the user reads "what do I act on first?"), with tier as the
+        tiebreaker. Was previously edge DESC; flipped to match the Game
+        Timing panel mental model."""
         from apps.core.views import _partition_elite
+        now = timezone.now()
         upcoming = [
-            self._game_dict('a', 'elite', confidence=85, rec_edge=9),   # edge 9
-            self._game_dict('b', 'elite', confidence=92, rec_edge=12),  # edge 12
-            self._game_dict('c', 'elite', confidence=70, rec_edge=9),   # edge 9 (lower conf)
+            self._game_dict('a', 'elite', rec_edge=9,
+                            first_pitch=now + timedelta(hours=7)),   # late
+            self._game_dict('b', 'elite', rec_edge=12,
+                            first_pitch=now + timedelta(hours=2)),   # early
+            self._game_dict('c', 'elite', rec_edge=9,
+                            first_pitch=now + timedelta(hours=4)),   # mid
         ]
         elite, _, _ = _partition_elite(upcoming, [])
-        # Highest edge first (b), then edge-tied (a and c), confidence breaks tie (a > c)
-        self.assertEqual([g['game'].id for g in elite], ['b', 'a', 'c'])
+        # Chronological: b (2h) → c (4h) → a (7h). Edge no longer dominant.
+        self.assertEqual([g['game'].id for g in elite], ['b', 'c', 'a'])
 
     def test_no_duplication_across_lists(self):
         """Defensive: if the same game somehow appears in both live and upcoming
@@ -2244,3 +2254,135 @@ class GameTimingTemplateTests(TestCase):
         tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
         html = tpl.render(Context({'recommendation': rec}))
         self.assertIn('Game time unavailable', html)
+
+
+class ChronologicalSortTests(TestCase):
+    """sort_by_game_start_then_priority — the canonical helper that powers
+    every recommendation section's chronological sort (2026-05-30 UX spec)."""
+
+    def _item(self, first_pitch, tier=None, label=''):
+        """A minimal dict mimicking the lobby's `games_data` row shape."""
+        from types import SimpleNamespace
+        return {
+            'label': label,
+            'game': SimpleNamespace(first_pitch=first_pitch),
+            'recommendation': SimpleNamespace(tier=tier) if tier else None,
+        }
+
+    def test_primary_sort_is_game_start_ascending(self):
+        from apps.core.services.game_timing import sort_by_game_start_then_priority
+        now = timezone.now()
+        items = [
+            self._item(now + timedelta(hours=7), label='late'),
+            self._item(now + timedelta(hours=2), label='early'),
+            self._item(now + timedelta(hours=4), label='mid'),
+        ]
+        out = sort_by_game_start_then_priority(
+            items,
+            game_getter=lambda i: i['game'],
+            tier_getter=lambda i: getattr(i.get('recommendation'), 'tier', None),
+        )
+        self.assertEqual([i['label'] for i in out], ['early', 'mid', 'late'])
+
+    def test_same_start_time_secondary_sort_by_tier(self):
+        """At identical first_pitch: elite → strong → standard."""
+        from apps.core.services.game_timing import sort_by_game_start_then_priority
+        when = timezone.now() + timedelta(hours=3)
+        items = [
+            self._item(when, tier='standard', label='std'),
+            self._item(when, tier='elite',    label='elite'),
+            self._item(when, tier='strong',   label='strong'),
+        ]
+        out = sort_by_game_start_then_priority(
+            items,
+            game_getter=lambda i: i['game'],
+            tier_getter=lambda i: i['recommendation'].tier,
+        )
+        self.assertEqual([i['label'] for i in out], ['elite', 'strong', 'std'])
+
+    def test_games_with_no_start_time_render_at_bottom(self):
+        from apps.core.services.game_timing import sort_by_game_start_then_priority
+        now = timezone.now()
+        items = [
+            self._item(None, label='nogame'),
+            self._item(now + timedelta(hours=5), label='late'),
+            self._item(None, label='nogame2'),
+            self._item(now + timedelta(hours=2), label='early'),
+        ]
+        out = sort_by_game_start_then_priority(
+            items,
+            game_getter=lambda i: i['game'],
+            tier_getter=lambda i: getattr(i.get('recommendation'), 'tier', None),
+        )
+        labels = [i['label'] for i in out]
+        # All timed games come before all None-time games.
+        self.assertEqual(labels[:2], ['early', 'late'])
+        self.assertEqual(set(labels[2:]), {'nogame', 'nogame2'})
+
+    def test_does_not_mutate_input(self):
+        from apps.core.services.game_timing import sort_by_game_start_then_priority
+        now = timezone.now()
+        items = [
+            self._item(now + timedelta(hours=5), label='B'),
+            self._item(now + timedelta(hours=2), label='A'),
+        ]
+        original = list(items)
+        out = sort_by_game_start_then_priority(
+            items, game_getter=lambda i: i['game'],
+        )
+        self.assertIsNot(out, items)
+        self.assertEqual([i['label'] for i in items], ['B', 'A'])  # untouched
+        self.assertEqual([i['label'] for i in out], ['A', 'B'])
+
+    def test_section_grouping_preserved_across_sections(self):
+        """The user spec is explicit: sort INTRA-section, never collapse
+        sections together. This verifies the helper doesn't accidentally
+        depend on category labels — same input order is preserved when sort
+        keys tie, which is what guarantees section boundaries hold when the
+        caller sorts each section independently."""
+        from apps.core.services.game_timing import sort_by_game_start_then_priority
+        when = timezone.now() + timedelta(hours=3)
+        # Three different sections, each sorted independently.
+        section_R = [self._item(when - timedelta(hours=2), label='R-1pm'),
+                     self._item(when, label='R-3pm')]
+        section_P = [self._item(when - timedelta(hours=1), label='P-2pm')]
+        section_N = [self._item(when + timedelta(hours=1), label='N-4pm')]
+        sorted_R = sort_by_game_start_then_priority(section_R, game_getter=lambda i: i['game'])
+        sorted_P = sort_by_game_start_then_priority(section_P, game_getter=lambda i: i['game'])
+        sorted_N = sort_by_game_start_then_priority(section_N, game_getter=lambda i: i['game'])
+        # Each section is sorted independently — the 1pm Recommended stays
+        # in Recommended even though it's earlier than the 2pm Potential.
+        self.assertEqual([i['label'] for i in sorted_R], ['R-1pm', 'R-3pm'])
+        self.assertEqual([i['label'] for i in sorted_P], ['P-2pm'])
+        self.assertEqual([i['label'] for i in sorted_N], ['N-4pm'])
+
+
+class LobbySortByChronologicalTests(TestCase):
+    """Regression: the lobby's _sort_games_by_tier_then_edge MUST now sort
+    chronologically (not by tier+edge). The function name is retained for
+    API compatibility; the semantics changed per the 2026-05-30 spec."""
+
+    def test_lobby_sort_uses_chronological_primary_key(self):
+        from apps.core.views import _sort_games_by_tier_then_edge
+        from types import SimpleNamespace
+        now = timezone.now()
+
+        def _g(hours, tier='standard', edge=10.0, label=''):
+            return {
+                'label': label,
+                'game': SimpleNamespace(first_pitch=now + timedelta(hours=hours)),
+                'recommendation': SimpleNamespace(tier=tier),
+                'house_edge': edge,
+            }
+
+        # Elite at 7pm should NOT outrank standard at 2pm under the new spec.
+        games = [
+            _g(7, tier='elite',    edge=15.0, label='elite_late'),
+            _g(2, tier='standard', edge=1.0,  label='std_early'),
+            _g(4, tier='strong',   edge=8.0,  label='strong_mid'),
+        ]
+        _sort_games_by_tier_then_edge(games, sort_by='house_edge')
+        self.assertEqual(
+            [g['label'] for g in games],
+            ['std_early', 'strong_mid', 'elite_late'],
+        )

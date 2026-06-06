@@ -376,14 +376,16 @@ def _partition_elite(games_data, live_data):
             elite_ids.add(gid)
             elite_games.append(g)
 
-    # Global ranking rule (edge DESC, confidence DESC) — edge is the primary
-    # signal per the selection engine spec; confidence is the tiebreaker.
-    elite_games.sort(
-        key=lambda g: (
-            -(g['recommendation'].model_edge or 0),
-            -(g['recommendation'].confidence_score or 0),
-        )
-    )
+    # 2026-05-30: chronological ordering. Even the featured elite section
+    # flows by start time now that the Game Timing panel surfaced first-pitch
+    # on every card — users mentally process "what do I act on first?".
+    # Tiebreaker stays tier-based (sort_by_game_start_then_priority handles it).
+    from apps.core.services.game_timing import sort_by_game_start_then_priority
+    elite_games = list(sort_by_game_start_then_priority(
+        elite_games,
+        game_getter=lambda g: g.get('game'),
+        tier_getter=lambda g: g['recommendation'].tier if g.get('recommendation') else None,
+    ))
 
     remaining_upcoming = [g for g in games_data if getattr(g.get('game'), 'id', None) not in elite_ids]
     remaining_live = [g for g in live_data if getattr(g.get('game'), 'id', None) not in elite_ids]
@@ -391,24 +393,24 @@ def _partition_elite(games_data, live_data):
 
 
 def _sort_games_by_tier_then_edge(games_data, sort_by):
-    """Sort by recommendation tier first (elite > strong > standard > none),
-    then the existing edge-based ordering as a tiebreaker within tier."""
-    from apps.core.services.recommendations import TIER_ORDER
+    """Sort by GAME START TIME first (earliest → latest), then by
+    recommendation tier (elite > strong > standard) as the tiebreaker.
+    Games without a resolvable start time render at the bottom of the
+    section. `sort_by` is retained for API compatibility but no longer
+    influences order — the 2026-05-30 UX spec moved the primary key from
+    edge magnitude to chronological ordering to match how users mentally
+    process the slate ("act on the next game first")."""
+    from apps.core.services.game_timing import sort_by_game_start_then_priority
 
-    def edge_magnitude(g):
-        if sort_by == 'user_edge':
-            return abs(g.get('user_edge', 0) or 0)
-        if sort_by == 'delta':
-            return abs(g.get('delta', 0) or 0)
-        return abs(g.get('house_edge', 0) or 0)
-
-    def key(g):
+    def _tier(g):
         rec = g.get('recommendation')
-        tier_pri = TIER_ORDER[rec.tier if rec else None]
-        # Tier asc (elite=0 first), magnitude desc within tier (use negative).
-        return (tier_pri, -edge_magnitude(g))
+        return rec.tier if rec else None
 
-    games_data.sort(key=key)
+    games_data[:] = sort_by_game_start_then_priority(
+        games_data,
+        game_getter=lambda g: g.get('game'),
+        tier_getter=_tier,
+    )
 
 
 def _get_golf_events():

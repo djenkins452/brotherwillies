@@ -147,7 +147,16 @@ def mlb_hub(request):
         tile for tile in _recommended_candidate_pool
         if _is_visible_recommended(tile)
     ])
-    recommended_tiles.sort(key=lambda t: (_tier_rank(t), -_edge_value(t)))
+    # 2026-05-30: chronological sort. Game-start ASC, tier ASC tiebreak.
+    # Games without a first_pitch fall to the bottom. See
+    # apps.core.services.game_timing.sort_by_game_start_then_priority for
+    # the canonical helper used by every section across the app.
+    from apps.core.services.game_timing import sort_by_game_start_then_priority
+    recommended_tiles = list(sort_by_game_start_then_priority(
+        recommended_tiles,
+        game_getter=lambda t: getattr(t, 'game', None),
+        tier_getter=lambda t: getattr(getattr(t, 'recommendation', None), 'tier', None),
+    ))
 
     # Potential = visible-but-not-bulk-eligible. Three sources, in
     # priority order (the `_take` dedupe means each game lands in
@@ -165,22 +174,28 @@ def mlb_hub(request):
         tile for tile in _recommended_candidate_pool
         if not _is_visible_recommended(tile)
     ]
-    potential_tiles = _take(
-        lane_sections['qualified']
-        + decision_sections.get('value', [])
-        + _recommended_carry_overs
-    )
-    potential_tiles.sort(key=lambda t: -_edge_value(t))
+    potential_tiles = list(sort_by_game_start_then_priority(
+        _take(
+            lane_sections['qualified']
+            + decision_sections.get('value', [])
+            + _recommended_carry_overs
+        ),
+        game_getter=lambda t: getattr(t, 'game', None),
+        tier_getter=lambda t: getattr(getattr(t, 'recommendation', None), 'tier', None),
+    ))
 
-    # Not Recommended = everything left from today's slate. No strict
-    # sort per spec — we keep the input ordering so callers can inject
-    # their own priority by feeding tiles in the desired order.
-    not_recommended_tiles = _take(
-        decision_sections['not_recommended']
-        + decision_sections.get('recommended_espn', [])
-        + lane_sections['pass']
-        + decision_sections.get('unrated', [])
-    )
+    # 2026-05-30: Not Recommended is also chronologically sorted now —
+    # users read the whole slate by time, not by category-internal ranking.
+    not_recommended_tiles = list(sort_by_game_start_then_priority(
+        _take(
+            decision_sections['not_recommended']
+            + decision_sections.get('recommended_espn', [])
+            + lane_sections['pass']
+            + decision_sections.get('unrated', [])
+        ),
+        game_getter=lambda t: getattr(t, 'game', None),
+        tier_getter=lambda t: getattr(getattr(t, 'recommendation', None), 'tier', None),
+    ))
 
     # Focus Engine: single "do this right now" surface. None when no game
     # meets the bar — the banner is simply omitted rather than forced.
@@ -324,23 +339,38 @@ def mlb_hub(request):
     # "non-recommended" buckets for separate rendering. The recommended
     # bucket gets its own green-bordered section ABOVE the existing
     # opportunity sections (which become the Lean + Signal collection).
-    spread_recommended_tiles = [
-        e for e in spread_tiles if e['signal'].is_recommended
-    ]
-    total_recommended_tiles = [
-        e for e in total_tiles if e['signal'].is_recommended
-    ]
+    # 2026-05-30: every spread/total section sorts chronologically too.
+    # Tiles here are dicts with a 'signal' that has .game (first_pitch).
+    _spread_total_game = lambda e: getattr(e.get('signal'), 'game', None)
+    spread_recommended_tiles = list(sort_by_game_start_then_priority(
+        [e for e in spread_tiles if e['signal'].is_recommended],
+        game_getter=_spread_total_game,
+    ))
+    total_recommended_tiles = list(sort_by_game_start_then_priority(
+        [e for e in total_tiles if e['signal'].is_recommended],
+        game_getter=_spread_total_game,
+    ))
     # The existing Phase 1 opportunity sections render `spread_tiles` /
     # `total_tiles` directly. When Phase 3 is on, we want the recommended
     # rows to render ONCE — in their own new section — not twice. So we
     # pass a "non-recommended" view of the same list to the Phase 1
     # template branch when Phase 3 is on, full list otherwise.
     if spread_total_recommendations_enabled:
-        spread_signal_tiles = [e for e in spread_tiles if not e['signal'].is_recommended]
-        total_signal_tiles = [e for e in total_tiles if not e['signal'].is_recommended]
+        spread_signal_tiles = list(sort_by_game_start_then_priority(
+            [e for e in spread_tiles if not e['signal'].is_recommended],
+            game_getter=_spread_total_game,
+        ))
+        total_signal_tiles = list(sort_by_game_start_then_priority(
+            [e for e in total_tiles if not e['signal'].is_recommended],
+            game_getter=_spread_total_game,
+        ))
     else:
-        spread_signal_tiles = spread_tiles
-        total_signal_tiles = total_tiles
+        spread_signal_tiles = list(sort_by_game_start_then_priority(
+            spread_tiles, game_getter=_spread_total_game,
+        ))
+        total_signal_tiles = list(sort_by_game_start_then_priority(
+            total_tiles, game_getter=_spread_total_game,
+        ))
 
     return render(request, 'mlb/hub.html', {
         'live_tiles': live_tiles,

@@ -737,12 +737,33 @@ def sort_today(signals: list[GameSignals]) -> list[GameSignals]:
 
 
 def _decision_sort_key(s: GameSignals):
-    """Sort within a decision section: edge DESC, confidence DESC. Games without
-    a recommendation (no odds yet) are pushed to the bottom of their section."""
+    """Sort within a decision section CHRONOLOGICALLY by first pitch
+    (earliest → latest), with recommendation tier as a tiebreaker. Games
+    without a recommendation (no odds yet) and games without a first_pitch
+    both render at the bottom of their section.
+
+    2026-05-30 UX spec: once the Game Timing panel surfaced first-pitch on
+    every card, users started reading the slate top-to-bottom by time
+    ("what do I act on first?"). The earlier (edge DESC, confidence DESC)
+    order fought that mental model. Tier becomes the tiebreaker so elites
+    still lead within a single timeslot.
+    """
+    from datetime import datetime as _dt, timezone as _utc
+    from apps.core.services.recommendations import TIER_ORDER
+
+    LAST_TIER_PRIORITY = max(TIER_ORDER.values()) + 1
+    FAR_FUTURE = _dt.max.replace(tzinfo=_utc.utc)
+
     rec = s.recommendation
-    if rec is None:
-        return (1, 0.0, 0.0)  # bucket 1 — after real recs
-    return (0, -float(rec.model_edge or 0), -float(rec.confidence_score or 0))
+    fp = getattr(s.game, 'first_pitch', None)
+    tier_priority = TIER_ORDER.get(getattr(rec, 'tier', None) if rec else None,
+                                   LAST_TIER_PRIORITY)
+    # Bucket 0 = has a real first_pitch; bucket 1 = no first_pitch (bottom).
+    # Secondary key (rec is None) keeps no-rec games at the very end inside
+    # bucket 1 — preserves the prior "unrated games last" behavior.
+    if fp is None:
+        return (1, rec is None, FAR_FUTURE, tier_priority)
+    return (0, rec is None, fp, tier_priority)
 
 
 def partition_games_by_decision(signals: list[GameSignals]) -> dict:

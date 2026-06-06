@@ -2291,15 +2291,19 @@ class MLBHubDecisionPartitionTests(TestCase):
       - games with no recommendation fall into not_recommended
     """
 
-    def _fake_signal(self, sport_status='scheduled', rec=None, game_id='g1'):
-        """Build a GameSignals stub — we only need `.game.status` and
-        `.recommendation` for partition_games_by_decision to work."""
+    def _fake_signal(self, sport_status='scheduled', rec=None, game_id='g1',
+                     first_pitch=None):
+        """Build a GameSignals stub — we only need `.game.status`,
+        `.game.first_pitch`, and `.recommendation` for
+        partition_games_by_decision to work."""
         from apps.mlb.services.prioritization import GameSignals
+
+        fp = first_pitch if first_pitch is not None else timezone.now()
 
         class _StubGame:
             id = game_id
             status = sport_status
-            first_pitch = timezone.now()
+        _StubGame.first_pitch = fp
         return GameSignals(
             game=_StubGame(), priority='low', priority_score=0.0,
             recommendation=rec,
@@ -2390,15 +2394,25 @@ class MLBHubDecisionPartitionTests(TestCase):
         self.assertEqual(len(all_ids), len(set(all_ids)), 'duplicate id across sections')
         self.assertEqual(sections['unrated'][0].game.id, 'unknown')
 
-    def test_sort_order_within_section_is_edge_desc(self):
+    def test_sort_order_within_section_is_chronological(self):
+        """2026-05-30 UX spec: sections sort by first_pitch ASC (earliest →
+        latest) with tier as the tiebreaker. Was previously edge DESC;
+        flipped after the Game Timing panel surfaced first-pitch on every
+        card, making chronological order the natural mental model."""
+        from datetime import timedelta as _td
         from apps.mlb.services.prioritization import partition_games_by_decision
+        now = timezone.now()
         a = self._fake_signal(game_id='a',
+                              first_pitch=now + _td(hours=7),
                               rec=self._fake_rec(tier='strong', edge=6.5))
         b = self._fake_signal(game_id='b',
+                              first_pitch=now + _td(hours=2),
                               rec=self._fake_rec(tier='strong', edge=7.5))
         c = self._fake_signal(game_id='c',
+                              first_pitch=now + _td(hours=4),
                               rec=self._fake_rec(tier='strong', edge=7.0))
         sections = partition_games_by_decision([a, b, c])
+        # Chronological: b (2h) → c (4h) → a (7h). Edge no longer dominant.
         self.assertEqual(
             [s.game.id for s in sections['recommended']],
             ['b', 'c', 'a'],
