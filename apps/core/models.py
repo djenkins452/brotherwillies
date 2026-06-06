@@ -278,6 +278,46 @@ class BettingRecommendation(models.Model):
         from apps.core.services.recommendations import top_play_reasons
         return top_play_reasons(self.model_edge, self.confidence_score, self.tier, self.status)
 
+    # 2026-05-29 UX correction — status-aware sections that keep the model's
+    # opinion separate from the engine's decision. Mirrors Recommendation
+    # dataclass properties so the banner template works for either input.
+    @property
+    def display_tier_label(self):
+        from apps.core.services.recommendations import display_tier_label
+        return display_tier_label(self.tier, self.status)
+
+    @property
+    def model_lean_reasons(self):
+        from apps.core.services.recommendations import model_lean_reasons
+        return model_lean_reasons(self.model_edge, self.confidence_score,
+                                  self.tier, self.status)
+
+    @property
+    def passed_reasons(self):
+        from apps.core.services.recommendations import passed_reasons
+        return passed_reasons(
+            self.status, self.status_reason,
+            lane=getattr(self, 'lane', None),
+            risk_flags=getattr(self, 'risk_flags', None) or {},
+            confidence_score=self.confidence_score,
+            market_warning=bool(getattr(self, 'market_warning', False)),
+        )
+
+    @property
+    def approved_reasons(self):
+        from apps.core.services.recommendations import approved_reasons
+        return approved_reasons(
+            self.model_edge, self.confidence_score, self.status,
+            lane=getattr(self, 'lane', None),
+            movement_supports_pick=bool(getattr(self, 'movement_supports_pick', False)),
+        )
+
+    @property
+    def verdict_summary(self):
+        from apps.core.services.recommendations import verdict_summary
+        return verdict_summary(self.status, self.status_reason,
+                               getattr(self, 'lane', None))
+
     # ----- Market movement helpers (Commit 2) ----------------------------
     # These derive UI-ready values from the persisted movement_* fields.
     # They never re-fetch snapshots — display layer must stay cheap.

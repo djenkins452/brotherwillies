@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-29 — Banner UX: model view vs production decision
+
+**UI / copy change only. No methodology, threshold, calibration, or recommendation-logic edit.**
+
+The decision-layer banner was producing contradictory output on `tier='elite'` + `status='not_recommended'` picks: "🔥 High Confidence" + "NOT RECOMMENDED" + "Why This Is a Top Play" rendered together. Users naturally anchored on the positive copy, overrode the engine, and contaminated evaluation data. The fix splits the model's opinion from the production decision into separate sections with non-conflicting copy.
+
+### Service layer (`apps/core/services/recommendations.py`)
+
+Pure derivations from already-stored fields — never re-runs decision logic:
+
+- `display_tier_label(tier, status)` — suppresses "🔥 High Confidence" on rejected picks (returns "⚠️ Model Lean"), preserves "💰 Value Underdog" / "🔒 Blocked" labels which are non-contradictory.
+- `model_lean_reasons(...)` — bullets for "What the Model Likes" on non-recommended cards. Same data points as `top_play_reasons` but **drops** the "Cleared decision rules" bullet (which would be false on a rejected pick).
+- `passed_reasons(status, status_reason, lane, risk_flags, confidence_score, market_warning)` — bullets for "Why Brother Willie Passed". Maps each `status_reason` (low_edge, low_probability, longshot, value, high_juice, secondary_source, derived_odds, marginal) to a concrete sentence; surfaces fired risk flags and lane downgrades.
+- `approved_reasons(...)` — positive bullets for "Why Brother Willie Approved This" on recommended cards.
+- `verdict_summary(...)` — one-line owner verdict at the bottom (e.g. "Edge isn't big enough to bet.").
+
+### Properties
+
+Mirrored on the `Recommendation` dataclass **and** `BettingRecommendation` model: `display_tier_label`, `model_lean_reasons`, `passed_reasons`, `approved_reasons`, `verdict_summary` — so the banner template works for either input.
+
+### Template (`templates/core/includes/model_pick_banner.html`)
+
+Rewritten with a status-aware split:
+- **Recommended branch** (visually preserved): tier_label + headline + numbers + (if elite) "Why This Is a Top Play" + **new** "Why Brother Willie Approved This" bullets.
+- **Non-recommended branch** (rebuilt): "⚠️ Model Lean" header (no fire emoji) + "What the Model Likes" + **"Why Brother Willie Passed"** + **"Brother Willie Verdict"** summary block.
+
+### CSS (`static/css/style.css`)
+
+New `.model-pick-approved` (green), `.model-pick-model-likes` (slate), `.model-pick-passed` (amber), `.model-pick-verdict` (slate, italic) sections. Color separation reinforces the read: green = approved, amber = passed, slate = neutral observation.
+
+### Docs
+
+`templates/accounts/whats_new.html` — new release card.
+
+### Tests
+
+`ModelLeanUXCorrectionTests` (12 tests in `apps/core/tests.py`) — `display_tier_label` status-awareness; `model_lean_reasons` omits the "Cleared decision rules" bullet on rejected picks; `passed_reasons` per-gate copy + risk-flag surfacing; `approved_reasons` only on recommended; `verdict_summary` status-aware; two **banner-template render tests** that lock the regression: rejected-elite must NOT contain "🔥 High Confidence" + "Why This Is a Top Play", must contain "⚠️ Model Lean" + "What the Model Likes" + "Why Brother Willie Passed" + "Brother Willie Verdict"; recommended-elite keeps the positive flow + adds "Why Brother Willie Approved This".
+
+**702 tests across core + mockbets + mlb + analytics pass.**
+
+---
+
 ## 2026-05-28 — Blend 0.55 validation: weekly scorecard + observation plan
 
 **No methodology change.** The blend `0.40 → 0.55` was already live (commit `411f78d`, deployed 2026-05-26) — verified by reading the constant + git blame + grepping for overrides; no second edit was needed (it would have been a no-op). Added the validation scaffolding for a clean 30-day production measurement.

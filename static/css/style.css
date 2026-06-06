@@ -1058,6 +1058,58 @@ select.form-control {
     margin-right: 4px;
 }
 
+/* 2026-05-29 UX correction — status-aware sections that keep the model's
+   opinion separate from the engine's decision. The recommended path uses
+   the existing green/positive treatment; the non-recommended path uses
+   gray + amber so it reads as "interesting, but skip", never "bet this". */
+.model-pick-section-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.model-pick-approved {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(34, 197, 94, 0.30);   /* green-500 @ 30% */
+}
+.model-pick-approved .model-pick-section-label { color: #22c55e; }
+.model-pick-approved-list {
+    list-style: none; padding: 0; margin: 0; font-size: 0.85rem;
+}
+.model-pick-approved-list li { padding: 2px 0; color: var(--text-primary, #e5e7eb); }
+
+.model-pick-model-likes {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(148, 163, 184, 0.30);  /* slate-400 @ 30% */
+}
+.model-pick-model-likes .model-pick-section-label { color: #94a3b8; }
+.model-pick-model-likes-list {
+    list-style: none; padding: 0; margin: 0; font-size: 0.85rem;
+}
+.model-pick-model-likes-list li { padding: 2px 0; color: #cbd5e1; }
+
+.model-pick-passed {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(245, 158, 11, 0.30);   /* amber-500 @ 30% */
+}
+.model-pick-passed .model-pick-section-label { color: #f59e0b; }
+.model-pick-passed-list {
+    list-style: none; padding: 0; margin: 0; font-size: 0.85rem;
+}
+.model-pick-passed-list li { padding: 2px 0; color: #fcd34d; }
+
+.model-pick-verdict {
+    margin-top: 10px; padding: 8px 10px;
+    background: rgba(148, 163, 184, 0.08);
+    border-left: 3px solid #94a3b8;
+    border-radius: 4px;
+}
+.model-pick-verdict .model-pick-section-label { color: #94a3b8; }
+.model-pick-verdict-text {
+    font-size: 0.92rem; font-style: italic; color: #e2e8f0;
+}
+
 /* ===== Mock Bet Analytics Command Center ===== */
 
 /* Quick time-filter chips above the filter form */

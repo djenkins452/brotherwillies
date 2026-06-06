@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#may-29-banner-split">May 29, 2026 &mdash; Banner UX: model view vs production decision</a> <span class="text-sm text-muted">&bull; No more "🔥 High Confidence + NOT RECOMMENDED" contradictions; new "What the Model Likes" / "Why Brother Willie Passed" / "Brother Willie Verdict" sections on rejected picks</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel-phase3">Apr 27, 2026 &mdash; Tiered Intelligence Phase 3 (Promoted Recommendations)</a> <span class="text-sm text-muted">&bull; 🟢 Recommended badge, break-even display, active "Bet All Spread/Total" buttons, source-safety guards, Recommended filter chip</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel-phase2">Apr 27, 2026 &mdash; Tiered Intelligence Phase 2 (Lean Layer)</a> <span class="text-sm text-muted">&bull; Yellow Lean badge, settlement engine, per-signal performance panel, "Leans Only" filter chip</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel">Apr 27, 2026 &mdash; Tiered Intelligence Phase 1 (Spread + Total Opportunity Signals)</a> <span class="text-sm text-muted">&bull; Rule-based spread + total signals, filter chips, dark-launchable feature flag, Moneyline pipeline frozen by contract</span></li>
@@ -35,6 +36,33 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# May 29 — Banner UX: model view vs production decision               #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="may-29-banner-split">
+    <p class="card-title">May 29, 2026 &mdash; Banner UX: model view vs production decision</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">
+        Rejected picks used to show "🔥 High Confidence", "NOT RECOMMENDED", and
+        "Why This Is a Top Play" all together &mdash; a contradiction that
+        nudged users to override the engine. The banner now keeps the
+        <strong>model's opinion</strong> and the <strong>engine's decision</strong>
+        visually separate so the system reads as decisive instead of contradictory.
+    </p>
+    <ul style="list-style:none;padding:0;margin:0;font-size:0.9rem;">
+        <li style="padding:4px 0;">&#10003; Non-recommended picks now show <strong>⚠️ Model Lean</strong> instead of <strong>🔥 High Confidence</strong> in the header. The fire emoji is reserved for picks the engine actually approved.</li>
+        <li style="padding:4px 0;">&#10003; New <strong>What the Model Likes</strong> section explains what the model noticed (edge, projected win rate) &mdash; framed as observation, not advice.</li>
+        <li style="padding:4px 0;">&#10003; New <strong>Why Brother Willie Passed</strong> section explains which production gate rejected the pick (low edge, low probability, longshot, juice, ESPN source, derived odds, risk flags, lane downgrade).</li>
+        <li style="padding:4px 0;">&#10003; New <strong>Brother Willie Verdict</strong> one-liner at the bottom (e.g. <em>"Edge isn't big enough to bet."</em>, <em>"Value angle worth watching — production won't auto-bet it."</em>).</li>
+        <li style="padding:4px 0;">&#10003; Recommended picks keep the positive flow and add a new <strong>Why Brother Willie Approved This</strong> bullet list showing which gates cleared.</li>
+        <li style="padding:4px 0;">&#10003; Color: green on approved, amber on the "passed" section, slate-gray on the verdict block. Visual contrast matches the actual decision.</li>
+    </ul>
+    <p class="text-sm text-muted mt-2">
+        Read-only UI change &mdash; no methodology, threshold, calibration, or
+        recommendation-logic edit. All decisions still come from the existing
+        gates; the banner just stops disagreeing with them.
+    </p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

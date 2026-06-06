@@ -1828,3 +1828,175 @@ class NoMultiLineDjangoCommentsTests(TestCase):
                 'Offenders:\n  ' + '\n  '.join(offenders)
             )
             self.fail(msg)
+
+
+class ModelLeanUXCorrectionTests(TestCase):
+    """Regression: the banner must never blend "🔥 High Confidence" with
+    "NOT RECOMMENDED" + "Why This Is a Top Play" — the contradictory display
+    that nudged users to override the engine. The display_tier_label /
+    model_lean_reasons / passed_reasons / approved_reasons / verdict_summary
+    helpers split the model's opinion from the production decision."""
+
+    def _rec(self, *, status, status_reason='', tier='elite',
+             confidence=72, edge=10.0, lane=None, risk_flags=None,
+             market_warning=False, movement_supports_pick=False):
+        r = Recommendation(
+            sport='mlb', game=None, bet_type='moneyline', pick='Yankees',
+            line='-130', odds_american=-130,
+            confidence_score=confidence, model_edge=edge,
+            model_source='house',
+            tier=tier, status=status, status_reason=status_reason,
+            market_warning=market_warning,
+            movement_supports_pick=movement_supports_pick,
+        )
+        if lane is not None:
+            r.lane = lane
+        if risk_flags is not None:
+            r.risk_flags = risk_flags
+        return r
+
+    # --- display_tier_label ---------------------------------------------
+
+    def test_display_tier_suppresses_high_confidence_on_rejected(self):
+        """Elite-tier + not_recommended must NOT show '🔥 High Confidence'."""
+        from apps.core.services.recommendations import display_tier_label
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability',
+                        tier='elite')
+        self.assertEqual(rej.display_tier_label, '⚠️ Model Lean')
+        self.assertNotIn('High Confidence', rej.display_tier_label)
+        # Direct service call agrees.
+        self.assertEqual(
+            display_tier_label('elite', STATUS_NOT_RECOMMENDED),
+            '⚠️ Model Lean',
+        )
+
+    def test_display_tier_preserves_high_confidence_when_recommended(self):
+        """Recommended elite picks DO keep '🔥 High Confidence'."""
+        ok = self._rec(status=STATUS_RECOMMENDED, tier='elite')
+        self.assertEqual(ok.display_tier_label, '🔥 High Confidence')
+
+    def test_display_tier_preserves_value_and_blocked_labels(self):
+        """'value' and 'blocked' tiers keep their own labels even on rejected
+        picks — those labels are not contradictory."""
+        val = self._rec(status=STATUS_NOT_RECOMMENDED, status_reason='value',
+                        tier='value')
+        blk = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='derived_odds', tier='blocked')
+        self.assertEqual(val.display_tier_label, '💰 Value Underdog')
+        self.assertEqual(blk.display_tier_label, '🔒 Blocked (Derived Odds)')
+
+    # --- model_lean_reasons ---------------------------------------------
+
+    def test_model_lean_reasons_omit_cleared_rules_bullet(self):
+        """'Cleared decision rules' bullet must NOT appear on rejected picks
+        (that line would be false)."""
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability', edge=10.0,
+                        confidence=58)
+        bullets = rej.model_lean_reasons
+        for b in bullets:
+            self.assertNotIn('Cleared decision rules', b)
+        # Still surfaces the genuine model signals.
+        self.assertTrue(any('pp model edge' in b for b in bullets))
+
+    # --- passed_reasons ------------------------------------------------
+
+    def test_passed_reasons_low_probability_explains_threshold(self):
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability', confidence=52)
+        bullets = rej.passed_reasons
+        joined = ' | '.join(bullets)
+        self.assertIn('Confidence', joined)
+        self.assertIn('60%', joined)
+        self.assertIn('52%', joined)
+
+    def test_passed_reasons_per_gate(self):
+        cases = [
+            ('low_edge',         'Edge below'),
+            ('longshot',         'Longshot'),
+            ('value',            'Value lean'),
+            ('high_juice',       'Heavy-favorite juice'),
+            ('secondary_source', 'ESPN fallback'),
+            ('derived_odds',     'Derived odds'),
+            ('marginal',         "Doesn't clear"),
+        ]
+        for reason, snippet in cases:
+            rej = self._rec(status=STATUS_NOT_RECOMMENDED, status_reason=reason)
+            joined = ' | '.join(rej.passed_reasons)
+            self.assertIn(snippet, joined,
+                          msg=f'reason={reason!r} → {rej.passed_reasons!r}')
+
+    def test_passed_reasons_surface_risk_flags(self):
+        rej = self._rec(
+            status=STATUS_NOT_RECOMMENDED, status_reason='low_edge',
+            risk_flags={'market_conflict': True, 'thin_edge': True},
+        )
+        joined = ' | '.join(rej.passed_reasons)
+        self.assertIn('Market moving against', joined)
+        self.assertIn('thin', joined.lower())
+
+    def test_passed_reasons_empty_for_recommended(self):
+        ok = self._rec(status=STATUS_RECOMMENDED)
+        self.assertEqual(ok.passed_reasons, [])
+
+    # --- approved_reasons ----------------------------------------------
+
+    def test_approved_reasons_only_on_recommended(self):
+        ok = self._rec(status=STATUS_RECOMMENDED, edge=7.5, confidence=68)
+        bullets = ok.approved_reasons
+        joined = ' | '.join(bullets)
+        self.assertIn('edge threshold', joined.lower())
+        self.assertIn('confidence threshold', joined.lower())
+        self.assertIn('Passed all production rules', joined)
+        # Not on rejected.
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED, status_reason='low_edge')
+        self.assertEqual(rej.approved_reasons, [])
+
+    # --- verdict_summary -----------------------------------------------
+
+    def test_verdict_summary_is_status_aware(self):
+        ok = self._rec(status=STATUS_RECOMMENDED)
+        self.assertIn('approved', ok.verdict_summary.lower())
+        rej = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability')
+        self.assertIn('win rate', rej.verdict_summary.lower())
+        unknown = self._rec(status=STATUS_NOT_RECOMMENDED, status_reason='')
+        self.assertTrue(unknown.verdict_summary)  # non-empty fallback
+
+    # --- Banner template rendering: the regression -----------------------
+
+    def test_banner_template_no_contradiction_on_rejected_elite(self):
+        """The classic contradictory case: elite-tier pick that the engine
+        rejected. Banner must NOT show '🔥 High Confidence' AND 'NOT
+        RECOMMENDED' AND 'Why This Is a Top Play' together."""
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_NOT_RECOMMENDED,
+                        status_reason='low_probability',
+                        tier='elite', edge=10.2, confidence=52)
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        # The contradictory cluster MUST be gone.
+        self.assertNotIn('🔥 High Confidence', html)
+        self.assertNotIn('Why This Is a Top Play', html)
+        # The replacement signals MUST be present.
+        self.assertIn('⚠️ Model Lean', html)
+        self.assertIn('Not Recommended', html)
+        self.assertIn('What the Model Likes', html)
+        self.assertIn('Why Brother Willie Passed', html)
+        self.assertIn('Brother Willie Verdict', html)
+
+    def test_banner_template_recommended_still_positive(self):
+        """Recommended elite picks keep the positive flow + add 'Approved'
+        bullets."""
+        from django.template import Context, Template
+        rec = self._rec(status=STATUS_RECOMMENDED, tier='elite',
+                        edge=9.0, confidence=68)
+        tpl = Template("{% include 'core/includes/model_pick_banner.html' %}")
+        html = tpl.render(Context({'recommendation': rec}))
+        self.assertIn('🔥 High Confidence', html)
+        self.assertIn('Recommended', html)
+        self.assertIn('Why This Is a Top Play', html)
+        self.assertIn('Why Brother Willie Approved This', html)
+        # 'Why Brother Willie Passed' must NOT appear on recommended.
+        self.assertNotIn('Why Brother Willie Passed', html)

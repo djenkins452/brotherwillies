@@ -274,6 +274,184 @@ def top_play_reasons(model_edge, confidence_score, tier, status) -> list:
     return bullets
 
 
+# --- 2026-05-29 UX correction: split "model view" from "production decision" ---
+#
+# The earlier banner showed "🔥 High Confidence / NOT RECOMMENDED / Why This
+# Is a Top Play" together when an elite-tier pick failed a gate — a
+# contradiction that nudged users to override the engine. The helpers below
+# render the two truths as separate, non-conflicting sections:
+#
+#   - display_tier_label: suppresses "🔥 High Confidence" on rejected picks
+#   - model_lean_reasons: what the model noticed (replaces "Top Play" bullets
+#     on non-recommended cards; the recommended card still uses the original
+#     top_play_reasons for elite picks)
+#   - passed_reasons:     why the production engine REJECTED the pick
+#   - approved_reasons:   which production gates the recommendation CLEARED
+#   - verdict_summary:    one-line owner verdict for the bottom of the card
+#
+# All functions are pure derivations from already-stored fields; they never
+# re-run decision logic.
+
+# A neutral tier label used on every non-recommended card REGARDLESS of edge
+# magnitude. Suppresses "🔥 High Confidence" on rejected picks — that's the
+# headline anti-contamination move.
+_MODEL_LEAN_LABEL = '⚠️ Model Lean'
+
+
+def display_tier_label(tier: str, status: str) -> str:
+    """Tier label used by the banner — status-aware.
+
+    On a recommended pick, returns the standard tier label
+    ("🔥 High Confidence" / "Strong Edge" / "Model Pick").
+
+    On a non-recommended pick, suppresses the "🔥 High Confidence" string
+    (the contradictory case) and returns "⚠️ Model Lean" — except for the
+    two special tiers that already carry their own anti-recommendation
+    semantics ('value' → "💰 Value Underdog", 'blocked' → "🔒 Blocked").
+    """
+    if status == STATUS_RECOMMENDED:
+        return _TIER_LABELS.get(tier, _TIER_LABELS['standard'])
+    if tier in ('value', 'blocked'):
+        return _TIER_LABELS.get(tier)
+    return _MODEL_LEAN_LABEL
+
+
+def model_lean_reasons(model_edge, confidence_score, tier, status) -> list:
+    """Bullets for the "What the Model Likes" section on a NON-RECOMMENDED
+    card. Same data points as top_play_reasons but framed as "what the model
+    noticed", not "why to bet". The "Cleared decision rules" bullet is
+    removed — it would be false on a rejected pick."""
+    bullets = []
+    if model_edge is not None:
+        try:
+            bullets.append(f"+{float(model_edge):.1f}pp model edge over fair-value market")
+        except (TypeError, ValueError):
+            pass
+    if model_edge is not None:
+        try:
+            if float(model_edge) >= ELITE_EDGE:
+                bullets.append("Market mispricing detected (≥8pp edge)")
+        except (TypeError, ValueError):
+            pass
+    if confidence_score is not None:
+        try:
+            cs = float(confidence_score)
+            if cs >= 70:
+                bullets.append(f"High projected win probability ({cs:.0f}%)")
+            elif cs >= 60:
+                bullets.append(f"Above-market projected win probability ({cs:.0f}%)")
+        except (TypeError, ValueError):
+            pass
+    return bullets
+
+
+def passed_reasons(status, status_reason, *,
+                   lane=None, risk_flags=None,
+                   confidence_score=None, market_warning=False) -> list:
+    """Bullets for the "Why Brother Willie Passed" section on a NON-RECOMMENDED
+    card. Derived from the persisted decision-layer fields — never re-runs
+    rules. Returns [] when status == 'recommended'."""
+    if status == STATUS_RECOMMENDED:
+        return []
+
+    bullets = []
+    # Primary reason — the gate that triggered status='not_recommended'.
+    primary = {
+        'low_edge':         f"Edge below the {MIN_EDGE:.0f}pp recommendation threshold",
+        'low_probability':  f"Confidence below the {int(MIN_PROBABILITY_FOR_RECOMMENDED*100)}% threshold"
+                            + (f" ({float(confidence_score):.0f}%)" if confidence_score is not None else ''),
+        'longshot':         "Longshot — |odds| exceeds the 300 cap",
+        'value':            "Value lean: real edge but probability too low to auto-bet",
+        'high_juice':       f"Heavy-favorite juice — needs ≥{STRONG_EDGE:.0f}pp edge",
+        'secondary_source': "ESPN fallback source — primary (Odds API) required",
+        'derived_odds':     "Derived odds — won't act on synthetic moneylines",
+        'marginal':         "Doesn't clear the production safety bar",
+    }.get(status_reason or '')
+    if primary:
+        bullets.append(primary)
+
+    # Risk-flag bullets — append distinct, non-redundant signals.
+    flags = risk_flags or {}
+    flag_text = {
+        'market_conflict':  "Market moving against the pick",
+        'sanity_mismatch':  "Model output failed sanity check",
+        'thin_edge':        "Edge too thin given the price",
+        'insight_conflict': "Insight signal disagrees with the model",
+        'short_fav_thin':   "Short favorite with thin edge",
+    }
+    for key, txt in flag_text.items():
+        if flags.get(key):
+            bullets.append(txt)
+
+    # Lane bullet — surface the lane downgrade explicitly when relevant.
+    if lane == LANE_QUALIFIED:
+        bullets.append("Did not clear the strict 'core' lane (qualified only)")
+    elif lane == LANE_PASS and not bullets:
+        # Defensive: lane='pass' with no other reason → generic gate failure.
+        bullets.append("Failed the production gates")
+
+    # Market warning (defense in depth — only add if not already implied).
+    if market_warning and not flags.get('market_conflict'):
+        bullets.append("Market strongly moving against the pick")
+
+    return bullets
+
+
+def approved_reasons(model_edge, confidence_score, status,
+                     *, lane=None, movement_supports_pick=False) -> list:
+    """Bullets for the "Why Brother Willie Approved This" section on a
+    RECOMMENDED card. Returns [] when status != 'recommended'."""
+    if status != STATUS_RECOMMENDED:
+        return []
+    bullets = []
+    if model_edge is not None:
+        try:
+            edge_v = float(model_edge)
+            bullets.append(f"Cleared edge threshold (+{edge_v:.1f}pp vs market)")
+        except (TypeError, ValueError):
+            pass
+    if confidence_score is not None:
+        try:
+            cs = float(confidence_score)
+            bullets.append(
+                f"Cleared confidence threshold ({cs:.0f}% vs "
+                f"{int(MIN_PROBABILITY_FOR_RECOMMENDED*100)}% minimum)"
+            )
+        except (TypeError, ValueError):
+            pass
+    if lane == LANE_CORE:
+        bullets.append("Cleared the strict 'core' production lane")
+    if movement_supports_pick:
+        bullets.append("Market movement supports the pick")
+    bullets.append("Passed all production rules")
+    return bullets
+
+
+def verdict_summary(status, status_reason='', lane=None) -> str:
+    """One-line owner verdict shown at the bottom of the banner.
+
+    Honest about what the system thinks — never asks the user to decide on
+    the engine's behalf."""
+    if status == STATUS_RECOMMENDED:
+        return "Engine approved — all production gates cleared."
+    by_reason = {
+        'low_edge':         "Edge isn't big enough to bet.",
+        'low_probability':  "Model lean is real, but the projected win rate is too low.",
+        'longshot':         "Interesting longshot — too thin to bulk-bet.",
+        'value':            "Value angle worth watching — production won't auto-bet it.",
+        'high_juice':       "Edge doesn't justify the juice on a heavy favorite.",
+        'secondary_source': "ESPN-source pick — visible, but not auto-recommended.",
+        'derived_odds':     "Derived odds — system won't act on a synthetic line.",
+        'marginal':         "Almost qualified, but failed the approval rules.",
+    }
+    line = by_reason.get(status_reason or '')
+    if line:
+        return line
+    if lane == LANE_QUALIFIED:
+        return "Interesting signal, but didn't clear the strict 'core' lane."
+    return "Interesting value signal, but not strong enough to bet."
+
+
 def status_label(status: str) -> str:
     return _STATUS_LABELS.get(status, '')
 
@@ -367,6 +545,38 @@ class Recommendation:
     @property
     def top_play_reasons(self) -> list:
         return top_play_reasons(self.model_edge, self.confidence_score, self.tier, self.status)
+
+    # 2026-05-29 UX correction — status-aware sections that keep the
+    # model's opinion separate from the engine's decision. See the
+    # service helpers above for the rationale.
+    @property
+    def display_tier_label(self) -> str:
+        return display_tier_label(self.tier, self.status)
+
+    @property
+    def model_lean_reasons(self) -> list:
+        return model_lean_reasons(self.model_edge, self.confidence_score,
+                                  self.tier, self.status)
+
+    @property
+    def passed_reasons(self) -> list:
+        return passed_reasons(
+            self.status, self.status_reason,
+            lane=self.lane, risk_flags=self.risk_flags,
+            confidence_score=self.confidence_score,
+            market_warning=self.market_warning,
+        )
+
+    @property
+    def approved_reasons(self) -> list:
+        return approved_reasons(
+            self.model_edge, self.confidence_score, self.status,
+            lane=self.lane, movement_supports_pick=self.movement_supports_pick,
+        )
+
+    @property
+    def verdict_summary(self) -> str:
+        return verdict_summary(self.status, self.status_reason, self.lane)
 
     @property
     def is_recommended(self) -> bool:
