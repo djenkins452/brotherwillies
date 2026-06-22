@@ -462,6 +462,49 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- Calibration audit (read-only, plaintext) ------------------------
+    # For each pick_prob bucket: predicted (midpoint) vs actual win rate.
+    if (request.GET.get('experiment') or '').lower() == 'calibration':
+        from django.http import HttpResponse
+        from datetime import datetime as _dt
+        from apps.analytics.services.calibration import (
+            build_calibration, render_calibration,
+        )
+
+        try:
+            blend = float(request.GET.get('blend', 0.55))
+            if not (0.0 <= blend <= 0.80):
+                blend = 0.55
+        except (TypeError, ValueError):
+            blend = 0.55
+
+        def _parse_cal(name, default):
+            raw = (request.GET.get(name) or '').strip()
+            if not raw:
+                return default
+            try:
+                return _dt.strptime(raw, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                return default
+
+        _now = timezone.localdate()
+        date_from = _parse_cal('since', _now - _td(days=180))
+        date_to = _parse_cal('until', _now - _td(days=1))
+
+        try:
+            c = build_calibration(date_from, date_to, blend_weight=blend)
+            body = render_calibration(c)
+        except Exception:
+            import traceback
+            body = (
+                "CALIBRATION AUDIT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"blend={blend} since={date_from} until={date_to}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     # --- Replay vs Actual OVERLAP (read-only, plaintext) -----------------
     # Cross-references the lane-corrected replay against MockBet rows in the
     # same first_pitch window. Buckets: overlap / production-only / replay-only.

@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-06-22 — Model calibration audit diagnostic
+
+**Read-only. No methodology / engine / threshold / blend / Elo changes.**
+
+Added a probability-bucket calibration audit: for each `pick_prob` bucket (0.55–0.60 / 0.60–0.65 / 0.65–0.70 / 0.70–0.75 / 0.75+), compares the model's predicted win rate (bucket midpoint) against the **actual** win rate from simulated outcomes. Calibration error = `actual − predicted_midpoint` in pp; positive = under-confident, negative = over-confident.
+
+Two scopes side-by-side: **LANE-CORRECTED** (production-equivalent recommended set — the calibration that matters operationally) and **ALL SIMS** (every successful simulation, for comparison).
+
+### Files
+- `apps/analytics/services/calibration.py` (NEW) — `build_calibration(date_from, date_to, *, blend_weight)` + `render_calibration()`.
+- `apps/analytics/views.py method_replay` — new `?experiment=calibration&since=&until=&blend=` mode with staff diagnostic capture.
+- `apps/analytics/test_calibration.py` (NEW) — 3 tests: bucket classification, staff plaintext, non-staff 403.
+
+### Usage
+```
+GET /analytics/method-replay/?experiment=calibration&since=YYYY-MM-DD&until=YYYY-MM-DD[&blend=0.55]
+```
+Staff-only. Default window: last 180 days. Plaintext output for copy-paste.
+
+**736 tests across core + mockbets + mlb + analytics pass.**
+
+---
+
 ## 2026-06-21 — Replay-vs-Actual overlap diagnostic
 
 **Read-only. No methodology / engine / threshold / blend / Elo / calibration / lane changes.**
