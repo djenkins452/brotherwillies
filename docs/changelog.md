@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-06-21 — Replay-vs-Actual overlap diagnostic
+
+**Read-only. No methodology / engine / threshold / blend / Elo / calibration / lane changes.**
+
+Added a new staff diagnostic that cross-references the lane-corrected replay against actual MockBet placements in the same first_pitch window. Buckets each game into:
+- **OVERLAP** — replay recommended AND actually placed
+- **PRODUCTION-ONLY** — placed but the replay did NOT recommend
+- **REPLAY-ONLY** — replay recommended but the user did NOT place
+
+Per-bucket metrics use the canonical P/L convention (`win → +simulated_payout`, `push → 0`, `loss → -stake`) so numbers line up with the rest of the audit tooling.
+
+### Files
+- `apps/analytics/services/replay_overlap.py` (NEW) — `build_overlap(date_from, date_to, *, blend_weight, username)` + `render_overlap()`.
+- `apps/analytics/views.py method_replay` — new `?experiment=overlap` mode with staff diagnostic capture.
+- `apps/analytics/test_replay_overlap.py` (NEW) — 5 tests: empty-bucket metrics, canonical P/L on win/loss/push, staff plaintext render, non-staff 403.
+
+### Usage
+```
+GET /analytics/method-replay/?experiment=overlap&since=YYYY-MM-DD&until=YYYY-MM-DD[&blend=0.55][&user=demo]
+```
+Staff-only. Plaintext output for copy-paste back. Window defaults to last 30 days.
+
+**733 tests across core + mockbets + mlb + analytics pass.**
+
+---
+
 ## 2026-05-30 — Chronological sort within recommendation sections
 
 **Presentation-layer reorder. NO methodology / engine / threshold / blend / Elo / calibration / lane changes.**

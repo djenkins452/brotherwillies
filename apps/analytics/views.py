@@ -462,6 +462,53 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- Replay vs Actual OVERLAP (read-only, plaintext) -----------------
+    # Cross-references the lane-corrected replay against MockBet rows in the
+    # same first_pitch window. Buckets: overlap / production-only / replay-only.
+    # Required params: ?since=YYYY-MM-DD&until=YYYY-MM-DD. Optional: ?blend, ?user.
+    if (request.GET.get('experiment') or '').lower() == 'overlap':
+        from django.http import HttpResponse
+        from datetime import datetime as _dt
+        from apps.analytics.services.replay_overlap import (
+            build_overlap, render_overlap,
+        )
+
+        try:
+            blend = float(request.GET.get('blend', 0.55))
+            if not (0.0 <= blend <= 0.80):
+                blend = 0.55
+        except (TypeError, ValueError):
+            blend = 0.55
+
+        def _parse(name, default):
+            raw = (request.GET.get(name) or '').strip()
+            if not raw:
+                return default
+            try:
+                return _dt.strptime(raw, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                return default
+
+        _now = timezone.localdate()
+        date_from = _parse('since', _now - _td(days=30))
+        date_to = _parse('until', _now - _td(days=1))
+        username = request.GET.get('user') or None
+
+        try:
+            overlap = build_overlap(date_from, date_to,
+                                    blend_weight=blend, username=username)
+            body = render_overlap(overlap)
+        except Exception:
+            import traceback
+            body = (
+                "OVERLAP EXPERIMENT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"blend={blend} since={date_from} until={date_to} user={username}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     today = timezone.localdate()
     quick_range = (request.GET.get('range') or '').lower()
 
