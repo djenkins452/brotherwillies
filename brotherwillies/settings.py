@@ -257,6 +257,25 @@ USE_DYNAMIC_RATINGS = os.environ.get('USE_DYNAMIC_RATINGS', 'true').lower() in (
     'true', '1', 'yes',
 )
 
+# 2026-06-25 v3.1 — Starter recent-form variant flag. DEFAULT FALSE.
+#
+# When True, the MLB house model adds a "pitcher recent form" term
+# (proxy: W/L over last N final starts; see apps/mlb/services/pitcher_form.py)
+# to the score. When False (production default), recent form is COMPUTED
+# (so the contribution dict on every recommendation captures it for audit /
+# replay attribution) but NOT added to the score. Production behavior is
+# unchanged.
+#
+# Activation rule: this flag may be flipped to True only after the
+# `?experiment=recent_form` replay validation passes its pre-registered
+# ship criteria. See docs/v3_1_recent_form_validation_plan.md.
+#
+# Rollback: set USE_STARTER_RECENT_FORM=false in Railway env vars. No code
+# change required.
+USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'false').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

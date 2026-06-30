@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-06-25 — v3.1 foundation: feature contribution tracking + starter recent-form (SHADOW)
+
+**First v3 step. Production behavior unchanged when `USE_STARTER_RECENT_FORM=false` (the default).**
+
+### Always-on (no methodology change)
+
+- `BettingRecommendation.feature_contributions` — new `JSONField` (migration `0009`). Populated on every new MLB recommendation with team rating, pitcher static + form contributions, HFA, market blend delta, raw + calibrated probabilities, edge. Pre-v3.1 rows degrade gracefully (`{}`). Surfaced in Django admin as a readonly pretty-printed JSON block.
+- `apps/mlb/services/pitcher_form.py` — new `recent_form_delta()` using the pitcher's W–L over their last N completed starts as the proxy. Limitation documented in the module docstring; returns `0.0` when there's insufficient data.
+- `apps/mlb/services/model_service.py` — `_score()` and `compute_house_win_prob()` now accept `return_breakdown=True` and emit the contribution dict. The form term is computed every time, regardless of the flag.
+- Method Replay `_simulate_recommendation` accepts `use_recent_form` (defaults `False` → byte-identical to the pre-v3.1 replay).
+- New staff endpoint: `GET /analytics/method-replay/?experiment=recent_form&days=90`. Runs A (production) vs B (+recent form) on the same historical slate; emits headline metrics, deltas, per-confidence-bucket calibration, and a **mechanical SHIP CRITERIA verdict**.
+
+### Behind feature flag (default OFF)
+
+- `USE_STARTER_RECENT_FORM=false` — settings env-var-driven flag, default `false`. When `true`, the form term is added to the score; when `false`, the form term is computed for audit but does NOT enter the score. Locked by `test_score_excludes_form_when_flag_off`.
+
+### Pre-registered ship criteria (verdict is mechanical, not subjective)
+
+1. ROI improves by ≥ +2pp
+2. 60–65% bucket calibration does not worsen (|B err| ≤ |A err| + 1.0pp)
+3. Recommendation volume usable (B ≥ 0.5 × A)
+4. No major bucket regression on 65–70 / 70–75 / 75+ (|Δ err| ≤ 5pp)
+5. CLV does not materially worsen (Δ avg_clv ≥ −0.01)
+
+If any fails → flag stays OFF. Capture continues silently.
+
+### Rollback
+
+```
+USE_STARTER_RECENT_FORM=false   # Railway env var; one-line; no migration
+```
+
+### Tests added
+
+11 tests in `apps/mlb/test_v3_1_recent_form.py`:
+- `FeatureContributionCaptureTests` (3) — contribution dict shape with/without pitchers + persistence
+- `RecentFormServiceTests` (4) — None pitcher, insufficient history, positive form sign, leakage guard
+- `FlagOffPreservesProductionTests` (1) — flag-off path identical to pre-v3.1
+- `FlagOnAddsFormTests` (1) — flag-on adds the form term
+- `RecentFormExperimentViewTests` (2) — staff 200, non-staff 403
+
+**747 tests across core + mockbets + mlb + analytics pass.**
+
+### Documentation
+
+- `docs/v3_1_recent_form_validation_plan.md` — full plan + ship criteria + rollback.
+
+### Activation path
+
+1. Operator hits the validation URL on Railway.
+2. Reads the `VERDICT` line (mechanical).
+3. If `PASS` → flip `USE_STARTER_RECENT_FORM=true` → Railway redeploys → form active.
+4. If `FAIL` → do nothing. Shadow capture continues.
+
+---
+
 ## 2026-06-22 — Model calibration audit diagnostic
 
 **Read-only. No methodology / engine / threshold / blend / Elo changes.**

@@ -462,6 +462,42 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- v3.1 recent-form experiment (read-only, plaintext) --------------
+    # A: production / B: production + starter recent form. Pre-registered
+    # ship criteria. Verdict is mechanical.
+    if (request.GET.get('experiment') or '').lower() == 'recent_form':
+        from django.http import HttpResponse
+        from apps.analytics.services.method_replay import (
+            run_recent_form_experiment, render_recent_form_experiment,
+        )
+
+        try:
+            days = int(request.GET.get('days', 90))
+        except (TypeError, ValueError):
+            days = 90
+        days = max(7, min(days, 365))
+
+        try:
+            blend = float(request.GET.get('blend', 0.55))
+            if not (0.0 <= blend <= 0.80):
+                blend = 0.55
+        except (TypeError, ValueError):
+            blend = 0.55
+
+        try:
+            exp = run_recent_form_experiment(days=days, blend_weight=blend)
+            body = render_recent_form_experiment(exp)
+        except Exception:
+            import traceback
+            body = (
+                "RECENT-FORM EXPERIMENT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"days={days} blend={blend}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     # --- Calibration audit (read-only, plaintext) ------------------------
     # For each pick_prob bucket: predicted (midpoint) vs actual win rate.
     if (request.GET.get('experiment') or '').lower() == 'calibration':

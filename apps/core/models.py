@@ -199,6 +199,35 @@ class BettingRecommendation(models.Model):
     # fallen back to static).
     shadow_alt_data = models.JSONField(default=dict, blank=True)
 
+    # 2026-06-25 v3.1: per-recommendation feature contribution breakdown.
+    # Stores WHY a recommendation was made — score contributions per feature
+    # plus probability stages. Permanent audit artifact for retrospective
+    # feature-value attribution. Empty dict on pre-v3.1 rows; degrade
+    # gracefully in any view that reads it.
+    #
+    # Schema (all optional — readers must .get() with defaults):
+    #   {
+    #     'sport': 'mlb',
+    #     'engine_version': 'v3.1',
+    #     'flags': {'use_starter_recent_form': bool},
+    #     'inputs': {
+    #         'home_team_rating': float, 'away_team_rating': float,
+    #         'home_pitcher_rating': float|None, 'away_pitcher_rating': float|None,
+    #         'home_pitcher_form_delta': float|None, 'away_pitcher_form_delta': float|None,
+    #         'neutral_site': bool, 'market_home_win_prob': float|None,
+    #     },
+    #     'contributions_pp': {
+    #         'team_rating': float, 'pitcher_static': float,
+    #         'pitcher_form': float, 'hfa': float, 'market_blend': float,
+    #     },   # all signed pp deltas to picked-side probability
+    #     'probabilities': {
+    #         'raw_pre_blend': float, 'market_implied': float,
+    #         'final_calibrated': float,
+    #     },
+    #     'edge_pp': float,
+    #   }
+    feature_contributions = models.JSONField(default=dict, blank=True)
+
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

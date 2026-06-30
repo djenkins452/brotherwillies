@@ -91,17 +91,78 @@ def _pitcher_diff(game):
     return (hp.rating - ap.rating), True
 
 
-def _score(game, weights):
+def _score(game, weights, *, return_breakdown=False, use_recent_form=None,
+           reference_date=None):
+    """Compute score for `game`. When `return_breakdown=True`, also returns
+    a dict of per-feature contributions (signed, in score units) for the
+    v3.1 feature-attribution capture.
+
+    `use_recent_form`: if True, adds a pitcher_form contribution to the
+    score. When None (default), reads the global USE_STARTER_RECENT_FORM
+    flag from settings. When False, the form contribution is *computed*
+    (still stored on the breakdown for replay/audit) but NOT added to
+    the score — production behavior is unchanged.
+
+    `reference_date`: cutoff for recent-form lookback. Defaults to now;
+    replay must pass the game's own first_pitch as the cutoff (leakage
+    guard).
+    """
     from apps.core.services.elo_service import team_rating_for_model
-    # Reads Elo (projected onto legacy scale) when USE_DYNAMIC_RATINGS is
-    # enabled and team has a populated elo_rating; static rating otherwise.
-    team_diff = (
-        team_rating_for_model(game.home_team) - team_rating_for_model(game.away_team)
-    ) * 0.35 * weights['rating']
+    from django.conf import settings
+
+    if use_recent_form is None:
+        use_recent_form = bool(getattr(settings, 'USE_STARTER_RECENT_FORM', False))
+
+    home_team_rating = team_rating_for_model(game.home_team)
+    away_team_rating = team_rating_for_model(game.away_team)
+    team_diff = (home_team_rating - away_team_rating) * 0.35 * weights['rating']
+
     pitcher_diff_raw, _both_known = _pitcher_diff(game)
-    pitcher_diff = pitcher_diff_raw * 0.65 * weights['pitcher']
+    pitcher_static = pitcher_diff_raw * 0.65 * weights['pitcher']
+
+    home_form_delta = 0.0
+    away_form_delta = 0.0
+    if _both_known:
+        # Compute the form delta even when the flag is OFF so the
+        # contribution is available for audit/replay. Adding it to the
+        # score is gated by use_recent_form.
+        from apps.mlb.services.pitcher_form import recent_form_delta
+        home_form_delta = recent_form_delta(
+            game.home_pitcher, reference_date=reference_date,
+        )
+        away_form_delta = recent_form_delta(
+            game.away_pitcher, reference_date=reference_date,
+        )
+    form_diff = (home_form_delta - away_form_delta) * 0.65 * weights['pitcher']
+
     hfa = HFA * weights['hfa'] if not game.neutral_site else 0.0
-    return team_diff + pitcher_diff + hfa
+
+    score = team_diff + pitcher_static + hfa
+    if use_recent_form:
+        score += form_diff
+
+    if not return_breakdown:
+        return score
+
+    breakdown = {
+        'use_recent_form': use_recent_form,
+        'home_team_rating': float(home_team_rating),
+        'away_team_rating': float(away_team_rating),
+        'home_pitcher_rating': (float(game.home_pitcher.rating)
+                                if game.home_pitcher else None),
+        'away_pitcher_rating': (float(game.away_pitcher.rating)
+                                if game.away_pitcher else None),
+        'home_pitcher_form_delta': home_form_delta if _both_known else None,
+        'away_pitcher_form_delta': away_form_delta if _both_known else None,
+        'neutral_site': bool(game.neutral_site),
+        # Score-unit contributions (signed, home-perspective).
+        'team_rating_contribution': float(team_diff),
+        'pitcher_static_contribution': float(pitcher_static),
+        'pitcher_form_contribution': float(form_diff),
+        'hfa_contribution': float(hfa),
+        'score': float(score),
+    }
+    return score, breakdown
 
 
 def _sigmoid(x):
@@ -110,16 +171,40 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x / 25.0))
 
 
-def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None):
+def compute_house_win_prob(game, latest_odds=None, injuries=None, context=None,
+                            *, return_breakdown=False):
     """Final calibration step (blend + clamp) applied before returning.
-    See apps.core.services.probability_calibration."""
-    raw = _sigmoid(_score(game, HOUSE_WEIGHTS))
+    See apps.core.services.probability_calibration.
+
+    When `return_breakdown=True`, returns (final_prob, contribution_dict)
+    where contribution_dict is the v3.1 feature-attribution capture.
+    """
+    score_result = _score(game, HOUSE_WEIGHTS, return_breakdown=return_breakdown)
+    if return_breakdown:
+        raw_score, breakdown = score_result
+    else:
+        raw_score = score_result
+    raw = _sigmoid(raw_score)
     raw = max(0.01, min(0.99, raw))
     if latest_odds is None:
         latest_odds = _get_latest_odds(game)
     market = latest_odds.market_home_win_prob if latest_odds else None
     from apps.core.services.probability_calibration import finalize_win_prob
-    return finalize_win_prob(raw, market)
+    final = finalize_win_prob(raw, market)
+
+    if not return_breakdown:
+        return final
+
+    # Enrich the breakdown with probability stages + blend delta.
+    breakdown['raw_prob_pre_blend'] = float(raw)
+    breakdown['market_home_win_prob'] = (float(market) if market is not None else None)
+    breakdown['final_home_win_prob'] = float(final)
+    if market is not None:
+        # Market-blend delta in probability points (home perspective).
+        breakdown['market_blend_pp'] = round((final - raw) * 100, 2)
+    else:
+        breakdown['market_blend_pp'] = 0.0
+    return final, breakdown
 
 
 def compute_user_win_prob(game, user_config, injuries=None):
@@ -180,7 +265,17 @@ def compute_game_data(game, user=None):
     injuries = _injuries(game)
 
     market_prob = latest_odds.market_home_win_prob if latest_odds else 0.5
-    house_prob = compute_house_win_prob(game, latest_odds, injuries)
+    # v3.1: capture the contribution breakdown so _moneyline_candidate can
+    # persist it on the BettingRecommendation row. Falls back gracefully —
+    # if compute_house_win_prob ever raises, the rec still works without
+    # contributions (downstream readers must .get() with defaults).
+    try:
+        house_prob, house_contributions = compute_house_win_prob(
+            game, latest_odds, injuries, return_breakdown=True,
+        )
+    except Exception:
+        house_prob = compute_house_win_prob(game, latest_odds, injuries)
+        house_contributions = {}
 
     user_prob = None
     if user and user.is_authenticated:
@@ -222,6 +317,10 @@ def compute_game_data(game, user=None):
         'confidence_class': {'high': 'green', 'med': 'yellow', 'low': 'red'}[confidence],
         'is_favorite': False,
         'line_movement': line_movement,
+        # v3.1 feature-attribution capture — picked up by
+        # _moneyline_candidate → Recommendation.feature_contributions →
+        # BettingRecommendation.feature_contributions.
+        'house_contributions': house_contributions,
         'injuries': injuries,
         'model_version': HOUSE_MODEL_VERSION,
         'trust_tier': trust_tier,

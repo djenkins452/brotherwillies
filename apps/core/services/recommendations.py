@@ -528,6 +528,13 @@ class Recommendation:
     market_prob: Optional[float] = None           # decimal 0..1, de-vigged picked side
     extreme_disagreement: bool = False            # |final - market| > 0.105 (post-blend)
 
+    # 2026-06-25 v3.1 — feature-attribution capture. Empty dict by default;
+    # populated by the per-sport candidate builder when the sport's model
+    # service exposes a contribution breakdown. Persisted to
+    # BettingRecommendation.feature_contributions when the rec is persisted.
+    # See BettingRecommendation model docstring for the schema.
+    feature_contributions: dict = field(default_factory=dict)
+
     @property
     def market_implied_pct(self) -> Optional[float]:
         """De-vigged market implied probability for the picked side, in
@@ -1006,6 +1013,49 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         if lane == LANE_CORE:
             lane = LANE_QUALIFIED
 
+    # 2026-06-25 v3.1: assemble the feature-contribution payload from what
+    # the per-sport compute_fn provided. MLB exposes 'house_contributions'
+    # populated by compute_house_win_prob(return_breakdown=True). Other
+    # sports haven't been wired yet → empty dict, downstream readers
+    # degrade gracefully.
+    house_contrib = data.get('house_contributions') or {}
+    feature_contributions = {}
+    if house_contrib:
+        feature_contributions = {
+            'sport': 'mlb',
+            'engine_version': 'v3.1',
+            'flags': {
+                'use_starter_recent_form': bool(house_contrib.get('use_recent_form', False)),
+            },
+            'inputs': {
+                'home_team_rating': house_contrib.get('home_team_rating'),
+                'away_team_rating': house_contrib.get('away_team_rating'),
+                'home_pitcher_rating': house_contrib.get('home_pitcher_rating'),
+                'away_pitcher_rating': house_contrib.get('away_pitcher_rating'),
+                'home_pitcher_form_delta': house_contrib.get('home_pitcher_form_delta'),
+                'away_pitcher_form_delta': house_contrib.get('away_pitcher_form_delta'),
+                'neutral_site': house_contrib.get('neutral_site'),
+                'market_home_win_prob': house_contrib.get('market_home_win_prob'),
+                'pick_side': pick_side,
+            },
+            'contributions_pp': {
+                # Score units → probability points (rough, via sigmoid slope at center).
+                # We store the raw score-unit contributions so they remain audit-truthful;
+                # the pp scaling here is a presentation aid for human readability.
+                'team_rating_score_units': house_contrib.get('team_rating_contribution'),
+                'pitcher_static_score_units': house_contrib.get('pitcher_static_contribution'),
+                'pitcher_form_score_units': house_contrib.get('pitcher_form_contribution'),
+                'hfa_score_units': house_contrib.get('hfa_contribution'),
+                'market_blend_pp': house_contrib.get('market_blend_pp'),
+            },
+            'probabilities': {
+                'raw_pre_blend': house_contrib.get('raw_prob_pre_blend'),
+                'market_implied_devigged_pick_side': float(market_prob),
+                'final_calibrated': float(confidence),
+            },
+            'edge_pp': float(model_edge_pp),
+        }
+
     return Recommendation(
         sport='',
         game=game,
@@ -1035,6 +1085,7 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
         final_model_prob=confidence,
         market_prob=market_prob,
         extreme_disagreement=extreme_disagreement,
+        feature_contributions=feature_contributions,
     )
 
 
@@ -1222,5 +1273,8 @@ def persist_recommendation(sport: str, game, user=None):
         shadow_active_mode=active_mode if sport == 'mlb' else '',
         shadow_alt_mode=alt_mode if sport == 'mlb' else '',
         shadow_alt_data=shadow_alt_data,
+        # 2026-06-25 v3.1 feature-attribution payload (empty for sports
+        # whose model service hasn't been wired yet — readers must .get()).
+        feature_contributions=getattr(rec, 'feature_contributions', {}) or {},
         **{game_fk_field: game},
     )

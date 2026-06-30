@@ -299,6 +299,8 @@ def _simulate_recommendation(
     game,
     blend_weight: float,
     method_label: str,
+    *,
+    use_recent_form: bool = False,
 ) -> Optional[SimulatedRecommendation]:
     """Simulate one recommendation under the given blend weight.
 
@@ -338,10 +340,23 @@ def _simulate_recommendation(
     # ---- Score formula (mirrors apps.mlb.services.model_service._score) ----
     rating_term = (home_rating - away_rating) * 0.35
     pitcher_term = 0.0
+    pitcher_form_term = 0.0
     if game.home_pitcher is not None and game.away_pitcher is not None:
         pitcher_term = (home_pitcher_rating - away_pitcher_rating) * 0.65
+        # 2026-06-25 v3.1: recent-form variant. Anchor the form lookback on
+        # game.first_pitch so the replay cannot peek at the game being
+        # simulated or any later game. L1/L2/L3 leakage safeguards preserved.
+        if use_recent_form:
+            from apps.mlb.services.pitcher_form import recent_form_delta
+            home_form = recent_form_delta(
+                game.home_pitcher, reference_date=game.first_pitch,
+            )
+            away_form = recent_form_delta(
+                game.away_pitcher, reference_date=game.first_pitch,
+            )
+            pitcher_form_term = (home_form - away_form) * 0.65
     hfa_term = HFA if not game.neutral_site else 0.0
-    score = rating_term + pitcher_term + hfa_term
+    score = rating_term + pitcher_term + pitcher_form_term + hfa_term
 
     # ---- Sigmoid → raw probability ----
     raw_prob = 1.0 / (1.0 + math.exp(-score / 25.0))
@@ -1390,5 +1405,267 @@ def render_favorites_experiment(exp: dict) -> str:
                 f"    {k:<8} {_bucket_cell('a', am)}  {_bucket_cell('b', bm)}"
             )
 
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-25 v3.1 — Recent-form experiment (A: production / B: + form delta)
+#
+# Pre-registered ship criteria for activating USE_STARTER_RECENT_FORM=true:
+#   • ROI improves by ≥ +2pp
+#   • 60–65% bucket calibration does not worsen
+#   • Recommendation volume remains usable (no catastrophic drop)
+#   • No major bucket regression
+#   • CLV does not materially worsen
+#
+# These are checked mechanically in render_recent_form_experiment() so the
+# verdict is data-driven, not subjective. Read-only — no engine code paths
+# are modified at run time.
+# ---------------------------------------------------------------------------
+
+def run_recent_form_experiment(
+    *,
+    days: int = 90,
+    blend_weight: float = 0.55,
+    reference_date=None,
+    min_games_for_window: int = 20,
+) -> dict:
+    """Compare production (without recent form) vs +form on the SAME slate.
+
+    Same simulate-once-and-slice discipline as run_blend_experiment to keep
+    query load reasonable. Produces lane-corrected metrics + per-bucket
+    calibration so the ship-criteria check can run mechanically.
+    """
+    ref = reference_date or timezone.localdate()
+    date_to = ref - timedelta(days=1)
+    date_from = ref - timedelta(days=days)
+
+    from apps.mlb.models import Game
+    games = list(
+        Game.objects.filter(
+            status='final',
+            home_score__isnull=False,
+            away_score__isnull=False,
+            first_pitch__date__gte=date_from,
+            first_pitch__date__lte=date_to,
+        )
+        .select_related('home_team', 'away_team', 'home_pitcher', 'away_pitcher')
+        .order_by('first_pitch')
+    )
+
+    def _simulate_all(use_form: bool):
+        sims = []
+        errors = 0
+        for g in games:
+            try:
+                sim = _simulate_recommendation(
+                    g, blend_weight, ('+form' if use_form else 'prod'),
+                    use_recent_form=use_form,
+                )
+            except Exception:
+                errors += 1
+                logger.exception(
+                    'recent_form_experiment: sim failed game=%s use_form=%s',
+                    getattr(g, 'id', None), use_form,
+                )
+                continue
+            if sim is not None:
+                sims.append(sim)
+        return sims, errors
+
+    a_sims, a_errors = _simulate_all(False)   # A — production
+    b_sims, b_errors = _simulate_all(True)    # B — +form
+
+    a_lc = [s for s in a_sims if s.is_lane_corrected_recommended]
+    b_lc = [s for s in b_sims if s.is_lane_corrected_recommended]
+    a_metrics = _compute_metrics(a_lc)
+    b_metrics = _compute_metrics(b_lc)
+
+    # Per-confidence-bucket calibration for both variants (the centerpiece
+    # of the ship criterion — 60–65% must not worsen).
+    def _per_bucket(sims):
+        buckets = {'60-65': [], '65-70': [], '70-75': [], '75+': []}
+        for s in sims:
+            p_pct = s.pick_prob * 100 if s.pick_prob is not None else None
+            if p_pct is None:
+                continue
+            if p_pct < 65:
+                key = '60-65'
+            elif p_pct < 70:
+                key = '65-70'
+            elif p_pct < 75:
+                key = '70-75'
+            else:
+                key = '75+'
+            buckets[key].append(s)
+        out = {}
+        for k, group in buckets.items():
+            wins = sum(1 for s in group if s.won is True)
+            losses = sum(1 for s in group if s.won is False)
+            decisive = wins + losses
+            win_pct = round(100.0 * wins / decisive, 2) if decisive else None
+            midpoint = {'60-65': 62.5, '65-70': 67.5,
+                        '70-75': 72.5, '75+': 80.0}[k]
+            error = (round(win_pct - midpoint, 2)
+                     if win_pct is not None else None)
+            out[k] = {
+                'count': len(group), 'wins': wins, 'losses': losses,
+                'predicted_pct': midpoint, 'actual_pct': win_pct,
+                'calibration_error_pp': error,
+            }
+        return out
+
+    return {
+        'window': {'days': days, 'from': date_from, 'to': date_to,
+                   'blend_weight': blend_weight,
+                   'games_evaluable': len(games)},
+        'a_prod': {
+            'metrics': a_metrics, 'buckets': _per_bucket(a_lc),
+            'count': len(a_lc), 'sim_errors': a_errors,
+        },
+        'b_plus_form': {
+            'metrics': b_metrics, 'buckets': _per_bucket(b_lc),
+            'count': len(b_lc), 'sim_errors': b_errors,
+        },
+        'data_ok': len(games) >= min_games_for_window,
+    }
+
+
+def render_recent_form_experiment(exp: dict) -> str:
+    """Plaintext renderer + automatic ship-criteria check."""
+    w = exp['window']
+    a = exp['a_prod']
+    b = exp['b_plus_form']
+    am = a['metrics']
+    bm = b['metrics']
+
+    lines = []
+    lines.append("#" * 100)
+    lines.append("#  RECENT-FORM EXPERIMENT — A: production / B: + starter recent form")
+    lines.append(f"#  Window: last {w['days']} days  ({w['from']} → {w['to']})")
+    lines.append(f"#  Blend weight: {w['blend_weight']:.2f}    "
+                 f"Games evaluable: {w['games_evaluable']}")
+    lines.append("#" * 100)
+    lines.append("")
+    if not exp['data_ok']:
+        lines.append("⚠ THIN DATA — too few games in window; treat results as directional only.")
+        lines.append("")
+
+    def _line(label, m):
+        win = f"{m['win_rate']:.1f}%" if m['win_rate'] is not None else '—'
+        roi = f"{m['roi']:+.2f}%" if m['roi'] is not None else '—'
+        clv = f"{m['avg_clv']:+.4f}" if m['avg_clv'] is not None else '—'
+        clv_plus = (f"{m['positive_clv_rate']:.1f}%"
+                    if m['positive_clv_rate'] is not None else '—')
+        wlp = f"{m['wins']}-{m['losses']}-{m['pushes']}"
+        avg_edge = m['avg_edge'] if m['avg_edge'] is not None else '—'
+        return (f"  {label:<22} n={m['count']:<4} {wlp:>10}  win {win:>6}  "
+                f"ROI {roi:>8}  avgCLV {clv:>9}  CLV+ {clv_plus:>6}  "
+                f"avg_edge {avg_edge:>5}")
+
+    lines.append("=" * 100)
+    lines.append("HEADLINE")
+    lines.append("=" * 100)
+    lines.append(_line('A — production', am))
+    lines.append(_line('B — +recent form', bm))
+    lines.append("")
+
+    # Deltas
+    def _delta(a_v, b_v):
+        if a_v is None or b_v is None:
+            return None
+        return round(b_v - a_v, 2)
+
+    d_count = b['count'] - a['count']
+    d_roi = _delta(am.get('roi'), bm.get('roi'))
+    d_win = _delta(am.get('win_rate'), bm.get('win_rate'))
+    d_clv = _delta(am.get('avg_clv'), bm.get('avg_clv'))
+    d_clv_plus = _delta(am.get('positive_clv_rate'), bm.get('positive_clv_rate'))
+
+    def _fmt(v, suffix=''):
+        return f"{v:+}{suffix}" if v is not None else '—'
+
+    lines.append("Δ (B − A)")
+    lines.append("-" * 100)
+    lines.append(f"  count {d_count:+}   ROI {_fmt(d_roi, 'pp')}   "
+                 f"win% {_fmt(d_win, 'pp')}   avgCLV {_fmt(d_clv)}   "
+                 f"CLV+ {_fmt(d_clv_plus, 'pp')}")
+    lines.append("")
+
+    # Per-bucket calibration table
+    lines.append("=" * 100)
+    lines.append("CALIBRATION BY CONFIDENCE BUCKET")
+    lines.append("=" * 100)
+    lines.append(f"  {'Bucket':<8}  {'A count':>8}  {'A actual':>9}  "
+                 f"{'A err':>8}  {'B count':>8}  {'B actual':>9}  "
+                 f"{'B err':>8}  {'Δ err':>8}")
+    for k in ['60-65', '65-70', '70-75', '75+']:
+        ab = a['buckets'][k]
+        bb = b['buckets'][k]
+        a_err = ab['calibration_error_pp']
+        b_err = bb['calibration_error_pp']
+        delta_err = (round(b_err - a_err, 2)
+                     if a_err is not None and b_err is not None else None)
+        a_actual = (f"{ab['actual_pct']:.1f}%"
+                    if ab['actual_pct'] is not None else '—')
+        b_actual = (f"{bb['actual_pct']:.1f}%"
+                    if bb['actual_pct'] is not None else '—')
+        a_err_s = f"{a_err:+.1f}pp" if a_err is not None else '—'
+        b_err_s = f"{b_err:+.1f}pp" if b_err is not None else '—'
+        d_err_s = f"{delta_err:+.1f}pp" if delta_err is not None else '—'
+        lines.append(f"  {k:<8}  {ab['count']:>8}  {a_actual:>9}  "
+                     f"{a_err_s:>8}  {bb['count']:>8}  {b_actual:>9}  "
+                     f"{b_err_s:>8}  {d_err_s:>8}")
+    lines.append("")
+
+    # Mechanical ship-criteria check
+    lines.append("=" * 100)
+    lines.append("SHIP CRITERIA  (mechanical — flag stays OFF unless ALL fire)")
+    lines.append("=" * 100)
+    crit = []
+    # 1. ROI improves by ≥ +2pp
+    roi_ok = (d_roi is not None and d_roi >= 2.0)
+    crit.append(('ROI lift ≥ +2pp', roi_ok,
+                 f"Δ ROI = {d_roi if d_roi is not None else 'n/a'}"))
+    # 2. 60–65% calibration does not worsen
+    a_60 = a['buckets']['60-65']['calibration_error_pp']
+    b_60 = b['buckets']['60-65']['calibration_error_pp']
+    if a_60 is not None and b_60 is not None:
+        # "Does not worsen" = |b_err| ≤ |a_err| + 1.0pp tolerance
+        cal_ok = abs(b_60) <= abs(a_60) + 1.0
+    else:
+        cal_ok = False
+    crit.append(('60–65% calibration does not worsen', cal_ok,
+                 f"A err {a_60}, B err {b_60}"))
+    # 3. Volume usable: B at least 50% of A
+    if a['count'] > 0:
+        vol_ok = b['count'] >= 0.5 * a['count']
+    else:
+        vol_ok = b['count'] > 0
+    crit.append(('Recommendation volume usable', vol_ok,
+                 f"A n={a['count']}, B n={b['count']}"))
+    # 4. No major bucket regression: no bucket goes more than 5pp worse on |error|
+    no_regress = True
+    for k in ['65-70', '70-75', '75+']:
+        a_e = a['buckets'][k]['calibration_error_pp']
+        b_e = b['buckets'][k]['calibration_error_pp']
+        if a_e is not None and b_e is not None and abs(b_e) > abs(a_e) + 5.0:
+            no_regress = False
+    crit.append(('No major bucket regression (|Δ err| ≤ 5pp)', no_regress, '—'))
+    # 5. CLV not materially worse: avg_clv drop ≤ 0.01
+    if am.get('avg_clv') is not None and bm.get('avg_clv') is not None:
+        clv_ok = (bm['avg_clv'] - am['avg_clv']) >= -0.01
+    else:
+        clv_ok = True   # CLV not measurable in this sample; defer
+    crit.append(('CLV does not materially worsen', clv_ok,
+                 f"Δ avgCLV = {d_clv if d_clv is not None else 'n/a'}"))
+
+    all_pass = all(passed for _, passed, _ in crit)
+    for label, passed, note in crit:
+        flag = '✅' if passed else '❌'
+        lines.append(f"  {flag} {label:<48} {note}")
+    lines.append("")
+    lines.append(f"  VERDICT: {'PASS — recent form may be activated' if all_pass else 'FAIL — keep flag OFF; recent form stays shadow-only'}")
     lines.append("")
     return "\n".join(lines) + "\n"
