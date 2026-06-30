@@ -257,22 +257,28 @@ USE_DYNAMIC_RATINGS = os.environ.get('USE_DYNAMIC_RATINGS', 'true').lower() in (
     'true', '1', 'yes',
 )
 
-# 2026-06-25 v3.1 — Starter recent-form variant flag. DEFAULT FALSE.
+# 2026-06-25 v3.1 — Starter recent-form variant flag.
+# 2026-06-26 — ACTIVATED IN PRODUCTION. Default flipped 'false' → 'true'.
 #
-# When True, the MLB house model adds a "pitcher recent form" term
-# (proxy: W/L over last N final starts; see apps/mlb/services/pitcher_form.py)
-# to the score. When False (production default), recent form is COMPUTED
-# (so the contribution dict on every recommendation captures it for audit /
-# replay attribution) but NOT added to the score. Production behavior is
-# unchanged.
+# Replay validation passed all five pre-registered ship criteria:
+#   • Recommendation count: 107 (prod) → 157 (+form). +50 recs.
+#   • Win rate: 68.2% → 69.4% (+1.21pp)
+#   • ROI: +15.99% → +18.17% (+2.18pp — clears the +2pp ship criterion)
+#   • 60–65% bucket calibration: improved (the centerpiece criterion)
+#   • CLV: did not materially worsen
+# Full validation summary in changelog 2026-06-26 entry +
+# docs/v3_1_recent_form_validation_plan.md.
 #
-# Activation rule: this flag may be flipped to True only after the
-# `?experiment=recent_form` replay validation passes its pre-registered
-# ship criteria. See docs/v3_1_recent_form_validation_plan.md.
+# When True (current default), the MLB house model adds a "pitcher recent
+# form" term to the score (proxy: W/L over last N final starts; see
+# apps/mlb/services/pitcher_form.py). Whether True or False, the form
+# term is always computed and stored on
+# BettingRecommendation.feature_contributions for audit; the flag only
+# controls whether it enters the score.
 #
 # Rollback: set USE_STARTER_RECENT_FORM=false in Railway env vars. No code
-# change required.
-USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'false').lower() in (
+# change required — env var overrides the code default.
+USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'true').lower() in (
     'true', '1', 'yes',
 )
 

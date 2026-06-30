@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-06-26 — v3.1 ACTIVATED + v3.2 (Bullpen) design
+
+### v3.1 — Starter Recent Form ACTIVATED in production
+
+Replay validation passed all five pre-registered ship criteria on the 90-day historical slate at blend=0.55:
+
+| Metric | A — Production | B — +Recent Form | Δ | Criterion | Pass? |
+|---|---:|---:|---:|---|---|
+| Recommendation count | 107 | 157 | **+50** | volume ≥ 0.5 × A | ✅ |
+| Win rate | 68.2% | 69.4% | +1.21pp | informational | — |
+| ROI | +15.99% | **+18.17%** | **+2.18pp** | ROI ≥ +2pp | ✅ |
+| 60–65% calibration | (baseline) | **improved** | — | does not worsen | ✅ |
+| 65–70 / 70–75 / 75+ | — | — | — | \|Δ err\| ≤ 5pp | ✅ |
+| CLV | — | — | not materially worse | Δ ≥ −0.01 | ✅ |
+
+**VERDICT: PASS.** `USE_STARTER_RECENT_FORM` code default flipped `false` → `true` in `brotherwillies/settings.py`. Env-var override path preserved — `USE_STARTER_RECENT_FORM=false` in Railway env vars rolls back without a code change.
+
+#### Production verification (operator-runnable)
+
+After Railway redeploys:
+
+1. **Production boots:** confirm `manage.py check` clean (already verified in this commit).
+2. **Recommendations generate:** hit `/mlb/` and confirm tiles render.
+3. **Contributions capture form:** open any recent recommendation in Django admin (`/bw-manage/core/bettingrecommendation/`). The "Feature contributions (v3.1)" JSON block now shows non-zero `pitcher_form_score_units` on games where the starter has ≥ 2 past completed starts.
+4. **Replay still functions:** hit `/analytics/method-replay/?range=7d` — should render the comparison table normally.
+5. **Rollback path:** verify that setting `USE_STARTER_RECENT_FORM=false` in Railway env vars + redeploying reverts to the pre-v3.1 score. (No code change needed — env var overrides the new default.)
+
+#### Documentation
+- `docs/v3_1_recent_form_validation_plan.md` — updated with activation summary at top.
+- `docs/v3_feature_inventory.md` (NEW) — live feature ledger marking Recent Form as 🟢 Production Active.
+
+#### Tests
+**739 tests pass** with the new default. The flag-off invariance test (`test_score_excludes_form_when_flag_off`) uses `@override_settings` so it remains valid regardless of the code default.
+
+### v3.2 — Bullpen Quality: Design Complete
+
+Design-only this commit. No code changes. **No production behavior change.**
+
+- `docs/v3_2_bullpen_design.md` (NEW) — full architecture design following the exact discipline that produced Recent Form:
+  - Required data inventory (`TeamBullpenStats` model, optional `RelieverAppearance` for fatigue half)
+  - Two-step data ingestion path (v3.2-A quality first; v3.2-B fatigue second)
+  - Feature engineering approach + initial coefficient guess
+  - Replay experiment endpoint plan (`?experiment=bullpen`)
+  - Pre-registered mechanical ship criteria (6 — one new for data coverage)
+  - 4-phase rollout (data ingest → shadow → replay → activate)
+  - Rollback contract (one env-var flip)
+  - Explicit risks called out
+  - Definition of done checklist
+
+**Implementation does NOT begin until the data ingestion prerequisite ships.**
+
+---
+
 ## 2026-06-25 — v3.1 foundation: feature contribution tracking + starter recent-form (SHADOW)
 
 **First v3 step. Production behavior unchanged when `USE_STARTER_RECENT_FORM=false` (the default).**

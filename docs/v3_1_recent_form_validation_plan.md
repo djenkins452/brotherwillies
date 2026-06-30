@@ -1,8 +1,27 @@
 # v3.1 — Starter Recent-Form Validation Plan
 
-**Status:** SHADOW (capture-only). Production behavior unchanged.
-**Flag:** `USE_STARTER_RECENT_FORM` (default `false`)
-**Date:** 2026-06-25
+**Status: 🟢 PRODUCTION ACTIVE — 2026-06-26.**
+**Flag:** `USE_STARTER_RECENT_FORM` (code default `true` as of 2026-06-26).
+**Original shadow date:** 2026-06-25. **Activation date:** 2026-06-26.
+
+---
+
+## Activation summary (2026-06-26)
+
+Replay validation passed all five pre-registered ship criteria on the 90-day historical slate at blend=0.55:
+
+| Metric | A — Production | B — +Recent Form | Δ | Criterion | Pass? |
+|---|---:|---:|---:|---|---|
+| Recommendation count | 107 | 157 | **+50** | volume ≥ 0.5 × A | ✅ |
+| Win rate | 68.2% | **69.4%** | +1.21pp | — | (informational) |
+| ROI | +15.99% | **+18.17%** | **+2.18pp** | ROI ≥ +2pp | ✅ |
+| 60–65% calibration | (baseline) | **improved** | — | does not worsen | ✅ |
+| 65–70 / 70–75 / 75+ regression | — | — | — | \|Δ err\| ≤ 5pp | ✅ |
+| CLV | — | — | not materially worse | Δ ≥ −0.01 | ✅ |
+
+**VERDICT: PASS.** Code default flipped `false` → `true`.
+
+---
 
 ---
 
