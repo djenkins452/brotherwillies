@@ -249,6 +249,76 @@ class OddsSnapshot(models.Model):
         super().save(*args, **kwargs)
 
 
+class TeamBullpenSnapshot(models.Model):
+    """v3.3 SHADOW — Append-only per-team bullpen state timeline.
+
+    Mirrors `OddsSnapshot`'s temporal-snapshot pattern (append-only,
+    timestamped, indexed on `-as_of`) so historical reconstruction of
+    a team's bullpen state before a specific first_pitch is possible.
+
+    LEAKAGE DISCIPLINE — MANDATORY: every consumer must query with
+    `as_of__lt=game.first_pitch`, NEVER `as_of__lte`. The `<` is what
+    keeps a snapshot captured minutes after game start from bleeding
+    into the pre-game decision. The `apps/mlb/services/bullpen.py`
+    helpers enforce this by construction and a leakage test locks it.
+
+    ANTI-PATTERN WARNING: the existing MLB `Team.wins`/`Team.losses`
+    fields are OVERWRITTEN IN PLACE by `MLBTeamRecordProvider.persist`
+    (apps/datahub/providers/mlb/team_record_provider.py). That pattern
+    silently BREAKS historical replay because every row collapses to
+    "latest". This snapshot table must NEVER be treated that way —
+    every ingest run creates a NEW row with a fresh `as_of`, and
+    replays walk backward from there.
+
+    DATA STATUS (2026-08-22): the ingestion command
+    `apps/datahub/management/commands/ingest_bullpen_snapshots.py` is
+    scaffolded but NOT yet wired to a real data source. Until it is,
+    this table is empty and `apps.mlb.services.bullpen.team_bullpen_signal`
+    returns (0.0, 0.0, 'low') — the honest posture per the v3.3 brief
+    ("if the available data cannot support historically correct
+    reconstruction, STOP and report rather than build a misleading
+    replay").
+    """
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='bullpen_snapshots',
+    )
+    as_of = models.DateTimeField(db_index=True)
+
+    # --- Quality signals (rolling ~30d unless the ingest source dictates
+    # otherwise; the ingest command records its rolling window in `notes`).
+    bullpen_era = models.FloatField(null=True, blank=True)
+    bullpen_whip = models.FloatField(null=True, blank=True)
+    bullpen_k_per_9 = models.FloatField(null=True, blank=True)
+    bullpen_bb_per_9 = models.FloatField(null=True, blank=True)
+    bullpen_ip_last30 = models.FloatField(null=True, blank=True)
+
+    # --- Fatigue signals (v3.3-B; empty until reliever-appearance
+    # ingestion ships — the design's Phase 2B in docs/v3_2_bullpen_design.md).
+    appearances_last_1_day = models.IntegerField(null=True, blank=True)
+    appearances_last_2_days = models.IntegerField(null=True, blank=True)
+    appearances_last_3_days = models.IntegerField(null=True, blank=True)
+    high_leverage_rest_days_min = models.IntegerField(null=True, blank=True)
+    top_reliever_available = models.BooleanField(null=True, blank=True)
+
+    # --- Data provenance.
+    source = models.CharField(max_length=30, choices=SOURCE_CHOICES, blank=True, default='')
+    data_confidence = models.CharField(
+        max_length=6,
+        choices=[('low', 'Low'), ('med', 'Medium'), ('high', 'High')],
+        default='low',
+    )
+    notes = models.CharField(max_length=200, blank=True, default='')
+
+    class Meta:
+        ordering = ['-as_of']
+        indexes = [
+            models.Index(fields=['team', '-as_of']),
+        ]
+
+    def __str__(self):
+        return f"BullpenSnapshot[{self.team.abbreviation or self.team.name}] {self.as_of.isoformat() if self.as_of else 'no-date'}"
+
+
 class InjuryImpact(models.Model):
     IMPACT_CHOICES = [
         ('low', 'Low'),

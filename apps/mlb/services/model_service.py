@@ -91,7 +91,9 @@ def _pitcher_diff(game):
     return (hp.rating - ap.rating), True
 
 
-def _score(game, weights, *, return_breakdown=False, use_recent_form=None,
+def _score(game, weights, *, return_breakdown=False,
+           use_recent_form=None,
+           use_bullpen_quality=None, use_bullpen_fatigue=None,
            reference_date=None):
     """Compute score for `game`. When `return_breakdown=True`, also returns
     a dict of per-feature contributions (signed, in score units) for the
@@ -103,15 +105,28 @@ def _score(game, weights, *, return_breakdown=False, use_recent_form=None,
     (still stored on the breakdown for replay/audit) but NOT added to
     the score — production behavior is unchanged.
 
-    `reference_date`: cutoff for recent-form lookback. Defaults to now;
-    replay must pass the game's own first_pitch as the cutoff (leakage
-    guard).
+    `use_bullpen_quality` / `use_bullpen_fatigue` (v3.3 SHADOW): same
+    pattern as use_recent_form. When None, read the global
+    USE_BULLPEN_QUALITY / USE_BULLPEN_FATIGUE settings. Deltas are
+    ALWAYS computed and stored on the breakdown for audit; they enter
+    the score ONLY when the corresponding flag is True. Both flags
+    default False — production behavior is IDENTICAL with any bullpen
+    data present or absent until explicit activation.
+
+    `reference_date`: cutoff for all lookback services (recent-form,
+    bullpen snapshot). Defaults to now; replay MUST pass the game's
+    own first_pitch as the cutoff (L1/L6 leakage guard, locked by
+    tests in apps/mlb/test_bullpen.py + apps/mlb/test_v3_1_recent_form.py).
     """
     from apps.core.services.elo_service import team_rating_for_model
     from django.conf import settings
 
     if use_recent_form is None:
         use_recent_form = bool(getattr(settings, 'USE_STARTER_RECENT_FORM', False))
+    if use_bullpen_quality is None:
+        use_bullpen_quality = bool(getattr(settings, 'USE_BULLPEN_QUALITY', False))
+    if use_bullpen_fatigue is None:
+        use_bullpen_fatigue = bool(getattr(settings, 'USE_BULLPEN_FATIGUE', False))
 
     home_team_rating = team_rating_for_model(game.home_team)
     away_team_rating = team_rating_for_model(game.away_team)
@@ -137,15 +152,34 @@ def _score(game, weights, *, return_breakdown=False, use_recent_form=None,
 
     hfa = HFA * weights['hfa'] if not game.neutral_site else 0.0
 
+    # --- v3.3 SHADOW: compute bullpen signals ALWAYS (for audit /
+    # research capture); add to score only when the corresponding flag
+    # is on. `team_bullpen_signal` never raises and gracefully returns
+    # zeros when no snapshot exists — production behavior with no
+    # ingested data is identical to without the call.
+    from apps.mlb.services.bullpen import team_bullpen_signal
+    home_pen = team_bullpen_signal(game.home_team, reference_date)
+    away_pen = team_bullpen_signal(game.away_team, reference_date)
+    pen_quality_weight = weights.get('bullpen_quality', 1.0)
+    pen_fatigue_weight = weights.get('bullpen_fatigue', 1.0)
+    pen_quality_diff = (home_pen.quality_delta - away_pen.quality_delta) * pen_quality_weight
+    pen_fatigue_diff = (home_pen.fatigue_delta - away_pen.fatigue_delta) * pen_fatigue_weight
+
     score = team_diff + pitcher_static + hfa
     if use_recent_form:
         score += form_diff
+    if use_bullpen_quality:
+        score += pen_quality_diff
+    if use_bullpen_fatigue:
+        score += pen_fatigue_diff
 
     if not return_breakdown:
         return score
 
     breakdown = {
         'use_recent_form': use_recent_form,
+        'use_bullpen_quality': use_bullpen_quality,
+        'use_bullpen_fatigue': use_bullpen_fatigue,
         'home_team_rating': float(home_team_rating),
         'away_team_rating': float(away_team_rating),
         'home_pitcher_rating': (float(game.home_pitcher.rating)
@@ -154,12 +188,24 @@ def _score(game, weights, *, return_breakdown=False, use_recent_form=None,
                                 if game.away_pitcher else None),
         'home_pitcher_form_delta': home_form_delta if _both_known else None,
         'away_pitcher_form_delta': away_form_delta if _both_known else None,
+        # v3.3 SHADOW: signed rating-scale bullpen deltas + confidence.
+        'home_bullpen_quality_delta': float(home_pen.quality_delta),
+        'away_bullpen_quality_delta': float(away_pen.quality_delta),
+        'home_bullpen_fatigue_delta': float(home_pen.fatigue_delta),
+        'away_bullpen_fatigue_delta': float(away_pen.fatigue_delta),
+        'home_bullpen_data_confidence': home_pen.data_confidence,
+        'away_bullpen_data_confidence': away_pen.data_confidence,
         'neutral_site': bool(game.neutral_site),
         # Score-unit contributions (signed, home-perspective).
         'team_rating_contribution': float(team_diff),
         'pitcher_static_contribution': float(pitcher_static),
         'pitcher_form_contribution': float(form_diff),
         'hfa_contribution': float(hfa),
+        # v3.3 SHADOW: same rating-scale as the pitcher contributions
+        # so they compose naturally when activated. Always stored;
+        # summed into `score` only under the flag.
+        'bullpen_quality_contribution': float(pen_quality_diff),
+        'bullpen_fatigue_contribution': float(pen_fatigue_diff),
         'score': float(score),
     }
     return score, breakdown

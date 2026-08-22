@@ -541,6 +541,46 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- v3.3 Bullpen replay experiment (read-only, plaintext) -----------
+    # A: v3.2 baseline / B: +bullpen quality / C: +quality +fatigue on the
+    # SAME historical slate. Same leakage-safe machinery as recent_form.
+    # Reports data coverage explicitly — when no TeamBullpenSnapshot data
+    # has been ingested (current state), the run is flagged INFRASTRUCTURE-
+    # ONLY and refuses to interpret the equal numbers as validation.
+    # STAFF-ONLY. READ-ONLY. NO WRITES.
+    if (request.GET.get('experiment') or '').lower() == 'bullpen':
+        from django.http import HttpResponse
+        from apps.analytics.services.bullpen_replay import (
+            run_bullpen_experiment, render_bullpen_experiment,
+        )
+
+        try:
+            days = int(request.GET.get('days', 90))
+        except (TypeError, ValueError):
+            days = 90
+        days = max(7, min(days, 365))
+
+        try:
+            blend = float(request.GET.get('blend', 0.55))
+            if not (0.0 <= blend <= 0.80):
+                blend = 0.55
+        except (TypeError, ValueError):
+            blend = 0.55
+
+        try:
+            exp = run_bullpen_experiment(days=days, blend_weight=blend)
+            body = render_bullpen_experiment(exp)
+        except Exception:
+            import traceback
+            body = (
+                "BULLPEN EXPERIMENT — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"days={days} blend={blend}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     # --- Walk-forward optimization study (read-only, plaintext) ----------
     # v3 → ≥60% out-of-sample. Expanding-training + forward-holdout folds
     # over the current v3 baseline (blend=0.55, use_recent_form=True).

@@ -1098,9 +1098,16 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
     if house_contrib:
         feature_contributions = {
             'sport': 'mlb',
-            'engine_version': 'v3.1',
+            # v3.3 SHADOW: engine version bumped to reflect the bullpen
+            # shadow capture. The recommendation gate itself is unchanged
+            # (compute_status is v3.2, or v3 baseline via USE_V3_2_SELECTION).
+            'engine_version': 'v3.3-shadow',
             'flags': {
                 'use_starter_recent_form': bool(house_contrib.get('use_recent_form', False)),
+                # v3.3 SHADOW: bullpen flags captured for the audit trail.
+                # OFF by default; True only when explicit activation happens.
+                'use_bullpen_quality': bool(house_contrib.get('use_bullpen_quality', False)),
+                'use_bullpen_fatigue': bool(house_contrib.get('use_bullpen_fatigue', False)),
             },
             'inputs': {
                 'home_team_rating': house_contrib.get('home_team_rating'),
@@ -1109,6 +1116,13 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
                 'away_pitcher_rating': house_contrib.get('away_pitcher_rating'),
                 'home_pitcher_form_delta': house_contrib.get('home_pitcher_form_delta'),
                 'away_pitcher_form_delta': house_contrib.get('away_pitcher_form_delta'),
+                # v3.3 SHADOW: bullpen deltas + confidence per team.
+                'home_bullpen_quality_delta': house_contrib.get('home_bullpen_quality_delta'),
+                'away_bullpen_quality_delta': house_contrib.get('away_bullpen_quality_delta'),
+                'home_bullpen_fatigue_delta': house_contrib.get('home_bullpen_fatigue_delta'),
+                'away_bullpen_fatigue_delta': house_contrib.get('away_bullpen_fatigue_delta'),
+                'home_bullpen_data_confidence': house_contrib.get('home_bullpen_data_confidence'),
+                'away_bullpen_data_confidence': house_contrib.get('away_bullpen_data_confidence'),
                 'neutral_site': house_contrib.get('neutral_site'),
                 'market_home_win_prob': house_contrib.get('market_home_win_prob'),
                 'pick_side': pick_side,
@@ -1121,6 +1135,11 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
                 'pitcher_static_score_units': house_contrib.get('pitcher_static_contribution'),
                 'pitcher_form_score_units': house_contrib.get('pitcher_form_contribution'),
                 'hfa_score_units': house_contrib.get('hfa_contribution'),
+                # v3.3 SHADOW: bullpen contributions in score-units. Always
+                # captured; enter the score only when the corresponding
+                # flag is on (see apps/mlb/services/model_service.py::_score).
+                'bullpen_quality_score_units': house_contrib.get('bullpen_quality_contribution'),
+                'bullpen_fatigue_score_units': house_contrib.get('bullpen_fatigue_contribution'),
                 'market_blend_pp': house_contrib.get('market_blend_pp'),
             },
             'probabilities': {

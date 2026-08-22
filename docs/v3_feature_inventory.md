@@ -58,12 +58,12 @@ This is the running ledger of every predictive signal in the engine, its activat
 |---|---|---|---|
 | 21 | `HOUSE_WEIGHTS['injury']` | 🔴 Unwired | Phase 3 recommended removal as dead-code cleanup. |
 
-## Phase 2 — designed, NOT yet implemented
+## Phase 2 — infrastructure shipped, NOT yet activated
 
-| # | Feature | Status | Design doc | Flag (planned) | Default (planned) |
-|---|---|---|---|---|---|
-| 22 | **Bullpen quality** | 📐 **Design complete — 2026-06-26** | `docs/v3_2_bullpen_design.md` | `USE_BULLPEN_QUALITY` | `false` (shadow first) |
-| 23 | Bullpen fatigue | 📐 Folded into bullpen design (v3.2-B half) | Same doc | Same flag | Same default |
+| # | Feature | Status | Design doc | Flag | Default | Notes |
+|---|---|---|---|---|---|---|
+| 22 | **Bullpen quality** | 🟡 **Shadow infrastructure shipped — 2026-08-22** | `docs/v3_2_bullpen_design.md` | `USE_BULLPEN_QUALITY` | `false` | Model, service, model-service wire-in, `feature_contributions` capture, replay experiment (`?experiment=bullpen`), tests all shipped. `TeamBullpenSnapshot` table exists and is empty. Ingestion command scaffolded but not wired to a live data source (see command's module docstring for 4 evaluated options). |
+| 23 | Bullpen fatigue | 🟡 **Shadow infrastructure shipped — 2026-08-22** | Same doc | `USE_BULLPEN_FATIGUE` | `false` | Toggles independently of quality. Fields present on `TeamBullpenSnapshot` (`appearances_last_1_day/2_days/3_days`, `top_reliever_available`, `high_leverage_rest_days_min`); reliever-appearance ingestion (Phase 2B) not scaffolded. |
 
 ## Phase 3+ — identified, not designed
 

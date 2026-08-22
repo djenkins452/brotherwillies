@@ -327,6 +327,31 @@ USE_V3_2_SELECTION = os.environ.get('USE_V3_2_SELECTION', 'false').lower() in (
     'true', '1', 'yes',
 )
 
+# 2026-08-22 v3.3 SHADOW — Bullpen quality + fatigue flags.
+#
+# Both default 'false'. Production behavior is IDENTICAL with these
+# flags absent, false, or true, UNTIL:
+#   1. Real bullpen data has been ingested into TeamBullpenSnapshot
+#      (see apps/datahub/management/commands/ingest_bullpen_snapshots.py
+#       — scaffolded, not yet wired to a live data source).
+#   2. A pre-registered replay experiment has PASSED its ship criteria.
+#   3. Activation is explicitly authorized.
+#
+# When the flags are OFF (the current state and the default), the
+# `apps.mlb.services.bullpen.team_bullpen_signal` values are still
+# computed and stored on `BettingRecommendation.feature_contributions`
+# for research/audit — this is the "shadow capture" pattern that
+# produced the clean Recent Form activation.
+#
+# Rollback contract (identical for both): remove or set to 'false' in
+# Railway env vars. No code change; no data change; no migration.
+USE_BULLPEN_QUALITY = os.environ.get('USE_BULLPEN_QUALITY', 'false').lower() in (
+    'true', '1', 'yes',
+)
+USE_BULLPEN_FATIGUE = os.environ.get('USE_BULLPEN_FATIGUE', 'false').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

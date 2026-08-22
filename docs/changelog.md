@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-08-22 — v3.3 SHADOW: Bullpen quality + fatigue foundation
+
+**READ-ONLY infrastructure. Zero production behavior change.** Both new feature flags default `false`. Real bullpen data has not been ingested yet — the shadow layer runs on every scoring call, captures zeros into `feature_contributions` for the audit trail, and never enters the score.
+
+### Ships (Phase 1 — infrastructure)
+
+- **Model** — `apps.mlb.models.TeamBullpenSnapshot` (migration `0010`). Append-only per-team-per-day snapshot table modeled on the `OddsSnapshot` pattern (timestamped `as_of`, `(team, -as_of)` index). Fields for quality (`bullpen_era`/`whip`/`k_per_9`/`bb_per_9`/`ip_last30`), fatigue (`appearances_last_1_day`/`2_days`/`3_days`, `high_leverage_rest_days_min`, `top_reliever_available`), and provenance (`source`, `data_confidence`, `notes`).
+
+- **Service** — `apps.mlb.services.bullpen` — `team_bullpen_signal(team, reference_date)` returns a signed rating-scale delta with strict `as_of__lt=reference_date` leakage guard. Returns `(0.0, 0.0, 'low', None)` when no snapshot exists — the honest posture pre-ingestion. Never raises.
+
+- **Model service wire-in** — `apps.mlb.services.model_service._score` now accepts `use_bullpen_quality` and `use_bullpen_fatigue` toggles (None → read env flags). Shadow contributions are ALWAYS computed and stored on the breakdown for `feature_contributions` capture. Entering the score is gated by the flags. Same idiom v3.1 established for `use_recent_form`.
+
+- **Recommendation capture** — `apps.core.services.recommendations._moneyline_candidate` extends `feature_contributions` with `home_bullpen_quality_delta`, `away_bullpen_quality_delta`, `home_bullpen_fatigue_delta`, `away_bullpen_fatigue_delta`, `home_bullpen_data_confidence`, `away_bullpen_data_confidence`, `bullpen_quality_score_units`, `bullpen_fatigue_score_units`. `engine_version` bumped `v3.1` → `v3.3-shadow`.
+
+- **Flags** — `USE_BULLPEN_QUALITY` and `USE_BULLPEN_FATIGUE` in `brotherwillies/settings.py`. Both default `'false'`. Env-var overrideable.
+
+- **Ingestion command** — `apps/datahub/management/commands/ingest_bullpen_snapshots.py` — SCAFFOLDED, no-op by default. Documents four evaluated data-source options and the invariants any implementation must hold (append-only, `as_of=timezone.now()`, explicit `data_confidence`). `--force-dummy` flag writes zero-value snapshots for shadow-pipe testing.
+
+- **Replay experiment** — `apps.analytics.services.bullpen_replay.run_bullpen_experiment` compares A (v3.2 baseline) / B (+quality) / C (+quality+fatigue) on the same historical slate. Reports data-coverage explicitly. When coverage is below the ship criterion (default 80%) — the current state — the renderer flags the run **INFRASTRUCTURE-ONLY** and refuses to interpret equal numbers as validation.
+
+- **View branch** — `?experiment=bullpen` on `/analytics/method-replay/`. Staff-only plaintext.
+
+### Tests
+
+`apps/mlb/test_bullpen.py` — 18 tests covering:
+
+1. **Leakage discipline** — strict `<` boundary: a snapshot captured AT first_pitch is NOT returned; one captured 1s before IS. Multi-snapshot recency lock (most-recent-before-cutoff wins).
+2. **Flag-OFF invariance** — score identical with and without snapshot data present when both flags are OFF (the current production state). Positive control: score DOES change when flag is on and data present. Fatigue flag toggles independently of quality.
+3. **Shadow capture** — `_score(return_breakdown=True)` populates all bullpen keys regardless of flag state. Values reflect populated snapshots.
+4. **No-data posture** — `team_bullpen_signal` returns `(0.0, 0.0, 'low', None)` on empty table; never raises; quality cap enforced.
+5. **Ingestion scaffold** — no-op runs cleanly, writes no rows; `--force-dummy` writes zero-value snapshots.
+6. **Replay experiment** — runs on empty slate; renderer flags INFRASTRUCTURE-ONLY when coverage is 0.
+7. **View surface** — staff 200 / non-staff 403 on `?experiment=bullpen`.
+
+**Tests: 1487 pass** (was 1470 + 17 net new). Only failure remains the pre-existing `feedback.tests` ImportError.
+
+### What is deliberately NOT shipped
+
+- **No live data ingestion.** The `ingest_bullpen_snapshots` command is scaffolded but does not hit any external API. The design doc's assumed MLB Stats API endpoint (team-level pitching splits with reliever role filter) has NOT been verified against the current provider surface. The command documents four evaluated options plus their trade-offs; wiring a real source is the next explicit step.
+- **No historical backfill.** MLB Stats API returns season-to-date at query time; there is no daily-value historical endpoint. Even after ingestion is wired, the replay's `both-teams-covered` fraction starts at 0 and grows only with forward accumulation. Full replay validation requires either patience (weeks of forward capture) or an external provider with historical backfill (FanGraphs, Baseball-Reference — TOS/paid).
+- **No production activation.** Both flags default `false`. `USE_BULLPEN_QUALITY=true` / `USE_BULLPEN_FATIGUE=true` in Railway is a separate authorized decision AFTER replay validation clears its pre-registered ship criteria (see design doc §5).
+
+### Data-source honesty
+
+The bullpen shadow layer runs on every recommendation, but with no data it produces zeros. When the operator visits `?experiment=bullpen` today, the report shows `both_covered_pct: 0.00%` and marks the run **INFRASTRUCTURE-ONLY — NO EVIDENCE PRODUCED**. This is the correct posture per the v3.3 brief:
+
+> If the available data cannot support historically correct reconstruction, STOP and report the limitation rather than build a misleading replay.
+
+### v3.2 forward observation is unaffected
+
+The v3.2 production methodology (0.62 prob floor, 7pp edge floor) remains frozen and continues its forward observation period. The 30/60/100-recommendation checkpoints from the v3.2 activation entry are unchanged. Bullpen work has ZERO effect on any live v3.2 decision.
+
+### Next operator step
+
+1. **Set / verify** `USE_V3_2_SELECTION=true` in Railway (the safety-correction commit made the code default `false`).
+2. Continue v3.2 forward observation.
+3. When ready to activate bullpen ingestion, pick a data source from `ingest_bullpen_snapshots.py` module docstring (options 1–4) and wire the two clearly-marked TODO blocks. All downstream code (service, model, replay, tests) is ready.
+
+---
+
 ## 2026-08-22 — v3.2 flag-default SAFETY correction
 
 **Follow-up to the v3.2 activation earlier today.** Changing the code default of `USE_V3_2_SELECTION` from `'true'` to `'false'`.

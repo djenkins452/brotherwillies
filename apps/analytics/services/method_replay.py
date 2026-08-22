@@ -301,6 +301,8 @@ def _simulate_recommendation(
     method_label: str,
     *,
     use_recent_form: bool = False,
+    use_bullpen_quality: bool = False,
+    use_bullpen_fatigue: bool = False,
 ) -> Optional[SimulatedRecommendation]:
     """Simulate one recommendation under the given blend weight.
 
@@ -308,6 +310,11 @@ def _simulate_recommendation(
     (no primary-source snapshots, missing moneylines). Such games
     are NOT counted as recommended OR not-recommended — they're
     excluded entirely.
+
+    v3.3 SHADOW: `use_bullpen_quality` / `use_bullpen_fatigue` mirror the
+    live model_service flag pattern. Reference_date for the bullpen
+    lookup is `game.first_pitch` — strictly-before-first-pitch (L1)
+    leakage guard locked by `apps/mlb/test_bullpen.py`.
     """
     from apps.core.services.recommendations import (
         compute_status, _raw_tier,
@@ -356,7 +363,27 @@ def _simulate_recommendation(
             )
             pitcher_form_term = (home_form - away_form) * 0.65
     hfa_term = HFA if not game.neutral_site else 0.0
-    score = rating_term + pitcher_term + pitcher_form_term + hfa_term
+
+    # ---- v3.3 SHADOW: bullpen quality / fatigue terms. Same leakage
+    # anchor as pitcher_form: `reference_date=game.first_pitch`. Terms
+    # enter the sum only when the corresponding toggle is True (replay
+    # experiment gates them; live path uses model_service._score which
+    # gates them by settings flag). Zero when no snapshot exists.
+    bullpen_quality_term = 0.0
+    bullpen_fatigue_term = 0.0
+    if use_bullpen_quality or use_bullpen_fatigue:
+        from apps.mlb.services.bullpen import team_bullpen_signal
+        home_pen = team_bullpen_signal(game.home_team, game.first_pitch)
+        away_pen = team_bullpen_signal(game.away_team, game.first_pitch)
+        if use_bullpen_quality:
+            bullpen_quality_term = home_pen.quality_delta - away_pen.quality_delta
+        if use_bullpen_fatigue:
+            bullpen_fatigue_term = home_pen.fatigue_delta - away_pen.fatigue_delta
+
+    score = (
+        rating_term + pitcher_term + pitcher_form_term + hfa_term
+        + bullpen_quality_term + bullpen_fatigue_term
+    )
 
     # ---- Sigmoid → raw probability ----
     raw_prob = 1.0 / (1.0 + math.exp(-score / 25.0))
