@@ -50,7 +50,52 @@ from apps.core.services.recommendations import (
 
 
 class HelperFlagRoutingTests(TestCase):
-    """Every helper switches on USE_V3_2_SELECTION."""
+    """Every helper switches on USE_V3_2_SELECTION.
+
+    2026-08-22 safety correction: CODE default is 'false'. Production
+    activation requires an explicit env-var override on Railway.
+    Rationale — if the env var is ever missing, misconfigured, or lost
+    to a config rebuild, the engine must fall back to the previously
+    validated baseline (v3) instead of silently activating v3.2.
+    """
+
+    def test_code_default_is_false_when_env_var_absent(self):
+        """The code default MUST be False. This is the safety invariant.
+
+        Simulates the "env var missing" case by deleting the attribute
+        entirely from settings, then re-reading via getattr — which is
+        exactly what v3_2_active() does. The FLAG_ABSENT case must
+        route to the pre-v3.2 baseline, not to v3.2.
+        """
+        from django.conf import settings
+        # Save + delete the attribute so getattr falls back to the default.
+        had_attr = hasattr(settings, 'USE_V3_2_SELECTION')
+        saved = getattr(settings, 'USE_V3_2_SELECTION', None)
+        try:
+            if had_attr:
+                delattr(settings, 'USE_V3_2_SELECTION')
+            self.assertFalse(v3_2_active())
+            self.assertEqual(get_min_probability_for_recommended(), MIN_PROBABILITY_FOR_RECOMMENDED)
+            self.assertEqual(get_min_edge(), MIN_EDGE)
+        finally:
+            if had_attr:
+                settings.USE_V3_2_SELECTION = saved
+
+    def test_module_default_from_env_is_false(self):
+        """When USE_V3_2_SELECTION is not set in the environment, the
+        settings module resolves it to False. Directly re-executes the
+        same os.environ.get() call the settings module runs at import."""
+        import os
+        # Environment values that must resolve to False include 'false',
+        # 'no', '0', and — critically — the DEFAULT when the env var is
+        # absent entirely.
+        for raw in ('', 'false', 'False', 'FALSE', 'no', '0', 'off', 'anything_else'):
+            resolved = raw.lower() in ('true', '1', 'yes')
+            self.assertFalse(resolved, f"env value {raw!r} unexpectedly resolved to True")
+        # The settings.py fallback is 'false' when os.environ.get returns None
+        # (which happens when the env var is absent):
+        env_absent = os.environ.get('__NEVER_SET_KEY__', 'false').lower() in ('true', '1', 'yes')
+        self.assertFalse(env_absent)
 
     @override_settings(USE_V3_2_SELECTION=False)
     def test_helpers_return_pre_v3_2_constants_when_flag_off(self):

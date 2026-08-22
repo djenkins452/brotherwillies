@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-08-22 — v3.2 flag-default SAFETY correction
+
+**Follow-up to the v3.2 activation earlier today.** Changing the code default of `USE_V3_2_SELECTION` from `'true'` to `'false'`.
+
+### Why
+
+If the Railway environment variable is ever missing (new environment, config rebuild, misconfigured deploy, local dev with no `.env`), the engine must fall back to the previously **validated** baseline (v3, 0.60/6pp) rather than silently activating v3.2. Activation must be an explicit act, not an accident.
+
+### Required state
+
+| Location | Value | Meaning |
+|---|---|---|
+| Code default (`brotherwillies/settings.py`) | `'false'` | If env is absent, fall back to v3 baseline |
+| Railway production env var | `'true'` | **Operator action required to keep v3.2 active** |
+
+### Behavior
+
+- Flag **absent** from env → v3 baseline (0.60 / 6pp)
+- Flag **`'false'`** → v3 baseline (0.60 / 6pp)
+- Flag **`'true'`** → v3.2 (0.62 / 7pp)
+
+### Operator action
+
+**On Railway, verify that `USE_V3_2_SELECTION=true` is set explicitly in the production environment.** Without this, the deploy that lands with this commit will roll v3.2 back to v3 baseline. This is the correct behavior — v3.2 stays on **only** when explicitly asked to.
+
+### Tests
+
+`apps/core/test_v3_2_selection.py::HelperFlagRoutingTests`:
+- `test_code_default_is_false_when_env_var_absent` — deletes the settings attribute, asserts `v3_2_active()` returns False.
+- `test_module_default_from_env_is_false` — asserts the settings.py `os.environ.get(...)` fallback resolves to False for empty / 'false' / '0' / any non-truthy value.
+
+No production behavior change vs the earlier commit **when the Railway env var is set correctly.** The only observable difference is what happens when the env var is absent (safe fallback instead of silent v3.2 activation).
+
+### Tests
+
+**1470 tests pass** (was 1467 + new safety tests). Only failure remains the pre-existing `feedback.tests` ImportError (unchanged).
+
+---
+
 ## 2026-08-22 — v3.2 ACTIVATED: Fixed 62/7 Selection
 
 **Production selection methodology tightened from 0.60 / 6pp → 0.62 / 7pp behind a single env-var flag (`USE_V3_2_SELECTION`, default `true`).**

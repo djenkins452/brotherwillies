@@ -28,7 +28,7 @@ This is the running ledger of every predictive signal in the engine, its activat
 | # | Gate | Status | Threshold | Notes |
 |---|---|---|---|---|
 | 8 | `HARD_MIN_PROBABILITY` | 🟢 Active | 0.50 | Hard floor. |
-| 9 | `MIN_PROBABILITY_FOR_RECOMMENDED` | 🟢 **Active — v3.2 2026-08-22** | **0.62** (was 0.60) | Reads through `get_min_probability_for_recommended()`; falls back to 0.60 when `USE_V3_2_SELECTION=false`. |
+| 9 | `MIN_PROBABILITY_FOR_RECOMMENDED` | 🟢 **Active — v3.2 2026-08-22** | **0.62** (was 0.60) | Reads through `get_min_probability_for_recommended()`; falls back to 0.60 when `USE_V3_2_SELECTION=false`. **Code default is `false` (safety); Railway must explicitly set `USE_V3_2_SELECTION=true`.** |
 | 10 | `MIN_EDGE` | 🟢 **Active — v3.2 2026-08-22** | **7.0pp** (was 6.0) | Reads through `get_min_edge()`; falls back to 6.0 when `USE_V3_2_SELECTION=false`. |
 | 10b | Lane hard-gates (probability, edge) | 🟢 **Active — v3.2 2026-08-22** | **0.62 / 0.07** (was 0.60 / 0.06) | Read through `get_lane_hard_gates_probability_min()` / `_edge_min()`; kept lock-step with #9/#10. |
 | 11 | `MAX_ABS_ODDS_FOR_RECOMMENDED` | 🟢 Active | 300 | Unchanged. |

@@ -283,10 +283,21 @@ USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'true').lowe
 )
 
 # 2026-08-22 v3.2 — Fixed 62/7 Selection methodology flag.
-# 2026-08-22 — ACTIVATED IN PRODUCTION. Default 'true'.
+# 2026-08-22 — ACTIVATED IN PRODUCTION. Railway env var must set
+#              USE_V3_2_SELECTION=true. Code default REVERTED to 'false'
+#              on 2026-08-22 for production-safety reasons — see below.
 #
-# When True (current default), the MLB moneyline recommendation gate uses
-# tightened thresholds:
+# CODE DEFAULT: 'false'
+# RAILWAY PRODUCTION: 'true' (must be explicitly set in Railway env)
+#
+# Why the code default is false: if the environment variable is ever
+# missing (new environment, config rebuild, misconfigured deploy, local
+# development), Brother Willies must fall back to the previously
+# VALIDATED baseline (v3, 0.60/6pp) rather than silently activating
+# v3.2. Activation must be an explicit act, not an accident.
+#
+# When True (via Railway env), the MLB moneyline recommendation gate
+# uses tightened thresholds:
 #   * MIN_PROBABILITY_FOR_RECOMMENDED effective = 0.62 (was 0.60)
 #   * MIN_EDGE                     effective = 7.0 pp (was 6.0)
 #   * LANE_HARD_GATES_PROBABILITY_MIN effective = 0.62 (was 0.60)
@@ -308,10 +319,11 @@ USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'true').lowe
 # above the ≥60% product objective, even after Bonferroni correction for
 # the 14-candidate grid.
 #
-# Rollback: set USE_V3_2_SELECTION=false in Railway env vars. No code
-# change required — env var overrides the code default and restores the
-# pre-v3.2 thresholds (0.60/6.0). No schema change; no data migration.
-USE_V3_2_SELECTION = os.environ.get('USE_V3_2_SELECTION', 'true').lower() in (
+# Rollback: unset or set USE_V3_2_SELECTION=false in Railway env vars.
+# No code change required — env var toggles between the pre-v3.2
+# baseline (0.60/6.0) and v3.2 (0.62/7.0). No schema change; no data
+# migration.
+USE_V3_2_SELECTION = os.environ.get('USE_V3_2_SELECTION', 'false').lower() in (
     'true', '1', 'yes',
 )
 
