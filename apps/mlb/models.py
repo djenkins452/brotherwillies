@@ -319,6 +319,81 @@ class TeamBullpenSnapshot(models.Model):
         return f"BullpenSnapshot[{self.team.abbreviation or self.team.name}] {self.as_of.isoformat() if self.as_of else 'no-date'}"
 
 
+class RelieverAppearance(models.Model):
+    """v3.3 SHADOW — one row per pitcher per game appearance.
+
+    Append-only raw data source that feeds the deterministic
+    `apps.mlb.services.bullpen_builder`. From this table + a target
+    `reference_date` T, the builder deterministically produces the
+    bullpen state that would have been known immediately BEFORE T
+    (leakage-safe filter: `game__first_pitch__lt=T`).
+
+    Populated by
+    `apps/datahub/management/commands/ingest_reliever_appearances.py`
+    from MLB Stats API `/api/v1/game/{gamePk}/boxscore`. Same command
+    handles both historical backfill and daily forward updates — one
+    code path, no drift risk between historical reconstruction and
+    production computation.
+
+    Every field derives from a single boxscore payload:
+      * gamesStarted (from boxscore pitcher stats) → is_starter
+      * inningsPitched → outs_recorded (0.1=1 out, 0.2=2 outs, 1.0=3)
+      * numberOfPitches → pitches
+      * hits / earnedRuns / baseOnBalls / strikeOuts / homeRuns
+      * saves / holds → is_save / is_hold
+
+    LEAKAGE: consumers query `game__first_pitch__lt=reference_date`.
+    Strict `<`. Same L1 pattern used by OddsSnapshot and TeamBullpenSnapshot.
+
+    IDEMPOTENCY: unique constraint on (game, pitcher). Re-ingesting a
+    boxscore updates existing rows in place; no duplicates.
+    """
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='pitcher_appearances',
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='pitcher_appearances',
+    )
+    pitcher = models.ForeignKey(
+        StartingPitcher, on_delete=models.CASCADE,
+        related_name='appearances',
+        help_text='StartingPitcher row is reused for relievers too; the '
+                  'name is legacy from v3.0. is_starter distinguishes.',
+    )
+    is_starter = models.BooleanField(db_index=True)
+    outs_recorded = models.IntegerField(
+        default=0,
+        help_text='Total outs. 3.1 IP = 10 outs.',
+    )
+    pitches = models.IntegerField(null=True, blank=True)
+    hits = models.IntegerField(default=0)
+    earned_runs = models.IntegerField(default=0)
+    walks = models.IntegerField(default=0)
+    strikeouts = models.IntegerField(default=0)
+    home_runs = models.IntegerField(default=0)
+    is_save = models.BooleanField(default=False)
+    is_hold = models.BooleanField(default=False)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-game__first_pitch']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'pitcher'],
+                name='mlb_reliever_appearance_game_pitcher_unique',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['team', '-game']),
+            models.Index(fields=['pitcher', '-game']),
+            models.Index(fields=['team', 'is_starter']),
+        ]
+
+    def __str__(self):
+        role = 'S' if self.is_starter else 'R'
+        return f"{role} {self.pitcher.name} {self.outs_recorded}o / {self.pitches}p"
+
+
 class InjuryImpact(models.Model):
     IMPACT_CHOICES = [
         ('low', 'Low'),

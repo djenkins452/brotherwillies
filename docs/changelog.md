@@ -2,6 +2,111 @@
 
 ---
 
+## 2026-08-22 — v3.3 SHADOW: Historical bullpen reconstruction pipeline
+
+**Answers the v3.3 data-source question with empirical evidence.** MLB Stats API `/api/v1/game/{gamePk}/boxscore` is the correct source — verified against real production traffic. Same code path serves historical backfill and daily forward updates so historical reconstruction and production computation cannot drift.
+
+### Decision: OPTION A — MLB Stats API reconstruction is sufficient
+
+Empirical investigation summary:
+
+| Question | Answer |
+|---|---|
+| Historical schedule accessible? | ✅ 2024-06-01 confirmed working |
+| Per-pitcher stats per game (IP/ER/K/BB/HR/pitches)? | ✅ Full boxscore returns them |
+| Starter vs reliever role? | ✅ Definitive via `gamesStarted` (1/0) |
+| Saves + holds per appearance? | ✅ Present per pitcher |
+| Full 6-month, 30-team backfill cost? | ~2700 boxscore requests, ~11 min at 250ms/req |
+| 5-team × 30-day feasibility proof? | ✅ 119 games, 12-boxscore sample, 0 errors, 6.5s |
+
+No external provider required. No paid API. No scraping. No TOS risk.
+
+### Ships
+
+**Model** — `apps.mlb.models.RelieverAppearance` (migration `0011`). Append-only row per pitcher per game. Unique constraint on `(game, pitcher)` for idempotent upsert. Indexes on `(team, -game)`, `(pitcher, -game)`, `(team, is_starter)`.
+
+**Deterministic builder** — `apps.mlb.services.bullpen_builder.build_snapshot(team, reference_date, quality_days=30)`. Consumes `RelieverAppearance` rows with strict `game__first_pitch__lt=reference_date` and returns a `BuiltBullpenSnapshot` dataclass ready to persist. Idempotent: same inputs → identical output, byte-for-byte. Never raises. Metrics:
+
+- Rolling 30-day (configurable): relief ERA, WHIP, K/9, BB/9, HR/9, IP
+- Fatigue: team relief appearances in last 1/2/3 days
+- Top-reliever availability: pitcher with most (saves + holds) in last 30 days; unavailable if appeared yesterday OR threw ≥25 pitches day-before-yesterday
+- Data confidence: `high` when IP≥25 / `med` when 10≤IP<25 / `low` otherwise
+
+`persist_snapshot(team, reference_date)` wraps the builder + writes a `TeamBullpenSnapshot` row.
+
+**Ingestion command** — `apps/datahub/management/commands/ingest_reliever_appearances.py`:
+- Walks `/api/v1/schedule` for a date range, filters to `Final` games.
+- Per game: `/api/v1/game/{gamePk}/boxscore` — extracts per-pitcher stats.
+- Upserts `RelieverAppearance` on `(game, pitcher)` — idempotent.
+- Skip-existing by default (restartable); `--refresh` to force update.
+- Rate-limit polite (`--sleep-ms=250` default).
+- Modes: `--yesterday` (daily cron), `--start/--end` (backfill), `--gamepk` (single game), `--dry-run`, `--max-games`.
+- No production side effects. Only writes to `RelieverAppearance` and auto-creates new `StartingPitcher` rows for previously-unseen pitcher IDs (rating defaults to 50).
+
+**Snapshot backfill command** — `apps/datahub/management/commands/backfill_bullpen_snapshots.py`:
+- Walks Game rows in a date range, for each `(team, first_pitch)` computes the snapshot via `build_snapshot`, writes a `TeamBullpenSnapshot` row.
+- Idempotent — skips existing `(team, as_of)` unless `--refresh`.
+- No API calls; reads only from local `RelieverAppearance`.
+
+### Tests
+
+`apps/mlb/test_bullpen_builder.py` (NEW, 19 tests):
+
+1. **Builder correctness** — ERA/WHIP/K9 arithmetic on constructed appearances; empty-data → zeros + `low` confidence; confidence thresholds fire at right IP counts.
+2. **Leakage** — appearance AT reference_date excluded (strict `<`); appearance 1s before included; appearance outside window excluded.
+3. **Determinism** — two builds on the same state produce identical `BuiltBullpenSnapshot`.
+4. **Fatigue counts** — 1/2/3-day appearance windows sum correctly across pitchers.
+5. **Top-reliever heuristic** — closer who appeared yesterday returns `available=False`; rested closer returns `available=True`; no top reliever returns `None`.
+6. **Boxscore parsing** — `_ip_to_outs("0.1")=1`, `_ip_to_outs("1.2")=5`, etc. Real 2026-08-10 boxscore fixture (Toronto vs Boston, gamePk 822780) parsed correctly: starter identified (4 IP, 0 ER, 3 K, 61 pitches, gamesStarted=1), reliever hold recorded (1 IP, is_hold=True).
+7. **Ingest idempotency** — first run writes rows; second run without `--refresh` skips; second run WITH `--refresh` produces byte-identical DB state (mocked HTTP).
+8. **Backfill idempotency** — re-running the same window with existing snapshots leaves count unchanged.
+
+Real-boxscore fixture at `apps/mlb/test_fixtures/boxscore_822780.json` (168 KB). Full test suite: **1506 tests pass** (previous 1487 + 19 new). Only remaining failure is the pre-existing `feedback.tests` ImportError.
+
+### What is deliberately NOT shipped
+
+- **No live backfill run.** The `ingest_reliever_appearances` + `backfill_bullpen_snapshots` commands are ready but the actual historical backfill on Railway is an explicit operator action (both commands take a few minutes and hit the external API).
+- **No production activation.** `USE_BULLPEN_QUALITY` and `USE_BULLPEN_FATIGUE` remain `false` by default. The shadow layer already computes contributions; the flags gate whether they enter the score. Activation is a separate authorized decision AFTER the backfill runs and `?experiment=bullpen` clears its pre-registered ship criteria.
+- **No `feature_contributions` schema change.** The v3.3 shadow keys added in the previous commit are populated by the new pipeline as soon as `TeamBullpenSnapshot` rows exist for a team.
+
+### Data-source honesty (updated from previous entry)
+
+The previous v3.3 shadow entry warned that `?experiment=bullpen` returns `INFRASTRUCTURE-ONLY — NO EVIDENCE PRODUCED` because no bullpen data was ingested. That warning stands **until the operator runs the backfill commands below.** After the backfill, the same endpoint will return real evidence.
+
+### Operator actions to unlock the first legitimate replay
+
+Run these on Railway (each is a management command):
+
+1. **Historical raw-data backfill** (one-time, ~11 minutes):
+   ```
+   python manage.py ingest_reliever_appearances --start 2026-02-22 --end 2026-08-21
+   ```
+
+2. **Build snapshots from the raw appearances** (~30s, no API calls):
+   ```
+   python manage.py backfill_bullpen_snapshots --start 2026-02-22 --end 2026-08-21
+   ```
+
+3. **Verify coverage clears the 80% ship criterion** — hit:
+   ```
+   https://brotherwillies.com/analytics/method-replay/?experiment=bullpen&days=180
+   ```
+   The report should show `both_covered_pct >= 80%` and produce actual A/B/C comparison numbers.
+
+4. **Wire the daily forward job** — add to Railway's start command or a scheduled task:
+   ```
+   python manage.py ingest_reliever_appearances --yesterday && \
+   python manage.py backfill_bullpen_snapshots --today
+   ```
+
+Do NOT activate `USE_BULLPEN_QUALITY=true` or `USE_BULLPEN_FATIGUE=true` on Railway until the replay experiment returns a passing verdict against pre-registered ship criteria and explicit authorization is given.
+
+### v3.2 remains scientifically frozen
+
+No production methodology changes in this commit. `USE_V3_2_SELECTION=true` on Railway continues to govern the live gate. The forward-observation checkpoints (30 / 60 / 100 settled recommendations) are unaffected.
+
+---
+
 ## 2026-08-22 — v3.3 SHADOW: Bullpen quality + fatigue foundation
 
 **READ-ONLY infrastructure. Zero production behavior change.** Both new feature flags default `false`. Real bullpen data has not been ingested yet — the shadow layer runs on every scoring call, captures zeros into `feature_contributions` for the audit trail, and never enters the score.
