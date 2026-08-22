@@ -37,6 +37,8 @@ from apps.core.services.recommendations import (
     MIN_PROBABILITY_FOR_RECOMMENDED,
     STRONG_EDGE,
     ELITE_EDGE,
+    get_min_edge,
+    get_min_probability_for_recommended,
     get_recommendation,
 )
 from apps.core.utils.odds import (
@@ -382,12 +384,16 @@ def _evaluate_gates(
     pick_edge_pp = edge.pick_edge_pp
     pick_edge_decimal = pick_edge_pp / 100.0
 
-    # compute_status gates (in priority order)
+    # compute_status gates (in priority order).
+    # v3.2 (2026-08-22): rec_prob_failed and min_edge_failed use the
+    # helpers so the diagnostic output reflects the SHIPPING gate
+    # (0.62 / 7pp when USE_V3_2_SELECTION=true), not the stale pre-v3.2
+    # constants.
     hard_min_failed = prob < HARD_MIN_PROBABILITY
     longshot_failed = abs(int(pick_odds)) > MAX_ABS_ODDS_FOR_RECOMMENDED
     secondary_failed = odds_is_secondary
-    rec_prob_failed = prob < MIN_PROBABILITY_FOR_RECOMMENDED
-    min_edge_failed = pick_edge_pp < MIN_EDGE
+    rec_prob_failed = prob < get_min_probability_for_recommended()
+    min_edge_failed = pick_edge_pp < get_min_edge()
     heavy_juice_failed = (
         pick_odds <= HEAVY_FAVORITE_ODDS and pick_edge_pp < STRONG_EDGE
     )

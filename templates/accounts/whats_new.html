@@ -11,6 +11,7 @@
 <div class="card mb-2">
     <p class="section-title" style="margin-bottom:12px;">Releases</p>
     <ul style="list-style:none;padding:0;margin:0;">
+        <li style="padding:4px 0;"><a href="#aug-22-v3-2-selection">Aug 22, 2026 &mdash; v3.2 Selection ACTIVATED (62% / 7pp)</a> <span class="text-sm text-muted">&bull; MLB recommendation gate tightened from 60% / 6pp → 62% / 7pp based on walk-forward validation. One env-var rollback. No new features — same information set, tighter selection.</span></li>
         <li style="padding:4px 0;"><a href="#may-30-game-timing">May 30, 2026 &mdash; Game Timing panel ("when to bet")</a> <span class="text-sm text-muted">&bull; ⏰ GAME START countdown + 🟢/🟡/🔴 betting-window status + best review window. Behavioral guidance — not a predictive timing engine.</span></li>
         <li style="padding:4px 0;"><a href="#may-29-banner-split">May 29, 2026 &mdash; Banner UX: model view vs production decision</a> <span class="text-sm text-muted">&bull; No more "🔥 High Confidence + NOT RECOMMENDED" contradictions; new "What the Model Likes" / "Why Brother Willie Passed on This Play" / "Brother Willie Verdict" sections on rejected picks</span></li>
         <li style="padding:4px 0;"><a href="#apr-27-tiered-intel-phase3">Apr 27, 2026 &mdash; Tiered Intelligence Phase 3 (Promoted Recommendations)</a> <span class="text-sm text-muted">&bull; 🟢 Recommended badge, break-even display, active "Bet All Spread/Total" buttons, source-safety guards, Recommended filter chip</span></li>
@@ -37,6 +38,34 @@
         <li style="padding:4px 0;"><a href="#feb-7-evening">Feb 7, 2026 &mdash; Evening</a> <span class="text-sm text-muted">&bull; Help overhaul, profile redesign, deployment</span></li>
         <li style="padding:4px 0;"><a href="#feb-7-launch">Feb 7, 2026 &mdash; Launch</a> <span class="text-sm text-muted">&bull; Initial build &mdash; the beginning</span></li>
     </ul>
+</div>
+
+{# ═══════════════════════════════════════════════════════════════════ #}
+{# Aug 22 — v3.2 Selection ACTIVATED                                    #}
+{# ═══════════════════════════════════════════════════════════════════ #}
+<div class="card mb-2" id="aug-22-v3-2-selection">
+    <p class="card-title">Aug 22, 2026 &mdash; v3.2 Selection ACTIVATED (62% / 7pp)</p>
+    <p class="text-sm text-muted" style="margin-bottom:12px;">
+        The MLB moneyline recommendation gate is now tighter. A pick must clear
+        <strong>62% projected win probability</strong> and <strong>7pp of model edge</strong>
+        to be Recommended (was 60% / 6pp). Every other rule is unchanged &mdash;
+        this is a selection tightening, not a new predictive feature. The
+        methodology, blend, starter recent form, HFA, and every risk flag are
+        exactly what they were yesterday. Fewer cards will earn the green
+        Recommended treatment; the ones that do should be stronger picks.
+    </p>
+    <ul style="list-style:none;padding:0;margin:0;font-size:0.9rem;">
+        <li style="padding:4px 0;">&#10003; <strong>What changed:</strong> Recommendation gate raised to 62% confidence / 7pp edge. Lane hard-gates raised in lock-step so the two never disagree.</li>
+        <li style="padding:4px 0;">&#10003; <strong>What did not change:</strong> Market blend (0.55), starter recent form (on), team ratings, HFA, sigmoid, extreme-disagreement cap, tier markers (Elite &ge; 8pp / Strong &ge; 6pp), heavy-favorite juice gate, source-trust gate, all lane risk flags. Contribution tracking (v3.1) is preserved.</li>
+        <li style="padding:4px 0;">&#10003; <strong>Card copy:</strong> "Confidence below the 60% threshold" &rarr; "Confidence below the 62% threshold" on rejected picks. "Cleared confidence threshold (X% vs 60% minimum)" &rarr; "vs 62% minimum" on approved picks. Displayed threshold always matches what the engine actually enforced.</li>
+        <li style="padding:4px 0;">&#10003; <strong>Why:</strong> Walk-forward validation on historical MLB data. Baseline v3 (60% / 6pp): 71.5% win / +21.9% ROI over 214 held-out picks. v3.2 (62% / 7pp): <strong>75.2% win / +26.6% ROI</strong> over 153 held-out picks &mdash; both accuracy and yield improved with the Wilson 95% lower bound comfortably above the &ge;60% product objective.</li>
+        <li style="padding:4px 0;">&#10003; <strong>Rollback:</strong> A single Railway environment variable (<code>USE_V3_2_SELECTION=false</code>) reverts every consumer atomically. No data change, no schema change, no code deploy.</li>
+        <li style="padding:4px 0;">&#10003; <strong>Post-activation observation:</strong> The forward performance of v3.2 is being monitored against pre-registered checkpoints at 30 / 60 / 100 settled recs. The historical 75.2% is validation evidence, not a production guarantee.</li>
+    </ul>
+    <p class="text-sm text-muted mt-2">
+        Analytics only &mdash; still not betting advice. Past performance does not
+        predict future outcomes.
+    </p>
 </div>
 
 {# ═══════════════════════════════════════════════════════════════════ #}

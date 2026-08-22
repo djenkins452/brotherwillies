@@ -13,7 +13,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.core.services.recommendations import (
@@ -35,6 +35,7 @@ from apps.core.services.recommendations import (
 # ---------------------------------------------------------------------------
 # Hard gates — boundary semantics
 
+@override_settings(USE_V3_2_SELECTION=False)
 class HardGatesPassTests(TestCase):
 
     def _passing(self):
@@ -171,6 +172,7 @@ class RiskFlagComputationTests(TestCase):
 # ---------------------------------------------------------------------------
 # Lane classification — the five spec scenarios
 
+@override_settings(USE_V3_2_SELECTION=False)
 class LaneClassificationTests(TestCase):
 
     def _classify(self, **overrides):
@@ -321,6 +323,7 @@ class PartitionByLaneTests(TestCase):
 # ---------------------------------------------------------------------------
 # Bulk-bet integration — only Core lane is bulk-bet eligible
 
+@override_settings(USE_V3_2_SELECTION=False)
 class BulkBetLaneFilterTests(TestCase):
     """Spec scenario #5: Bet All returns only core bets.
 

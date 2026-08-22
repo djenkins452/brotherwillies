@@ -2,6 +2,102 @@
 
 ---
 
+## 2026-08-22 — v3.2 ACTIVATED: Fixed 62/7 Selection
+
+**Production selection methodology tightened from 0.60 / 6pp → 0.62 / 7pp behind a single env-var flag (`USE_V3_2_SELECTION`, default `true`).**
+
+### The change
+
+The MLB moneyline recommendation gate now requires:
+
+- `MIN_PROBABILITY_FOR_RECOMMENDED` effective = **0.62** (was 0.60)
+- `MIN_EDGE` effective = **7.0pp** (was 6.0)
+- `LANE_HARD_GATES_PROBABILITY_MIN` effective = **0.62** (kept lock-step with above)
+- `LANE_HARD_GATES_EDGE_MIN` effective = **0.07** (kept lock-step)
+
+Every other production rule is preserved: starter recent form (v3.1) remains on, market blend stays at 0.55, HFA, soft prob clamp, sigmoid divisor, `STRONG_EDGE`/`ELITE_EDGE` tier markers (6 / 8), heavy-favorite juice gate, source-trust gate, all lane risk flags, and the extreme-disagreement cap are unchanged. This is a **selection tightening only** — no new predictive information enters the score.
+
+### Why
+
+Walk-forward validation (expanding-training + 14-day forward holdouts, 2026-02-22 → 2026-08-21) produced:
+
+| Methodology | n | W-L | Win rate | ROI | Wilson 95% CI |
+|---|---:|---:|---:|---:|:---:|
+| Baseline v3 (0.60 / 6pp) | 214 | 153-61 | 71.50% | +21.85% | [65.11%, 77.12%] |
+| **v3.2 (0.62 / 7pp)** | **153** | **115-38** | **75.16%** | **+26.56%** | **[67.76%, 81.34%]** |
+
+Both accuracy and ROI improved with meaningful retained volume, and the Wilson lower bound (67.76%) remains comfortably above the ≥60% product objective even after Bonferroni correction for the 14-candidate grid (~64.6%). Deep-dive of the historical 60–65% failure mode showed the true drag is edge ≥ 10pp × short favorite (overconfident-model-vs-market pathology) — the 62/7 rule catches the same wins the baseline caught while excluding the marginal 60–62% band that carried disproportionate losses.
+
+### Implementation shape
+
+New in `apps/core/services/recommendations.py`:
+
+- Pre-v3.2 constants (`MIN_PROBABILITY_FOR_RECOMMENDED`, `MIN_EDGE`, `LANE_HARD_GATES_*`) are unchanged — they now serve as the historical baseline reference used by the walk-forward harness and legacy calibration tests.
+- New constants: `V3_2_MIN_PROBABILITY_FOR_RECOMMENDED = 0.62`, `V3_2_MIN_EDGE = 7.0`, `V3_2_LANE_HARD_GATES_PROBABILITY_MIN = 0.62`, `V3_2_LANE_HARD_GATES_EDGE_MIN = 0.07`.
+- New helpers (single source of truth for every LIVE decision path):
+  - `v3_2_active()` — reads `settings.USE_V3_2_SELECTION`.
+  - `get_min_probability_for_recommended()`, `get_min_edge()` — used by `compute_status`.
+  - `get_lane_hard_gates_probability_min()`, `get_lane_hard_gates_edge_min()` — used by `_lane_hard_gates_pass`.
+- `compute_status` gates 1 (value classification), 4 (probability), and 5 (edge) call the helpers.
+- `passed_reasons` and `approved_reasons` UI copy renders the **effective** threshold, so a v3.2-rejected pick says "Confidence below the 62% threshold", not the stale 60%.
+
+Consumers updated to read through helpers so the flag toggles the whole pipeline consistently:
+
+- `apps/mockbets/services/bulk_actions.py::is_bulk_moneyline_eligible` — bulk-bet placement filter.
+- `apps/analytics/services/model_inventory.py` — diagnostic gate-fail attribution.
+- `apps/analytics/services/health_score.py::_capture_calibration_state` — health-score panel reports the ACTIVE thresholds.
+
+### Flag / rollback
+
+```
+USE_V3_2_SELECTION=false    # Railway env var; one line; no migration
+```
+
+Rolling back flips **every** consumer atomically (compute_status, lane hard-gates, bulk-bet filter, UI copy, health-score panel). No data change, no schema change, no code deploy required. Contribution tracking (v3.1) and recent-form (`USE_STARTER_RECENT_FORM`) are unaffected and remain active independently.
+
+### Consistency-audit protection
+
+`apps/core/test_v3_2_selection.py` (NEW, 25 tests) locks the exact brief invariants:
+
+- 61.9% is rejected under v3.2; 62.0% qualifies.
+- 6.9pp is rejected under v3.2; 7.0pp qualifies.
+- 60.0% + 6.0pp still recommended under `USE_V3_2_SELECTION=false` (rollback exact).
+- Every helper routes correctly on both flag values.
+- Lane hard-gates track the flag (no split state).
+- Bulk-bet filter accepts/rejects consistently with compute_status.
+- Health-score / model-inventory report the ACTIVE thresholds.
+- `passed_reasons` / `approved_reasons` UI copy shows 62% / 7pp under v3.2 and 60% under rollback.
+- Recent-form flag remains independent (v3.2 does not touch it).
+- Replay harness (`walk_forward.apply_candidate_gates`) reproduces both methodologies.
+
+`apps/analytics/test_walk_forward.py::GateMirrorLockTests` extended: the mirror is now locked against production `compute_status` under BOTH `USE_V3_2_SELECTION=False` (default CandidateConfig at 0.60/6.0) AND `USE_V3_2_SELECTION=True` (CandidateConfig at 0.62/7.0). If either mirror drifts, the test fires before misleading study output ships.
+
+Legacy calibration and lane tests (`test_calibration_2026_05_06.FewerRecommendationsUnderTighterGatesTests`, `test_two_lane_system.HardGatesPassTests`/`LaneClassificationTests`/`BulkBetLaneFilterTests`, `core.tests.DecisionRuleTests`/`ModelLeanUXCorrectionTests`/`RecommendationTrustGuardrailTests`, `mlb.tests.BulkActionsSourceFilterTests`/`HubTemplateSourceAwareTests`, `mockbets.tests.BulkActionsTests`) are wrapped in `@override_settings(USE_V3_2_SELECTION=False)` — they lock the historical 0.60/6.0 baseline they were written against, and remain the anchor for any future rollback verification.
+
+### Documentation
+
+- `docs/v3_feature_inventory.md` — rows for `MIN_PROBABILITY_FOR_RECOMMENDED`, `MIN_EDGE`, and lane hard-gates flipped to v3.2 status.
+
+### Tests
+
+**1467 tests pass.** Only failure remains the pre-existing `feedback.tests` ImportError (feedback not in INSTALLED_APPS).
+
+### Post-activation monitoring
+
+Per the brief's Step 7 — v3.2 will be observed against the pre-registered forward checkpoints:
+
+- **30 settled recs** — early directional review (do not tune from this)
+- **60 settled recs** — meaningful review
+- **100 settled recs** — formal production validation vs the ≥60% product objective
+
+The historical 75.16% is validation evidence, not a production guarantee. The forward observation period must remain clean of any further methodology tweaks so the sample is honest.
+
+### Next feature (deferred)
+
+Bullpen Quality + Bullpen Fatigue (design at [docs/v3_2_bullpen_design.md](docs/v3_2_bullpen_design.md)) remains the next predictive addition. Implementation **does not begin** until v3.2's forward observation period produces a clean signal — per the "one validated feature at a time" discipline that produced Recent Form.
+
+---
+
 ## 2026-08-22 — Walk-Forward Optimization Study Harness (analysis only)
 
 **READ-ONLY. STAFF-ONLY. NO CHANGES to any live decision path, methodology, threshold, or gate.**

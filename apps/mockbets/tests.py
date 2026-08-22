@@ -3,7 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.utils import timezone
 
 from apps.cfb.models import Conference, Team, Game, OddsSnapshot
@@ -1496,6 +1496,7 @@ class BackfillTests(TestCase):
         self.assertEqual(bet.recommendation_tier, '')
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class BulkActionsTests(TestCase):
     """Bulk MockBet operations — place_bulk_recommended + cancel_all_open.
 

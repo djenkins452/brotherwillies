@@ -656,13 +656,16 @@ def _capture_calibration_state() -> dict:
     """
     from apps.core.services import probability_calibration as pc
     from apps.core.services import recommendations as rec
+    # v3.2 (2026-08-22): report the ACTIVE thresholds via helpers so the
+    # health-score / model-inventory panel shows what the engine is
+    # actually enforcing, not the pre-v3.2 baseline constants.
     return {
         'market_blend_weight': pc.MARKET_BLEND_WEIGHT,
         'market_blend_weight_cap': pc.MARKET_BLEND_WEIGHT_CAP,
         'prob_min': pc.PROB_MIN,
         'prob_max': pc.PROB_MAX,
-        'min_edge': rec.MIN_EDGE,
-        'min_probability_for_recommended': rec.MIN_PROBABILITY_FOR_RECOMMENDED,
+        'min_edge': rec.get_min_edge(),
+        'min_probability_for_recommended': rec.get_min_probability_for_recommended(),
         'extreme_disagreement_gap': rec.EXTREME_DISAGREEMENT_GAP,
         'heavy_favorite_odds': rec.HEAVY_FAVORITE_ODDS,
     }

@@ -115,11 +115,15 @@ def is_bulk_moneyline_eligible(
     ):
         return False
     # Lazy import to avoid circular deps at module load.
+    # v3.2 (2026-08-22): probability floor comes from the helper so the
+    # bulk-bet filter tracks USE_V3_2_SELECTION in lock-step with
+    # compute_status. Otherwise a v3.2-approved pick could be excluded
+    # (or a v3.2-rejected pick admitted) by this second filter.
     from apps.core.services.recommendations import (
-        MAX_ABS_ODDS_FOR_RECOMMENDED, MIN_PROBABILITY_FOR_RECOMMENDED,
+        MAX_ABS_ODDS_FOR_RECOMMENDED, get_min_probability_for_recommended,
     )
     prob_pct = getattr(rec, 'confidence_score', None)
-    if prob_pct is None or float(prob_pct) < (MIN_PROBABILITY_FOR_RECOMMENDED * 100):
+    if prob_pct is None or float(prob_pct) < (get_min_probability_for_recommended() * 100):
         return False
     odds = getattr(rec, 'odds_american', None)
     if odds is None or abs(int(odds)) > MAX_ABS_ODDS_FOR_RECOMMENDED:

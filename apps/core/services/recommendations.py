@@ -103,6 +103,56 @@ LANE_HARD_GATES_EDGE_MIN = 0.06          # decimal — edge floor 6pp (was 0.05 
 LANE_HARD_GATES_MAX_ABS_ODDS = 300       # |american odds| ceiling
 LANE_RISK_FLAGS_MAX_FOR_QUALIFIED = 2    # >=3 flags drops the pick to 'pass'
 
+
+# ---------------------------------------------------------------------------
+# 2026-08-22 v3.2 — Fixed 62/7 Selection thresholds (env-flag gated).
+#
+# The CONSTANTS above are the PRE-V3.2 baseline; they stay pinned so the
+# walk-forward baseline, historical calibration tests, and diagnostic
+# comparisons keep a stable reference. The HELPERS below return the
+# CURRENTLY ACTIVE thresholds based on `settings.USE_V3_2_SELECTION` —
+# every LIVE decision path (compute_status, lane hard-gates, bulk-bet
+# filters, UI approve/reject copy) reads through these helpers so a
+# single env-var flip toggles the whole pipeline consistently.
+#
+# When rolling back (USE_V3_2_SELECTION=false), all helpers automatically
+# revert to the constants — no code change, no data change, no migration.
+
+V3_2_MIN_PROBABILITY_FOR_RECOMMENDED = 0.62
+V3_2_MIN_EDGE = 7.0
+V3_2_LANE_HARD_GATES_PROBABILITY_MIN = 0.62
+V3_2_LANE_HARD_GATES_EDGE_MIN = 0.07
+
+
+def v3_2_active() -> bool:
+    """True when the v3.2 Fixed 62/7 Selection flag is ON. Reads live so
+    `@override_settings(USE_V3_2_SELECTION=…)` toggles it inside tests."""
+    from django.conf import settings
+    return bool(getattr(settings, 'USE_V3_2_SELECTION', False))
+
+
+def get_min_probability_for_recommended() -> float:
+    """Effective probability floor for gate 4 in compute_status."""
+    return V3_2_MIN_PROBABILITY_FOR_RECOMMENDED if v3_2_active() else MIN_PROBABILITY_FOR_RECOMMENDED
+
+
+def get_min_edge() -> float:
+    """Effective edge floor for gate 5 in compute_status."""
+    return V3_2_MIN_EDGE if v3_2_active() else MIN_EDGE
+
+
+def get_lane_hard_gates_probability_min() -> float:
+    """Effective probability floor for the lane hard-gate check. Kept
+    aligned with `get_min_probability_for_recommended()` so a pick
+    cannot pass one and fail the other for probability reasons."""
+    return V3_2_LANE_HARD_GATES_PROBABILITY_MIN if v3_2_active() else LANE_HARD_GATES_PROBABILITY_MIN
+
+
+def get_lane_hard_gates_edge_min() -> float:
+    """Effective edge floor (decimal) for the lane hard-gate check.
+    Kept aligned with `get_min_edge()` for the same consistency reason."""
+    return V3_2_LANE_HARD_GATES_EDGE_MIN if v3_2_active() else LANE_HARD_GATES_EDGE_MIN
+
 # NOTE: the 'elite' label ("🔥 High Confidence") is a recommendation-positive
 # label. NEVER bind it directly in a UI surface — route through
 # display_tier_label(tier, status) so a not_recommended pick can never read
@@ -207,6 +257,14 @@ def compute_status(model_edge: float, odds_american: int,
     back to its pre-correction behavior — keeps backward-compatibility for
     any external caller; new callers should always pass it.
     """
+    # v3.2 (2026-08-22): the recommendation probability floor and edge
+    # floor come from helpers so USE_V3_2_SELECTION=true tightens the
+    # gate consistently across compute_status, _lane_hard_gates_pass,
+    # bulk-bet placement, and the UI approve/reject copy. The tier markers
+    # STRONG_EDGE and ELITE_EDGE are unchanged (labels, not gates).
+    effective_min_prob = get_min_probability_for_recommended()
+    effective_min_edge = get_min_edge()
+
     # Gate 0 — defensive: edge missing means we can't classify at all.
     if model_edge is None:
         return STATUS_NOT_RECOMMENDED, 'low_edge'
@@ -215,7 +273,7 @@ def compute_status(model_edge: float, odds_american: int,
     # massive edge mathematically but is not a "high-probability play".
     # Below 50% means more likely to lose than win — not bulk-eligible.
     if probability is not None and probability < HARD_MIN_PROBABILITY:
-        if model_edge >= MIN_EDGE:
+        if model_edge >= effective_min_edge:
             # Real edge but low probability: VALUE classification.
             # Visible in its own UI section, never recommended, never bulk.
             return STATUS_NOT_RECOMMENDED, 'value'
@@ -233,17 +291,21 @@ def compute_status(model_edge: float, odds_american: int,
     if is_secondary:
         return STATUS_NOT_RECOMMENDED, 'secondary_source'
 
-    # Gate 4 — Recommended-probability threshold. Defaults to 55%.
-    if probability is not None and probability < MIN_PROBABILITY_FOR_RECOMMENDED:
+    # Gate 4 — Recommended-probability threshold. 0.60 pre-v3.2,
+    # 0.62 with v3.2 active.
+    if probability is not None and probability < effective_min_prob:
         return STATUS_NOT_RECOMMENDED, 'low_probability'
 
-    # Gate 5 — minimum edge to bother (original rule, slightly lowered).
-    if model_edge < MIN_EDGE:
+    # Gate 5 — minimum edge to bother. 6pp pre-v3.2, 7pp with v3.2 active.
+    if model_edge < effective_min_edge:
         return STATUS_NOT_RECOMMENDED, 'low_edge'
 
     # Gate 6 — heavy-favorite juice. Edge must clear STRONG_EDGE when
     # the price is heavy. Keeps a 5pp edge against -200 from looking
-    # like a pull-the-trigger pick.
+    # like a pull-the-trigger pick. STRONG_EDGE=6 is UNCHANGED under
+    # v3.2; when effective_min_edge=7, gate 5 fires first for any pick
+    # at edge<7 (making gate 6 dormant for edge in [6,7)). Left intact
+    # so a rollback to v3 restores its original semantics.
     if odds_american is not None and odds_american <= HEAVY_FAVORITE_ODDS and model_edge < STRONG_EDGE:
         return STATUS_NOT_RECOMMENDED, 'high_juice'
 
@@ -361,10 +423,16 @@ def passed_reasons(status, status_reason, *,
         return []
 
     bullets = []
+    # v3.2 (2026-08-22): use effective helpers so displayed thresholds
+    # match what compute_status actually enforced. Without this, a pick
+    # rejected under v3.2's 62% floor would render "Confidence below the
+    # 60% threshold" — misleading.
+    effective_min_prob_pct = int(get_min_probability_for_recommended() * 100)
+    effective_min_edge = get_min_edge()
     # Primary reason — the gate that triggered status='not_recommended'.
     primary = {
-        'low_edge':         f"Edge below the {MIN_EDGE:.0f}pp recommendation threshold",
-        'low_probability':  f"Confidence below the {int(MIN_PROBABILITY_FOR_RECOMMENDED*100)}% threshold"
+        'low_edge':         f"Edge below the {effective_min_edge:.0f}pp recommendation threshold",
+        'low_probability':  f"Confidence below the {effective_min_prob_pct}% threshold"
                             + (f" ({float(confidence_score):.0f}%)" if confidence_score is not None else ''),
         'longshot':         "Longshot — |odds| exceeds the 300 cap",
         'value':            "Value lean: real edge but probability too low to auto-bet",
@@ -419,9 +487,12 @@ def approved_reasons(model_edge, confidence_score, status,
     if confidence_score is not None:
         try:
             cs = float(confidence_score)
+            # v3.2 (2026-08-22): effective minimum reflects
+            # USE_V3_2_SELECTION so the "cleared X% minimum" claim
+            # matches the gate that actually approved the pick.
             bullets.append(
                 f"Cleared confidence threshold ({cs:.0f}% vs "
-                f"{int(MIN_PROBABILITY_FOR_RECOMMENDED*100)}% minimum)"
+                f"{int(get_min_probability_for_recommended()*100)}% minimum)"
             )
         except (TypeError, ValueError):
             pass
@@ -735,9 +806,13 @@ def _lane_hard_gates_pass(
     odds_american signed, source_quality the OddsSnapshot.source_quality
     value (typically 'primary' / 'fallback' / 'stale' / 'unavailable').
     """
-    if probability is None or probability < LANE_HARD_GATES_PROBABILITY_MIN:
+    # v3.2 (2026-08-22): read live via helpers so the lane hard-gates
+    # tighten in lock-step with compute_status when USE_V3_2_SELECTION is
+    # on. Without this, a v3.2-rejected pick (prob<0.62 or edge<7pp)
+    # could still pass the lane hard-gate check — inconsistent state.
+    if probability is None or probability < get_lane_hard_gates_probability_min():
         return False
-    if edge is None or edge < LANE_HARD_GATES_EDGE_MIN:
+    if edge is None or edge < get_lane_hard_gates_edge_min():
         return False
     if odds_american is None or abs(int(odds_american)) > LANE_HARD_GATES_MAX_ABS_ODDS:
         return False

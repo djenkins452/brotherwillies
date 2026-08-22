@@ -1,6 +1,6 @@
 # Brother Willie v3 — Feature Inventory (Live Status)
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-08-22
 
 This is the running ledger of every predictive signal in the engine, its activation status, and where it falls in the v3 roadmap. The single source of truth for "what is BW actually using right now."
 
@@ -28,11 +28,12 @@ This is the running ledger of every predictive signal in the engine, its activat
 | # | Gate | Status | Threshold | Notes |
 |---|---|---|---|---|
 | 8 | `HARD_MIN_PROBABILITY` | 🟢 Active | 0.50 | Hard floor. |
-| 9 | `MIN_PROBABILITY_FOR_RECOMMENDED` | 🟢 Active | 0.60 | **Calibration concern flagged in Phase 3.** Audit in v3.x. |
-| 10 | `MIN_EDGE` | 🟢 Active | 6.0pp | |
-| 11 | `MAX_ABS_ODDS_FOR_RECOMMENDED` | 🟢 Active | 300 | |
-| 12 | Heavy-fav juice gate | 🟢 Active | `≤ -150` requires `STRONG_EDGE` | |
-| 13 | Source trust gate | 🟢 Active | ESPN-fallback rejected | |
+| 9 | `MIN_PROBABILITY_FOR_RECOMMENDED` | 🟢 **Active — v3.2 2026-08-22** | **0.62** (was 0.60) | Reads through `get_min_probability_for_recommended()`; falls back to 0.60 when `USE_V3_2_SELECTION=false`. |
+| 10 | `MIN_EDGE` | 🟢 **Active — v3.2 2026-08-22** | **7.0pp** (was 6.0) | Reads through `get_min_edge()`; falls back to 6.0 when `USE_V3_2_SELECTION=false`. |
+| 10b | Lane hard-gates (probability, edge) | 🟢 **Active — v3.2 2026-08-22** | **0.62 / 0.07** (was 0.60 / 0.06) | Read through `get_lane_hard_gates_probability_min()` / `_edge_min()`; kept lock-step with #9/#10. |
+| 11 | `MAX_ABS_ODDS_FOR_RECOMMENDED` | 🟢 Active | 300 | Unchanged. |
+| 12 | Heavy-fav juice gate | 🟢 Active | `≤ -150` requires `STRONG_EDGE` (6.0) | Unchanged. Semi-dormant under v3.2 because gate 5 catches edge<7 first. |
+| 13 | Source trust gate | 🟢 Active | ESPN-fallback rejected | Unchanged. |
 
 ## Lane risk flags
 

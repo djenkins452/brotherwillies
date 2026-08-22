@@ -13,7 +13,7 @@ new behavior (short-fav flag, CLV format) plus the new constant values.
 from datetime import timedelta
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.core.services.probability_calibration import (
@@ -249,6 +249,7 @@ class CLVFormatBugFixTests(TestCase):
         self.assertEqual(_fmt_clv(-0.05, ''),         _fmt_clv(-0.05, 'negative'))
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class FewerRecommendationsUnderTighterGatesTests(TestCase):
     """Marginal picks that cleared old gates should now fail."""
 

@@ -282,6 +282,39 @@ USE_STARTER_RECENT_FORM = os.environ.get('USE_STARTER_RECENT_FORM', 'true').lowe
     'true', '1', 'yes',
 )
 
+# 2026-08-22 v3.2 — Fixed 62/7 Selection methodology flag.
+# 2026-08-22 — ACTIVATED IN PRODUCTION. Default 'true'.
+#
+# When True (current default), the MLB moneyline recommendation gate uses
+# tightened thresholds:
+#   * MIN_PROBABILITY_FOR_RECOMMENDED effective = 0.62 (was 0.60)
+#   * MIN_EDGE                     effective = 7.0 pp (was 6.0)
+#   * LANE_HARD_GATES_PROBABILITY_MIN effective = 0.62 (was 0.60)
+#   * LANE_HARD_GATES_EDGE_MIN     effective = 0.07 (was 0.06)
+#
+# The tier markers STRONG_EDGE (6.0) and ELITE_EDGE (8.0) are UNCHANGED —
+# they label recommendation strength, not gate the decision. HFA, market
+# blend (0.55), soft prob clamp, starter recent form (on), sigmoid
+# divisor, all lane risk flags, and every other production rule are
+# preserved.
+#
+# Validation evidence (walk-forward, expanding-training + 14-day forward
+# holdouts, 2026-02-22 to 2026-08-21):
+#   * Baseline v3 (0.60/6): n=214, 153-61, 71.50% win, +21.85% ROI,
+#     95% CI [65.11%, 77.12%]
+#   * v3.2 (0.62/7):        n=153, 115-38, 75.16% win, +26.56% ROI,
+#     95% CI [67.76%, 81.34%]
+# Both accuracy and ROI improved with a Wilson lower bound comfortably
+# above the ≥60% product objective, even after Bonferroni correction for
+# the 14-candidate grid.
+#
+# Rollback: set USE_V3_2_SELECTION=false in Railway env vars. No code
+# change required — env var overrides the code default and restores the
+# pre-v3.2 thresholds (0.60/6.0). No schema change; no data migration.
+USE_V3_2_SELECTION = os.environ.get('USE_V3_2_SELECTION', 'true').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

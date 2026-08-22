@@ -29,7 +29,7 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.core.services.recommendations import (
     HARD_MIN_PROBABILITY,
@@ -38,6 +38,8 @@ from apps.core.services.recommendations import (
     STRONG_EDGE,
     HEAVY_FAVORITE_ODDS,
     MAX_ABS_ODDS_FOR_RECOMMENDED,
+    V3_2_MIN_PROBABILITY_FOR_RECOMMENDED,
+    V3_2_MIN_EDGE,
     STATUS_RECOMMENDED,
     STATUS_NOT_RECOMMENDED,
     compute_status,
@@ -74,13 +76,16 @@ class _StubSim:
 
 
 class GateMirrorLockTests(TestCase):
-    """apply_candidate_gates(default_config) === compute_status()."""
+    """apply_candidate_gates() stays semantically identical to production
+    compute_status() for a given rule set. Locked in BOTH the pre-v3.2
+    baseline mode (flag OFF, defaults 0.60/6) AND the v3.2 active mode
+    (flag ON, tighter 0.62/7 config)."""
 
     def _matrix(self):
         # Probabilities covering all gate boundaries.
-        probs = [0.35, 0.49, 0.50, 0.55, 0.59, 0.60, 0.65, 0.72, 0.85, None]
-        # Edges around MIN_EDGE and STRONG_EDGE.
-        edges = [-1.0, 0.0, 3.0, 5.9, 6.0, 6.5, 7.9, 8.0, 15.0, None]
+        probs = [0.35, 0.49, 0.50, 0.55, 0.59, 0.60, 0.61, 0.62, 0.63, 0.65, 0.72, 0.85, None]
+        # Edges around MIN_EDGE, V3_2_MIN_EDGE, and STRONG_EDGE.
+        edges = [-1.0, 0.0, 3.0, 5.9, 6.0, 6.5, 6.9, 7.0, 7.5, 7.9, 8.0, 15.0, None]
         # Odds around HEAVY_FAVORITE and MAX_ABS_ODDS boundaries.
         odds = [-450, -301, -300, -200, -150, -149, -120, +100, +150, +250, +301, None]
         for p in probs:
@@ -88,7 +93,11 @@ class GateMirrorLockTests(TestCase):
                 for o in odds:
                     yield p, e, o
 
-    def test_default_config_matches_production_compute_status(self):
+    @override_settings(USE_V3_2_SELECTION=False)
+    def test_default_config_matches_pre_v3_2_compute_status(self):
+        # Default CandidateConfig uses the pre-v3.2 constants (0.60 / 6.0).
+        # With USE_V3_2_SELECTION=False, compute_status uses the same
+        # constants — mirror must be exact.
         default = CandidateConfig(label='baseline')
         diffs = []
         for prob, edge, odds in self._matrix():
@@ -100,18 +109,45 @@ class GateMirrorLockTests(TestCase):
             )
             if ours != prod:
                 diffs.append((prob, edge, odds, ours, prod))
-        # If this ever fires, either production compute_status changed
-        # or the mirror in walk_forward.py drifted. Either way the
-        # walk-forward baseline is no longer the true baseline —
-        # fix before shipping any candidate results.
         self.assertEqual(
             diffs, [],
-            msg=f"Gate mirror drifted from production compute_status on "
+            msg=f"Gate mirror drifted from PRE-v3.2 compute_status on "
+                f"{len(diffs)} input(s). First diff: {diffs[0] if diffs else None}",
+        )
+
+    @override_settings(USE_V3_2_SELECTION=True)
+    def test_v3_2_config_matches_v3_2_active_compute_status(self):
+        # When v3.2 is ON, compute_status uses 0.62 / 7pp. A CandidateConfig
+        # configured with the SAME 0.62 / 7pp must produce identical
+        # (status, reason) across the input matrix. Otherwise the harness's
+        # "v3.2 candidate" doesn't match the live v3.2 gate — sign that
+        # helpers and mirror drifted.
+        v3_2 = CandidateConfig(
+            label='v3_2',
+            min_probability=V3_2_MIN_PROBABILITY_FOR_RECOMMENDED,
+            min_edge_pp=V3_2_MIN_EDGE,
+        )
+        diffs = []
+        for prob, edge, odds in self._matrix():
+            ours = apply_candidate_gates(
+                edge_pp=edge, pick_odds=odds, pick_prob=prob, config=v3_2,
+            )
+            prod = compute_status(
+                edge, odds, probability=prob, is_secondary=False,
+            )
+            if ours != prod:
+                diffs.append((prob, edge, odds, ours, prod))
+        self.assertEqual(
+            diffs, [],
+            msg=f"Gate mirror drifted from v3.2-active compute_status on "
                 f"{len(diffs)} input(s). First diff: {diffs[0] if diffs else None}",
         )
 
     def test_default_config_constants_match_imports(self):
         c = CandidateConfig(label='x')
+        # The CandidateConfig defaults still reference the pre-v3.2
+        # constants — the harness's "baseline v3" candidate must remain
+        # a stable historical anchor, independent of the live flag.
         self.assertEqual(c.min_probability, MIN_PROBABILITY_FOR_RECOMMENDED)
         self.assertEqual(c.min_edge_pp, MIN_EDGE)
         self.assertEqual(c.max_abs_odds, MAX_ABS_ODDS_FOR_RECOMMENDED)

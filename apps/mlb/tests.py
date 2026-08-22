@@ -2799,6 +2799,7 @@ class FocusBannerTrustFilterTests(TestCase):
         self.assertIsNone(focus)
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class BulkActionsSourceFilterTests(TestCase):
     """The bulk-place service must respect source_filter and never bet
     on derived rows regardless of filter."""
@@ -2885,6 +2886,7 @@ class BulkActionsSourceFilterTests(TestCase):
             )
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class HubTemplateSourceAwareTests(TestCase):
     """Template smoke tests: ESPN section renders when there are
     secondary rec games; both bulk buttons render together when both

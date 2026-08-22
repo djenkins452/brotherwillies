@@ -10,7 +10,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.utils import timezone
 
 from apps.core.models import BettingRecommendation
@@ -227,6 +227,7 @@ class AssignTiersGuardrailTests(TestCase):
         self.assertEqual(assign_tiers([]), [])
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class DecisionRuleTests(TestCase):
     """Decision rules — the status/reason assignment used by the UI filter banding."""
 
@@ -1545,6 +1546,7 @@ class OddsTrustTierTests(TestCase):
         self.assertEqual(SECONDARY_CONFIDENCE_MULTIPLIER, 0.85)
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class RecommendationTrustGuardrailTests(TestCase):
     """End-to-end through get_recommendation: each trust tier produces
     the correct status / reason / tier / is_secondary state. Edge math
@@ -1840,6 +1842,7 @@ class NoMultiLineDjangoCommentsTests(TestCase):
             self.fail(msg)
 
 
+@override_settings(USE_V3_2_SELECTION=False)
 class ModelLeanUXCorrectionTests(TestCase):
     """Regression: the banner must never blend "🔥 High Confidence" with
     "NOT RECOMMENDED" + "Why This Is a Top Play" — the contradictory display
