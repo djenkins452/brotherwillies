@@ -541,6 +541,120 @@ def method_replay(request):
             )
         return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
+    # --- Walk-forward optimization study (read-only, plaintext) ----------
+    # v3 → ≥60% out-of-sample. Expanding-training + forward-holdout folds
+    # over the current v3 baseline (blend=0.55, use_recent_form=True).
+    # Grid: probability floor, edge floor, and short-fav/heavy-fav-specific
+    # tightening. Returns per-candidate held-out aggregates + true walk-
+    # forward selection log + Wilson 95% CI. STAFF-ONLY. READ-ONLY. NO
+    # WRITES. Does NOT modify any live decision path.
+    #
+    # Params (all optional):
+    #   since=YYYY-MM-DD, until=YYYY-MM-DD   window (default 180 days)
+    #   train_days=30, holdout_days=14, step_days=14
+    #   min_sample=20     min picks in training window for a candidate
+    #                     to be eligible for selection
+    #   objective=win_rate_then_roi | roi | wilson_lower
+    if (request.GET.get('experiment') or '').lower() == 'walk_forward':
+        from django.http import HttpResponse
+        from datetime import datetime as _dt
+        from apps.analytics.services.walk_forward import (
+            run_walk_forward, render_walk_forward,
+        )
+
+        def _parse_date(name, default):
+            raw = (request.GET.get(name) or '').strip()
+            if not raw:
+                return default
+            try:
+                return _dt.strptime(raw, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                return default
+
+        def _parse_int(name, default, lo, hi):
+            try:
+                v = int(request.GET.get(name, default))
+            except (TypeError, ValueError):
+                return default
+            return max(lo, min(hi, v))
+
+        _now = timezone.localdate()
+        date_from = _parse_date('since', _now - _td(days=180))
+        date_to = _parse_date('until', _now - _td(days=1))
+        train_days = _parse_int('train_days', 30, 7, 365)
+        holdout_days = _parse_int('holdout_days', 14, 3, 60)
+        step_days = _parse_int('step_days', 14, 1, 60)
+        min_sample = _parse_int('min_sample', 20, 5, 500)
+        objective = (request.GET.get('objective') or 'win_rate_then_roi').strip()
+        if objective not in ('win_rate_then_roi', 'roi', 'wilson_lower'):
+            objective = 'win_rate_then_roi'
+
+        try:
+            result = run_walk_forward(
+                date_from=date_from,
+                date_to=date_to,
+                train_days=train_days,
+                holdout_days=holdout_days,
+                step_days=step_days,
+                min_sample_for_selection=min_sample,
+                selection_objective=objective,
+            )
+            body = render_walk_forward(result)
+        except Exception:
+            import traceback
+            body = (
+                "WALK-FORWARD STUDY — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"since={date_from} until={date_to} train={train_days} "
+                + f"hold={holdout_days} step={step_days} "
+                + f"min_sample={min_sample} objective={objective}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
+    # --- 60–65% confidence bucket root-cause deep dive (plaintext) -------
+    # Cross-tabs every baseline-recommended sim in [0.60, 0.65) against
+    # odds/edge/tier/side/movement + risk flags. Answers "which subset
+    # actually drives that bucket's -28.6% ROI in production?" so any
+    # tightening rule can target the interaction, not blanket-raise the
+    # floor.
+    if (request.GET.get('experiment') or '').lower() == 'confidence_bucket_deep_dive':
+        from django.http import HttpResponse
+        from datetime import datetime as _dt
+        from apps.analytics.services.walk_forward import (
+            run_60_65_deep_dive, render_60_65_deep_dive,
+        )
+
+        def _parse_date2(name, default):
+            raw = (request.GET.get(name) or '').strip()
+            if not raw:
+                return default
+            try:
+                return _dt.strptime(raw, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                return default
+
+        _now = timezone.localdate()
+        date_from = _parse_date2('since', _now - _td(days=180))
+        date_to = _parse_date2('until', _now - _td(days=1))
+
+        try:
+            result = run_60_65_deep_dive(
+                date_from=date_from, date_to=date_to,
+            )
+            body = render_60_65_deep_dive(result)
+        except Exception:
+            import traceback
+            body = (
+                "60-65% DEEP DIVE — STAFF DIAGNOSTIC (the experiment raised)\n"
+                + "=" * 78 + "\n"
+                + f"since={date_from} until={date_to}\n"
+                + "=" * 78 + "\n\n"
+                + traceback.format_exc()
+            )
+        return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
     # --- Replay vs Actual OVERLAP (read-only, plaintext) -----------------
     # Cross-references the lane-corrected replay against MockBet rows in the
     # same first_pitch window. Buckets: overlap / production-only / replay-only.

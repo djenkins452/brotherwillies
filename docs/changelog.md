@@ -2,6 +2,61 @@
 
 ---
 
+## 2026-08-22 — Walk-Forward Optimization Study Harness (analysis only)
+
+**READ-ONLY. STAFF-ONLY. NO CHANGES to any live decision path, methodology, threshold, or gate.**
+
+Answers ONE question: can the existing v3 information set (blend=0.55, starter recent form ACTIVE) be transformed into a robust ≥60% out-of-sample moneyline recommendation system through better selection/threshold rules — WITHOUT adding new predictive features?
+
+### What ships
+
+- `apps/analytics/services/walk_forward.py` (NEW):
+  - `CandidateConfig` — a rule variant of the recommendation gate. Defaults mirror production; overrides may only tighten. Supports per-bucket (short-favorite / heavy-favorite) tightening.
+  - `apply_candidate_gates()` — mirror of production `apps.core.services.recommendations.compute_status`, parameterised by candidate config. **Locked** against production by `GateMirrorLockTests` (900-input matrix: prob × edge × odds).
+  - `compute_candidate_metrics()` — applies a candidate's gates to cached sim outputs (no re-sim per candidate). Excludes lane != 'core' and unresolved sims. Returns n, W-L, win rate, ROI, net P/L, Wilson-95 CI, CLV breakdown, and per-bucket rollups (confidence / odds / edge).
+  - `run_walk_forward()` — expanding-training + forward-holdout folds. Per fold: score every candidate on training window, select winner by `objective` (default: win-rate then ROI) subject to `min_sample`, evaluate selected candidate on the UNSEEN holdout window. Aggregates the true walk-forward result (selected candidate per fold) plus per-candidate as-if-selected-every-fold counterfactual.
+  - `run_60_65_deep_dive()` — cross-tabs every baseline-recommended sim in [0.60, 0.65) against odds bucket × edge bucket × tier × side × movement class + risk-flag firing counts. Isolates which sub-segment actually drives that bucket's -28.6% ROI in production so any tightening can target the interaction rather than blanket-raise the floor.
+  - `render_walk_forward()` / `render_60_65_deep_dive()` — plaintext staff reports.
+  - `wilson_interval()` — Wilson score interval for binomial proportion. No scipy dep.
+  - Default candidate grid: 14 candidates — baseline V3 + probability floor sweep (0.60/0.62/0.63/0.65) + edge floor sweep (6/7/8pp) + 4 interactions + 3 short-favorite-specific + 1 heavy-favorite-specific.
+
+- `apps/analytics/views.py` — two new staff-only plaintext branches on `method_replay()`:
+  - `?experiment=walk_forward` — accepts `since`, `until`, `train_days` (default 30), `holdout_days` (default 14), `step_days` (default 14), `min_sample` (default 20), `objective` (`win_rate_then_roi` | `roi` | `wilson_lower`).
+  - `?experiment=confidence_bucket_deep_dive` — accepts `since`, `until`.
+
+- `apps/analytics/test_walk_forward.py` (NEW, 15 tests):
+  - `GateMirrorLockTests` — asserts default-config gate output identical to production `compute_status()` across a 900-input matrix (probs × edges × odds). Also asserts default-config constants equal live production imports.
+  - `CandidateTighteningTests` — probability-floor raise blocks marginal picks; short-favorite override applies only within the bucket; heavy-favorite edge floor blocks marginal heavy picks.
+  - `MetricArithmeticTests` — American→decimal conversion, Wilson interval known values, ROI math on hand-computed 3W-2L example, lane/unresolved exclusion.
+  - `SelectionTests` — default fallback when no candidate meets min-sample, `win_rate_then_roi` vs `roi` objectives select differently as expected, deterministic winner selection, `wilson_lower` runs and returns eligible.
+  - `TighteningMonotonicityTests` — raising probability floor or edge floor reduces n monotonically.
+
+### Leakage safeguards
+
+Inherits all L1–L5 safeguards from `method_replay._simulate_recommendation` (opening pre-game snapshot only, historical Elo, current-pitcher-rating caveat documented). Adds:
+
+- **L6: fold-time selection uses training-window sims only.** Selection function receives `train_metrics` dict — the holdout sims are a separate variable binding, never inspected during `select_winner`. Locked by construction.
+
+### Executing the study
+
+Local SQLite has no MLB rows — the harness must run on Railway against production Postgres. The endpoints are staff-only and read-only. See the deployment-verification note in the commit body for the exact URLs.
+
+### Tests
+
+**1442 tests pass** (previously 1427 + 15 new). Only failure is the pre-existing `feedback.tests` ImportError (feedback is not in INSTALLED_APPS) — unchanged.
+
+### What does NOT ship
+
+- No changes to production `MARKET_BLEND_WEIGHT`, `MIN_EDGE`, `MIN_PROBABILITY_FOR_RECOMMENDED`, `MAX_ABS_ODDS_FOR_RECOMMENDED`, `HEAVY_FAVORITE_ODDS`, or `STRONG_EDGE`. Production V3 methodology is preserved.
+- No changes to `USE_STARTER_RECENT_FORM` (remains `true`).
+- No changes to `_moneyline_candidate` or any live recommendation code path.
+- No schema changes. No migrations.
+- No new predictive features. No bullpen work.
+
+Whether any candidate proceeds to a flag-gated production activation is determined by the study's out-of-sample results — evidence in, decision out — per the phase-5 decision rule in the 2026-08-22 brief.
+
+---
+
 ## 2026-06-26 — v3.1 ACTIVATED + v3.2 (Bullpen) design
 
 ### v3.1 — Starter Recent Form ACTIVATED in production
