@@ -780,6 +780,84 @@ def trigger_team_offense_v2_replay(request):
     return redirect('analytics:bullpen_experiment')
 
 
+def team_batting_audit(request):
+    """v3.4 team-offense phase 2 — read-only audit of the
+    TeamBattingSnapshot backfill state. Plaintext response.
+
+    Answers: how much of the intended (team, date) space is covered,
+    how much is legitimately empty (team pre-season), how much is
+    suspect-missing (should retry), and whether the intended game
+    coverage window has enough paired snapshots for the isolated
+    analysis to run trustworthily."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    from apps.analytics.services.team_batting_audit import (
+        audit_team_batting_backfill, render_team_batting_audit,
+    )
+    try:
+        days = int(request.GET.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(30, min(days, 365))
+    audit = audit_team_batting_backfill(days=days)
+    body = render_team_batting_audit(audit)
+    from django.http import HttpResponse
+    return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
+
+@require_POST
+def trigger_team_batting_retry_missing(request):
+    """v3.4 team-offense phase 2 — retry ONLY missing (team, date)
+    snapshot pairs from the last backfill window. Preserves existing
+    successful rows; wastes no API budget re-fetching them.
+
+    Uses TeamBattingBackfillRun with only_missing=True. Worker skips
+    covered pairs BEFORE issuing the API call."""
+    from apps.analytics.models import TeamBattingBackfillRun
+    from apps.analytics.services.team_batting_backfill_service import (
+        run_team_batting_backfill,
+    )
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if TeamBattingBackfillRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A team-batting backfill is already running.')
+        return redirect('analytics:bullpen_experiment')
+
+    # Reuse the last backfill's window by default — that's the "same
+    # scope, retry the gaps" flow.
+    last = TeamBattingBackfillRun.objects.order_by('-created_at').first()
+    if last is None:
+        from django.contrib import messages
+        messages.error(
+            request,
+            'No prior TeamBattingBackfillRun to retry from. '
+            'Trigger a fresh backfill first.',
+        )
+        return redirect('analytics:bullpen_experiment')
+
+    run = TeamBattingBackfillRun.objects.create(
+        kind='historical',
+        date_from=last.date_from, date_to=last.date_to,
+        only_missing=True,
+    )
+    import threading
+    threading.Thread(
+        target=run_team_batting_backfill,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Retry-missing backfill started ({last.date_from}..{last.date_to}). '
+        f'Skips already-covered (team, date) pairs.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
 @require_POST
 def trigger_team_batting_backfill(request):
     """v3.4 team-offense phase 2 — kick off the historical

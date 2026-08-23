@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-08-23 — v3.4 SHADOW: TeamBattingSnapshot audit + retry-only-missing
+
+**Post-first-backfill diagnosis**: the initial phase-2 backfill on Railway finished as `completed_with_errors` after 46 minutes producing 4,496 rows (vs a naive 30 × 175 = 5,250 expected). The operator flagged: before running the isolated predictive-value analysis, audit the state and retry ONLY missing pairs.
+
+Ships:
+
+- **`apps.analytics.services.team_batting_audit`** — zero-API-cost audit service. Reports:
+  - Snapshot totals + last-N `TeamBattingBackfillRun` counters (attempted/succeeded/empty/errored/created/updated) + failure_summary + trailing log tail.
+  - Requirements: expected (team, date) pairs across the backfill window vs present pairs vs missing.
+  - **Missing pair classification**: `legitimate_empty` (target date is BEFORE the team's earliest final game — the byDateRange endpoint correctly returns empty splits, not an error) vs `suspect_missing` (target date ≥ team's first final game — retry candidate).
+  - **Error hotspots**: `suspect_missing` clustering by team (top 10), date (top 10), and month.
+  - **Game-level coverage** on the analysis window (default 180d): total games, both-covered, home-only, away-only, neither, coverage % by month AND by home team.
+  - **Per-candidate coverage** on an evenly-spaced sample (min(500, N_games)): fraction of games where BOTH teams' signals return non-low confidence for candidates B (rolling OPS), C (OBP+SLG), D (season+recent blend).
+  - **Earliest rolling-capable game date** — first game in the window where both teams have paired snapshots for rolling-30d.
+  - **Trustworthiness verdict** (mechanical): `READY` if snapshot_total≥3000 AND suspect_missing≤5% AND game both-covered≥80% AND rolling-capable window exists; otherwise `HOLD` with per-rule reasons.
+- **`GET /analytics/team-batting-audit/?days=180`** — staff-only plaintext render of the audit.
+- **`TeamBattingBackfillRun.only_missing`** — new boolean field (migration `analytics 0016`). When `True`, the worker precomputes the covered set and SKIPS API calls for those pairs. Preserves successful rows; wastes no API budget re-fetching them. Test locks the invariant that a pre-existing (team, date) pair is not re-attempted.
+- **`POST /analytics/team-batting-backfill/retry-missing/`** — reuses the most recent backfill's window with `only_missing=True`. Creates a new BackfillRun; runs in background.
+- **Template** — new "View Backfill Audit" link + "Retry Missing Snapshots" button in the v3.4 PHASE 2 section on `/analytics/bullpen-experiment/`.
+
+**Tests (6 new — all pass)**: classification correctness, game-coverage counting, `HOLD` on empty dataset, renderer smoke, `only_missing` worker skips present pairs, `only_missing` field default + persistence.
+
+**Full regression: 1625 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+**Discipline**: `USE_TEAM_OFFENSE=false` unchanged. V3.2 gate unchanged. Bullpen NO-GO unchanged. Isolated analysis and bounded integration replay both blocked pending an audit `READY` verdict.
+
+**Operator next-action**:
+1. Wait ~2 min for Railway deploy.
+2. Open `https://brotherwillies.com/analytics/team-batting-audit/?days=180` — plaintext audit renders inline.
+3. **If verdict = READY** → click "Run Isolated Predictive-Value Analysis".
+4. **If verdict = HOLD** → click "Retry Missing Snapshots" (background, targets only missing pairs — fast because ~750 fetches vs 5,250). When retry completes, refresh the audit; re-check verdict.
+
+---
+
 ## 2026-08-23 — v3.4 SHADOW: Team-offense PHASE 2 — OPS/OBP/SLG isolated analysis
 
 **Motivation**: the phase-1 30-day runs/game × 0.50 replay came back NO-GO on the operator's Railway execution (n=247 B vs n=236 A, win rate -1.18pp, ROI -2.10pp). Per the operator brief, the failed formulation is preserved as reference and NOT further tuned. This ships infrastructure to test whether fundamentally better metrics (OPS/OBP/SLG rate stats) contain isolated predictive value BEYOND V3.2's Elo + pitcher + recent-form + market stack — before any consideration of model integration.

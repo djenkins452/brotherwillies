@@ -368,6 +368,13 @@ class TeamBattingBackfillRun(models.Model):
     failure_summary = models.CharField(max_length=500, blank=True, default='')
     log_tail = models.TextField(blank=True, default='')
 
+    # 2026-08-23 post-first-backfill: when True, the worker skips
+    # (team, as_of_date) pairs that already have a snapshot — used for
+    # the "retry missing only" flow after a completed_with_errors run.
+    # Rerunning covered pairs would still be idempotent (update_or_create)
+    # but wastes API budget re-fetching data we already have.
+    only_missing = models.BooleanField(default=False)
+
     class Meta:
         ordering = ['-created_at']
         indexes = [

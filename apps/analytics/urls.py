@@ -97,6 +97,23 @@ urlpatterns = [
         views.trigger_team_batting_backfill,
         name='trigger_team_batting_backfill',
     ),
+    # v3.4 team-offense PHASE 2 (post-first-backfill) — read-only audit
+    # of the TeamBattingSnapshot state. Reports coverage, missing-pair
+    # classification, game-level coverage, per-candidate coverage, and
+    # a mechanical trustworthiness verdict.
+    path(
+        'team-batting-audit/',
+        views.team_batting_audit,
+        name='team_batting_audit',
+    ),
+    # v3.4 team-offense PHASE 2 — targeted retry that only fetches
+    # snapshots MISSING from the last backfill window. Preserves
+    # successful rows.
+    path(
+        'team-batting-backfill/retry-missing/',
+        views.trigger_team_batting_retry_missing,
+        name='trigger_team_batting_retry_missing',
+    ),
     # v3.4 SHADOW: lineup collection coverage report. Shows progress
     # toward the pre-registered minimum sample for a lineup replay.
     path(

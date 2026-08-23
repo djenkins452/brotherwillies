@@ -151,6 +151,28 @@
                 </button>
             </form>
 
+            <div style="margin-top:0.6rem; display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;">
+                <a href="{% url 'analytics:team_batting_audit' %}?days=180"
+                   target="_blank"
+                   style="padding:0.4rem 0.9rem; background:#1c3a5f; color:#fff; border:1px solid #3b82f6; border-radius:4px; text-decoration:none; font-size:0.85rem;">
+                    View Backfill Audit
+                </a>
+                <form method="post" action="{% url 'analytics:trigger_team_batting_retry_missing' %}" style="margin:0;">
+                    {% csrf_token %}
+                    <button type="submit"
+                            {% if team_batting.is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                            {% else %}style="padding:0.4rem 0.9rem; background:#5f3a1a; color:#fff; border:1px solid #d97706; border-radius:4px; cursor:pointer; font-size:0.85rem;"
+                            {% endif %}
+                            title="Retry ONLY the (team, date) snapshots missing from the last backfill window. Preserves successful rows; wastes no API budget re-fetching them.">
+                        Retry Missing Snapshots
+                    </button>
+                </form>
+                <span style="color:#a1a1aa; font-size:0.78rem;">
+                    (audit BEFORE running isolated analysis; retry if audit
+                    shows HOLD)
+                </span>
+            </div>
+
             <form method="post" action="{% url 'analytics:trigger_team_offense_isolated' %}" style="margin-top:0.6rem;">
                 {% csrf_token %}
                 <input type="hidden" name="days" value="180">

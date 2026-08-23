@@ -154,12 +154,33 @@ def run_team_batting_backfill(run_id: str, *, sleep_ms: int = 100) -> None:
             f'{total_calls} fetches',
         )
 
+        # 2026-08-23 (post-first-backfill): retry-only-missing path.
+        # Precompute the set of (team_id, as_of_date) pairs already
+        # covered so we can SKIP them BEFORE issuing the API call.
+        already_covered = set()
+        if run.only_missing:
+            already_covered = set(
+                TeamBattingSnapshot.objects.filter(
+                    as_of_date__gte=run.date_from,
+                    as_of_date__lte=run.date_to,
+                ).values_list('team_id', 'as_of_date')
+            )
+            _append_log(
+                run,
+                f'only_missing=True: skipping {len(already_covered)} '
+                f'already-covered (team, date) pairs',
+            )
+
         # Iterate dates outer, teams inner — makes progress reads
         # naturally chronological in the log tail.
         for date_i, target_date in enumerate(dates, 1):
             season = target_date.year
             season_start = _season_start_for(target_date)
             for team in teams:
+                if run.only_missing and (team.id, target_date) in already_covered:
+                    # Skip pairs already present — no API budget spent,
+                    # no counter increment (they're not "attempts").
+                    continue
                 run.fetches_attempted += 1
                 try:
                     stat = fetch_team_hitting_range(
