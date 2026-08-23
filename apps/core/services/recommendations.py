@@ -1112,6 +1112,8 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
                 'use_bullpen_fatigue': bool(house_contrib.get('use_bullpen_fatigue', False)),
                 # v3.4 SHADOW: lineup flag captured for the audit trail.
                 'use_lineup_quality': bool(house_contrib.get('use_lineup_quality', False)),
+                # v3.4 SHADOW: team offense flag captured.
+                'use_team_offense': bool(house_contrib.get('use_team_offense', False)),
             },
             'inputs': {
                 'home_team_rating': house_contrib.get('home_team_rating'),
@@ -1137,6 +1139,15 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
                 'away_lineup_data_confidence': house_contrib.get('away_lineup_data_confidence'),
                 'home_lineup_n_players': house_contrib.get('home_lineup_n_players'),
                 'away_lineup_n_players': house_contrib.get('away_lineup_n_players'),
+                # v3.4 SHADOW: team offense fields per side.
+                'home_team_offense_delta': house_contrib.get('home_team_offense_delta'),
+                'away_team_offense_delta': house_contrib.get('away_team_offense_delta'),
+                'home_runs_per_game': house_contrib.get('home_runs_per_game'),
+                'away_runs_per_game': house_contrib.get('away_runs_per_game'),
+                'home_team_offense_n_games': house_contrib.get('home_team_offense_n_games'),
+                'away_team_offense_n_games': house_contrib.get('away_team_offense_n_games'),
+                'home_team_offense_confidence': house_contrib.get('home_team_offense_confidence'),
+                'away_team_offense_confidence': house_contrib.get('away_team_offense_confidence'),
                 'neutral_site': house_contrib.get('neutral_site'),
                 'market_home_win_prob': house_contrib.get('market_home_win_prob'),
                 'pick_side': pick_side,
@@ -1156,6 +1167,8 @@ def _moneyline_candidate(game, data, model_source: str) -> Optional[Recommendati
                 'bullpen_fatigue_score_units': house_contrib.get('bullpen_fatigue_contribution'),
                 # v3.4 SHADOW: lineup contribution. Zero pre-activation.
                 'lineup_quality_score_units': house_contrib.get('lineup_quality_contribution'),
+                # v3.4 SHADOW: team offense contribution. Zero pre-activation.
+                'team_offense_score_units': house_contrib.get('team_offense_contribution'),
                 'market_blend_pp': house_contrib.get('market_blend_pp'),
             },
             'probabilities': {

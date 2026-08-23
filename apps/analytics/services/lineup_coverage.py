@@ -1,15 +1,17 @@
-"""v3.4 SHADOW — lineup collection coverage diagnostic.
+"""v3.4 SHADOW — lineup collection coverage + operational health diagnostic.
 
 Read-only report on progress toward the pre-registered lineup
-experiment. Answers:
+experiment PLUS operational health of the polling loop. Answers:
 
   * How many games in the window are eligible for lineup coverage?
   * How many had a legitimate pregame lineup observed?
   * What's the distribution of first-confirmation lead time (minutes
     before first_pitch)?
-  * How often does the lineup CHANGE after first confirmation?
+  * How often does the lineup CHANGE after first observation?
   * How far are we from the pre-registered minimum sample size for a
     lineup replay experiment?
+  * When did the poll last run? Did it succeed?
+  * Are there suspicious collection gaps (a day with games and no rows)?
 
 The pre-registered minimum sample for a lineup replay is set here as
 a constant (see rationale in the doc string of that constant). This
@@ -144,12 +146,48 @@ def build_coverage_report(*, days: int = 60, reference_date=None) -> Dict[str, A
         100.0 * both_covered / total_games if total_games else 0.0
     )
 
+    # --- Operational health: last poll runs + collection gaps.
+    from apps.ops.models import CronRunLog
+    from django.db.models import Q as _Q
+    poll_rows = list(
+        CronRunLog.objects.filter(command='ingest_lineups').order_by('-started_at')[:20]
+    )
+    last_run = poll_rows[0] if poll_rows else None
+    last_success = next((r for r in poll_rows if r.status == 'success'), None)
+    last_failure = next((r for r in poll_rows if r.status == 'failure'), None)
+
+    # Collection-gap detector: for each day in the window that had games,
+    # do we have AT LEAST one row observed on that day (any (game, team))?
+    from collections import defaultdict as _dd
+    games_per_day: dict = _dd(int)
+    rows_per_day: dict = _dd(int)
+    for g in games:
+        games_per_day[g.first_pitch.date()] += 1
+    for r in lineup_rows:
+        rows_per_day[r.observed_at.date()] += 1
+    gap_days = [
+        d.isoformat() for d in sorted(games_per_day)
+        if games_per_day[d] > 0 and rows_per_day.get(d, 0) == 0
+    ]
+
+    ops_health = {
+        'last_run_at': last_run.started_at.isoformat() if last_run else None,
+        'last_run_status': last_run.status if last_run else None,
+        'last_success_at': last_success.started_at.isoformat() if last_success else None,
+        'last_failure_at': last_failure.started_at.isoformat() if last_failure else None,
+        'recent_run_count_20': len(poll_rows),
+        'games_currently_watched': _games_currently_watched(),
+        'collection_gap_days': gap_days,
+        'stale_warning': _stale_warning(last_run, last_success),
+    }
+
     return {
         'window': {
             'days': days, 'from': date_from.isoformat(),
             'to': date_to.isoformat(),
             'games_evaluable': total_games,
         },
+        'ops_health': ops_health,
         'coverage': {
             'both_covered': both_covered,
             'one_side_covered': one_covered,
@@ -190,10 +228,47 @@ def build_coverage_report(*, days: int = 60, reference_date=None) -> Dict[str, A
     }
 
 
+def _games_currently_watched() -> int:
+    """MLB Games in the [now-1h, now+8h] window — what the poll would
+    inspect on its next invocation."""
+    from apps.mlb.models import Game
+    now = timezone.now()
+    return Game.objects.filter(
+        source='mlb_stats_api',
+        first_pitch__gte=now - timedelta(hours=1),
+        first_pitch__lte=now + timedelta(hours=8),
+    ).count()
+
+
+def _stale_warning(last_run, last_success) -> Optional[str]:
+    """Return a short human-readable stale warning when the poll hasn't
+    run recently OR the most recent run failed."""
+    from apps.mlb.models import Game
+    now = timezone.now()
+    games_soon = Game.objects.filter(
+        source='mlb_stats_api',
+        first_pitch__gte=now,
+        first_pitch__lte=now + timedelta(hours=4),
+    ).exists()
+    if last_run is None:
+        return 'ingest_lineups has NEVER run — wire it into Railway cron.'
+    age_min = (now - last_run.started_at).total_seconds() / 60.0
+    if games_soon and age_min > 30.0:
+        return (
+            f'games start within 4h but last poll was {age_min:.1f} min ago — '
+            f'stale collection risks losing pregame confirmation lead time.'
+        )
+    if last_success is None:
+        return 'ingest_lineups has run but NEVER SUCCEEDED — investigate.'
+    if last_run and last_run.status != 'success':
+        return f'last poll status = {last_run.status} — investigate.'
+    return None
+
+
 def render(report: Dict[str, Any]) -> str:
     lines = []
     lines.append('=' * 78)
-    lines.append('v3.4 LINEUP COLLECTION COVERAGE REPORT')
+    lines.append('v3.4 LINEUP COLLECTION COVERAGE + OPS REPORT')
     lines.append('=' * 78)
     w = report['window']
     c = report['coverage']
@@ -202,6 +277,21 @@ def render(report: Dict[str, Any]) -> str:
     er = report['experiment_readiness']
     lines.append(f'Window: {w["from"]} → {w["to"]} ({w["days"]} days)')
     lines.append(f'Games evaluable: {w["games_evaluable"]}')
+    lines.append('')
+    oh = report.get('ops_health', {}) or {}
+    lines.append('OPERATIONAL HEALTH')
+    lines.append('-' * 78)
+    lines.append(f'  last run at             : {oh.get("last_run_at") or "NEVER"}')
+    lines.append(f'  last run status         : {oh.get("last_run_status") or "NEVER"}')
+    lines.append(f'  last successful run at  : {oh.get("last_success_at") or "NEVER"}')
+    lines.append(f'  last failed run at      : {oh.get("last_failure_at") or "n/a"}')
+    lines.append(f'  recent run count (20)   : {oh.get("recent_run_count_20", 0)}')
+    lines.append(f'  games currently watched : {oh.get("games_currently_watched", 0)}')
+    lines.append(f'  collection gap days     : {len(oh.get("collection_gap_days") or [])}'
+                 + (f' — {", ".join((oh.get("collection_gap_days") or [])[:5])}'
+                    if oh.get("collection_gap_days") else ''))
+    if oh.get('stale_warning'):
+        lines.append(f'  ⚠ STALE WARNING          : {oh["stale_warning"]}')
     lines.append('')
     lines.append('COVERAGE')
     lines.append('-' * 78)

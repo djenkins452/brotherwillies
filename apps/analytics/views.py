@@ -551,6 +551,11 @@ def bullpen_experiment(request):
                     render_veto_walkforward,
                 )
                 rendered_report = render_veto_walkforward(last_completed.result)
+            elif last_completed.kind == 'offense_replay':
+                from apps.analytics.services.offense_replay import (
+                    render_offense_experiment,
+                )
+                rendered_report = render_offense_experiment(last_completed.result)
             else:
                 from apps.analytics.services.bullpen_replay import (
                     render_bullpen_experiment,
@@ -616,6 +621,44 @@ def trigger_bullpen_experiment(request):
         request,
         f'Bullpen experiment started (days={days}, blend={blend}). '
         f'Page auto-refreshes every ~8s while it runs.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def trigger_offense_replay(request):
+    """POST endpoint: kick off the team-offense replay in the
+    background thread. Reuses BullpenExperimentRun with kind='offense_replay'.
+    Concurrency-guarded."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_experiment')
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(30, min(days, 365))
+    run = BullpenExperimentRun.objects.create(
+        kind='offense_replay',
+        days=days, blend_weight=0.55,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Team-offense replay started (days={days}). '
+        f'Page auto-refreshes while it runs.',
     )
     return redirect('analytics:bullpen_experiment')
 

@@ -2,6 +2,70 @@
 
 ---
 
+## 2026-08-23 — v3.4 SHADOW: Lineup ops-monitor + Team-offense research
+
+Two tracks per the operator brief, both shipping observational/shadow infrastructure only. Production remains frozen (V3.2 gate 0.62/7pp, blend 0.55, Recent Form ON). All new flags default false.
+
+### TRACK A — Lineup collection operationalization
+
+- **Game-window-aware polling** — `ingest_lineups` now short-circuits (no API call) when no local MLB Game rows fall inside the `[now - lookback_hours, now + lookahead_hours]` window. Off-hours/off-season cron ticks cost 1 local DB query and exit. Safe to run every 15 min year-round without API budget concern.
+- **Operational health surface** on `/analytics/lineup-coverage/`:
+  - `last_run_at` / `last_run_status` / `last_successful_run_at` / `last_failed_run_at` from `CronRunLog.filter(command='ingest_lineups')`.
+  - `games_currently_watched` — count of Games in the [now, now+8h] window (what the next poll would inspect).
+  - `collection_gap_days` — days that had games but ZERO observation rows. Flags silent-collection failures within the window.
+  - `stale_warning` — human-readable string when the last poll hasn't run recently OR the most recent run failed OR games start within 4h and no poll in the last 30 min.
+  - "NEVER" markers when the poll hasn't run yet (i.e., before Railway cron is wired).
+- Report renamed `LINEUP COLLECTION COVERAGE + OPS REPORT`.
+- **Expected polling volume**: 1 `/v1/schedule?hydrate=probablePitcher,lineups` call per invocation × ~96 invocations/day at 15-min cadence = ~100 API calls/day. During off-season / off-hours: ~0 calls (short-circuited).
+
+### TRACK B — Team offensive-strength research
+
+**Team.rating audit** — the current `Team.rating` field is a static `FloatField(default=50.0)` with NO updater; frozen at seed time. Locked by `apps/core/test_feature_truth_audit.py`. In production `USE_DYNAMIC_RATINGS=true`, so `Team.rating` is IGNORED — `team_rating_for_model` returns `Team.elo_rating` (dynamic Elo, updated per game via K-factor 4). Elo captures **aggregate W-L strength**; it does NOT separate offensive volume from win outcomes.
+
+**Hypothesis**: does an explicit offensive-strength signal, computed leakage-safely from historical runs scored, contain predictive information BEYOND Elo?
+
+Ships to test this hypothesis:
+
+- **`apps.mlb.services.team_offense.team_offense_signal(team, reference_date)`** — leakage-safe rolling runs-per-game aggregate. Uses local `Game.home_score`/`away_score` (zero API cost). Strict `first_pitch < reference_date` filter. Returns `OffenseSignal(quality_delta, runs_per_game, n_games, data_confidence, latest_game_first_pitch)`.
+- Constants: `LEAGUE_AVG_RUNS_PER_GAME=4.50`, `RUNS_TO_RATING_UNITS=5.0`, `QUALITY_ABS_CAP_UNITS=10.0`, `MIN_GAMES_FOR_SIGNAL=8`, `STALE_THRESHOLD_DAYS=21`, `DEFAULT_WINDOW_DAYS=30`.
+- **Settings flag** `USE_TEAM_OFFENSE = env 'false' default`. Same shadow-only pattern as bullpen and lineup.
+- **`_score()` wire-in** — computes signal ALWAYS; adds to score only when flag is on. `feature_contributions` extended with `home_team_offense_delta`, `away_team_offense_delta`, `home_runs_per_game`, `away_runs_per_game`, `home_team_offense_n_games`, `away_team_offense_n_games`, `home_team_offense_confidence`, `away_team_offense_confidence`, `team_offense_score_units`, `flags.use_team_offense`.
+
+- **Offense replay experiment** — `apps/analytics/services/offense_replay.py` + `POST /analytics/bullpen-experiment/offense-replay/` (staff-only). Reuses `BullpenExperimentRun` with `kind='offense_replay'` (migration `analytics 0014`). Same async framework as bullpen A/B/C.
+  - Variants: **A** = V3.2 baseline; **B** = V3.2 + team_offense × 0.5 (bounded weight — signal itself is already capped at ±10 units, B_VARIANT_OFFENSE_WEIGHT=0.5 gives effective ±5-unit max score contribution, smaller than the pitcher_static term).
+  - Reports the discipline-preserving diagnostics that surfaced the bullpen NO-GO: population partition, contribution magnitude distribution + percentiles, gate-crossing counts (62% prob, 7pp edge, tier, lane, status, side), per-variant sim errors, comparability of populations.
+  - The renderer's "READ THE RESULT" block explicitly names the artificial-edge pattern to watch for.
+
+### Tests
+
+- `apps/mlb/test_team_offense.py` (NEW, 12 tests): leakage boundary (at-reference_date excluded, before included); mixed home/away runs correctly summed; insufficient-games and stale-threshold degrade to zero; flag routing (OFF invariance, breakdown carries offense keys regardless of flag, ON changes score with data); poll short-circuit (no local games → no API call); offense replay runs on empty slate.
+- Existing lineup tests updated for the renamed coverage report title.
+
+**1596 real tests pass** (previous 1585 + 12 lineup/offense + 1 fixture update). Remaining failures: pre-existing `feedback.tests` ImportError + ~15 pre-existing time-flaky MLB UI tests (already flagged as spawn-task, confirmed independently on plain HEAD with git stash).
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false` (bullpen NO-GO closure preserved).
+- `USE_LINEUP_QUALITY=false` (v3.4 lineup shadow).
+- `USE_TEAM_OFFENSE=false` (new v3.4 shadow).
+- Lineup + offense shadows are read-only until walk-forward validation passes and activation is explicitly authorized.
+- No V3.2 methodology / threshold / blend / calibration changes.
+
+### Next operator action
+
+1. Wait ~2 min for Railway to deploy this commit.
+2. **Wire the lineup poll to Railway cron** (still the operator step from the prior commit):
+   ```
+   python manage.py ingest_lineups --trigger=cron
+   ```
+   Cadence: every 10-15 minutes. Now safely runs at that cadence year-round due to the game-window short-circuit.
+3. **Watch operational health** at `https://brotherwillies.com/analytics/lineup-coverage/` (shows the new "OPERATIONAL HEALTH" block with last-run / stale-warning / collection gaps).
+4. **Trigger the first team-offense replay** — open `https://brotherwillies.com/analytics/bullpen-experiment/` and click **"Start Team-Offense Replay (v3.4)"**. Runs in ~2-5 minutes. Full A/B report renders inline when complete. Paste back for the GO/NO-GO decision on whether to walk-forward-validate.
+5. **Do NOT set `USE_TEAM_OFFENSE=true`** on Railway. Activation only after replay + walk-forward pass their ship criteria.
+
+---
+
 ## 2026-08-23 — v3.4 SHADOW: Forward lineup collection + Track B verdict E
 
 Two parallel research tracks per the v3.4 brief. Production remains frozen (V3.2 gate 0.62/7pp, blend 0.55, Recent Form ON). All new flags default false.

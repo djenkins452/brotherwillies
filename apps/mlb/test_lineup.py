@@ -277,7 +277,7 @@ class CoverageDiagnosticTests(TestCase):
         self.assertEqual(report['coverage']['both_covered'], 0)
         self.assertFalse(report['experiment_readiness']['ready_for_experiment'])
         body = render(report)
-        self.assertIn('LINEUP COLLECTION COVERAGE REPORT', body)
+        self.assertIn('LINEUP COLLECTION COVERAGE', body)
 
     def test_reports_covered_games(self):
         from apps.analytics.services.lineup_coverage import build_coverage_report

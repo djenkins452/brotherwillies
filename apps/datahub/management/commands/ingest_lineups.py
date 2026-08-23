@@ -139,6 +139,23 @@ class Command(BaseCommand):
         window_start = now - timedelta(hours=options['lookback_hours'])
         window_end = now + timedelta(hours=options['lookahead_hours'])
 
+        # Efficiency short-circuit — if no MLB games in our local DB fall
+        # inside the collection window, skip the API call entirely.
+        # Keeps the cron cheap during off-season / off-hours (~4 AM ET
+        # every day when no game is within 8 hours). Cron cadence can be
+        # tight (~15 min) without wasting API budget.
+        local_in_window = Game.objects.filter(
+            source='mlb_stats_api',
+            first_pitch__gte=window_start,
+            first_pitch__lte=window_end,
+        ).exists()
+        if not local_in_window:
+            return (
+                f'ingest_lineups: no local MLB games in window '
+                f'[{window_start.isoformat()}..{window_end.isoformat()}] '
+                f'— skipping API call.'
+            )
+
         # Pull today's + tomorrow's schedule (some late-night games span
         # date boundaries in UTC). fetch_schedule chunks internally so a
         # 2-day window is one API request in most cases.

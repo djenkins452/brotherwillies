@@ -95,6 +95,7 @@ def _score(game, weights, *, return_breakdown=False,
            use_recent_form=None,
            use_bullpen_quality=None, use_bullpen_fatigue=None,
            use_lineup_quality=None,
+           use_team_offense=None,
            reference_date=None):
     """Compute score for `game`. When `return_breakdown=True`, also returns
     a dict of per-feature contributions (signed, in score units) for the
@@ -130,6 +131,8 @@ def _score(game, weights, *, return_breakdown=False,
         use_bullpen_fatigue = bool(getattr(settings, 'USE_BULLPEN_FATIGUE', False))
     if use_lineup_quality is None:
         use_lineup_quality = bool(getattr(settings, 'USE_LINEUP_QUALITY', False))
+    if use_team_offense is None:
+        use_team_offense = bool(getattr(settings, 'USE_TEAM_OFFENSE', False))
 
     home_team_rating = team_rating_for_model(game.home_team)
     away_team_rating = team_rating_for_model(game.away_team)
@@ -182,6 +185,18 @@ def _score(game, weights, *, return_breakdown=False,
         home_lineup.quality_delta - away_lineup.quality_delta
     ) * lineup_quality_weight
 
+    # --- v3.4 SHADOW: team offensive-strength signal. Same pattern —
+    # computed always, entered into score only when flag on. Zero-cost
+    # DB aggregation over local Game.home_score / away_score with strict
+    # first_pitch < reference_date leakage guard.
+    from apps.mlb.services.team_offense import team_offense_signal
+    home_offense = team_offense_signal(game.home_team, reference_date)
+    away_offense = team_offense_signal(game.away_team, reference_date)
+    team_offense_weight = weights.get('team_offense', 1.0)
+    team_offense_diff = (
+        home_offense.quality_delta - away_offense.quality_delta
+    ) * team_offense_weight
+
     score = team_diff + pitcher_static + hfa
     if use_recent_form:
         score += form_diff
@@ -191,6 +206,8 @@ def _score(game, weights, *, return_breakdown=False,
         score += pen_fatigue_diff
     if use_lineup_quality:
         score += lineup_quality_diff
+    if use_team_offense:
+        score += team_offense_diff
 
     if not return_breakdown:
         return score
@@ -200,6 +217,7 @@ def _score(game, weights, *, return_breakdown=False,
         'use_bullpen_quality': use_bullpen_quality,
         'use_bullpen_fatigue': use_bullpen_fatigue,
         'use_lineup_quality': use_lineup_quality,
+        'use_team_offense': use_team_offense,
         'home_team_rating': float(home_team_rating),
         'away_team_rating': float(away_team_rating),
         'home_pitcher_rating': (float(game.home_pitcher.rating)
@@ -237,6 +255,17 @@ def _score(game, weights, *, return_breakdown=False,
         'home_lineup_n_players': home_lineup.n_players,
         'away_lineup_n_players': away_lineup.n_players,
         'lineup_quality_contribution': float(lineup_quality_diff),
+        # v3.4 SHADOW: team offense per side + composed diff. Zero
+        # until USE_TEAM_OFFENSE=true (defaults false).
+        'home_team_offense_delta': float(home_offense.quality_delta),
+        'away_team_offense_delta': float(away_offense.quality_delta),
+        'home_runs_per_game': float(home_offense.runs_per_game),
+        'away_runs_per_game': float(away_offense.runs_per_game),
+        'home_team_offense_n_games': home_offense.n_games,
+        'away_team_offense_n_games': away_offense.n_games,
+        'home_team_offense_confidence': home_offense.data_confidence,
+        'away_team_offense_confidence': away_offense.data_confidence,
+        'team_offense_contribution': float(team_offense_diff),
         'score': float(score),
     }
     return score, breakdown

@@ -67,6 +67,13 @@ urlpatterns = [
         views.trigger_bullpen_veto_walkforward,
         name='trigger_bullpen_veto_walkforward',
     ),
+    # v3.4 team-offense replay (2026-08-23) — A (V3.2 baseline) vs B
+    # (V3.2 + bounded team offense). Reuses the async framework.
+    path(
+        'bullpen-experiment/offense-replay/',
+        views.trigger_offense_replay,
+        name='trigger_offense_replay',
+    ),
     # v3.4 SHADOW: lineup collection coverage report. Shows progress
     # toward the pre-registered minimum sample for a lineup replay.
     path(

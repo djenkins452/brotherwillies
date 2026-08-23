@@ -252,6 +252,11 @@ class BullpenExperimentRun(models.Model):
         # diff <= -6 rating units). Pre-registered threshold; no
         # parameter search. PASS/NO-GO output.
         ('veto_walkforward', 'Bullpen Veto Walk-Forward'),
+        # v3.4 team-offense replay (2026-08-23) — A (V3.2 baseline) vs
+        # B (V3.2 + bounded team offense contribution). Same discipline
+        # that killed bullpen. NO parameter search — bounded scale
+        # baked in.
+        ('offense_replay', 'Team Offense Replay'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

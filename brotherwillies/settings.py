@@ -373,6 +373,27 @@ USE_LINEUP_QUALITY = os.environ.get('USE_LINEUP_QUALITY', 'false').lower() in (
     'true', '1', 'yes',
 )
 
+# 2026-08-23 v3.4 SHADOW — Team offensive-strength flag.
+#
+# Default 'false'. Production behavior is IDENTICAL with this flag
+# absent, false, or true, UNTIL:
+#   1. An offense_replay experiment PASSES its ship criteria.
+#   2. A walk-forward validation ALSO passes.
+#   3. Activation is explicitly authorized.
+#
+# When the flag is OFF (default), `apps.mlb.services.team_offense.
+# team_offense_signal` is computed and stored on
+# `BettingRecommendation.feature_contributions` for audit — same
+# shadow-capture pattern as bullpen and lineup. Contribution to
+# score = 0.
+#
+# The signal is derived from local `Game.home_score` / `Game.away_score`
+# — no new ingestion. Zero API cost. Leakage-safe by construction
+# (strict `first_pitch__lt=reference_date`).
+USE_TEAM_OFFENSE = os.environ.get('USE_TEAM_OFFENSE', 'false').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')
