@@ -59,6 +59,14 @@ urlpatterns = [
         views.trigger_bullpen_attribution,
         name='trigger_bullpen_attribution',
     ),
+    # v3.3 FINAL validation (2026-08-23) — walk-forward validation of
+    # the ONE surviving bullpen formulation (veto ≤-6 rule). Pre-
+    # registered threshold; no parameter search; PASS/NO-GO output.
+    path(
+        'bullpen-experiment/veto-walkforward/',
+        views.trigger_bullpen_veto_walkforward,
+        name='trigger_bullpen_veto_walkforward',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

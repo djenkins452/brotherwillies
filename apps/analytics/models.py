@@ -246,6 +246,12 @@ class BullpenExperimentRun(models.Model):
         # contribution magnitude, veto rules, bounded weights, isolated
         # predictive value, and interactions in-memory.
         ('attribution', 'Attribution + Salvage Study'),
+        # v3.3 final validation (2026-08-23) — walk-forward validation
+        # of the ONE surviving formulation from the attribution study
+        # (veto V3.2 recommendation when picked-side bullpen quality
+        # diff <= -6 rating units). Pre-registered threshold; no
+        # parameter search. PASS/NO-GO output.
+        ('veto_walkforward', 'Bullpen Veto Walk-Forward'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

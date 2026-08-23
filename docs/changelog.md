@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-08-23 — v3.3 SHADOW: Final Bullpen Veto Walk-Forward Validation
+
+Attribution + Salvage Study identified ONE surviving formulation: **veto V3.2 recommendation when picked-side bullpen quality differential ≤ -6 rating units**. Exploratory improvement was small (+0.31pp win, +0.51pp ROI), so proper walk-forward validation is required before any production activation.
+
+**This commit ships the validation harness. Whether the veto ships depends on the walk-forward result — this commit does NOT activate anything.**
+
+### What ships
+
+- **New service** [apps/analytics/services/bullpen_veto_walkforward.py](apps/analytics/services/bullpen_veto_walkforward.py) — final validation harness:
+  - Reuses `decompose_game` + `evaluate_config` from bullpen_attribution — single DB pass, everything else in-memory.
+  - Contiguous forward-holdout folds (default 30-day warmup + 14-day holdout, 14-day step). No random splits.
+  - Per-fold A (V3.2 baseline) vs B (V3.2 + veto) metrics + aggregate held-out A vs B + vetoed-bet metrics.
+  - Wilson 95% intervals on aggregate win rates.
+  - **Pre-registered veto threshold: -6 rating units.** NO parameter search.
+  - Mechanical evaluation of 6 pre-registered ship criteria → **PASS / NO-GO** verdict.
+  - Enforced constraints (locked by test): veto NEVER promotes, NEVER changes side, NEVER increases probability/edge. Post-prediction risk-control layer only.
+
+- **6 ship criteria** (all must PASS for overall PASS):
+  1. B win rate ≥ A win rate
+  2. B ROI ≥ A ROI
+  3. CLV+ does not worsen materially (Δ ≥ -2pp)
+  4. Retained volume ≥ 70% of baseline
+  5. `helped folds - hurt folds ≥ 1` (temporal consistency)
+  6. Vetoed bets ROI materially worse than retained bets (gap ≥ 2pp)
+
+- **Fold classification**: HELPED (Δ ROI > +0.5pp) / NEUTRAL (within ±0.5pp) / HURT (Δ ROI < -0.5pp).
+
+- **New `kind='veto_walkforward'`** on `BullpenExperimentRun`. Migration `analytics 0013`.
+
+- **Orchestrator** dispatches on `kind` — third path alongside `experiment` (A/B/C) and `attribution` (salvage study). Same background-thread pattern, live progress callback.
+
+- **View + trigger + URL** — `POST /analytics/bullpen-experiment/veto-walkforward/` kicks off the validation. Status page auto-detects `kind` and renders the veto report inline when complete.
+
+- **Template** — third trigger button on the existing status page: **"Start Bullpen Veto Walk-Forward (FINAL)"**.
+
+### Tests
+
+`apps/analytics/test_bullpen_veto_walkforward.py` (NEW, 10 tests):
+- `VetoConstraintTests` — veto never promotes; `_picked_side_bullpen_diff` mirrors home/away correctly; veto fires at exactly ≤-6; does not fire at -5.5.
+- `RunWalkforwardSmokeTests` — end-to-end run on 30-game fixture produces well-formed result + renderer succeeds + verdict is one of PASS/NO-GO.
+- `ShipCriteriaTests` — all-pass → PASS; low retained volume fails criterion 4; win-rate regression fails criterion 1; fewer helped-than-hurt fails criterion 5.
+- `OrchestratorKindDispatchTests` — `kind='veto_walkforward'` routes to the veto service (not the A/B/C service).
+
+**1574 real tests pass** (previous 1564 + 10 new). Only failure remains the pre-existing `feedback.tests` ImportError.
+
+### What is deliberately NOT shipped
+
+- **No `USE_BULLPEN_VETO` flag.** Not added to settings.py. Not wired into `_moneyline_candidate`. The flag + activation code lands in a separate commit ONLY IF the walk-forward returns overall verdict = **PASS**.
+- **No threshold search.** The -6 threshold is pre-registered from the attribution study; testing additional thresholds now would introduce another layer of overfitting.
+- **No modification of any V3.2 methodology, threshold, or gate.** V3.2 remains frozen.
+- **No changes to `USE_BULLPEN_QUALITY` / `USE_BULLPEN_FATIGUE`** — both remain `false`.
+
+### Next operator action
+
+1. Wait ~2 min for Railway to deploy this commit.
+2. Open `https://brotherwillies.com/analytics/bullpen-experiment/`.
+3. Click **"Start Bullpen Veto Walk-Forward (FINAL)"**.
+4. Wait ~2-5 minutes for the background run.
+5. When status shows `completed`, the walk-forward report renders inline with per-fold A/B, aggregate held-out A/B, vetoed-bet performance, ship-criteria PASS/FAIL breakdown, and overall verdict.
+6. Paste the report back for the ship/no-ship decision:
+   - **PASS** → I implement `USE_BULLPEN_VETO=false` (code default, env-var overrideable) as a post-prediction risk gate; Danny explicitly authorizes flipping it to `true` on Railway to activate.
+   - **NO-GO** → I document bullpen as NOT CURRENTLY PRODUCTION-VALUABLE; preserve historical infrastructure + shadow data for future research; move to the next predictive feature.
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false`.
+- Validation service writes ONLY to `BullpenExperimentRun`. Reads MLB data. Cannot modify any production-facing table.
+- Leakage discipline unchanged: strict `<` against `game.first_pitch`. Decomposition reuses the same helpers as `_simulate_recommendation`.
+
+---
+
 ## 2026-08-23 — v3.3 SHADOW: progress_variant field length fix (attribution 0s failure)
 
 **Root cause of the immediate 0s failure on the first Attribution + Salvage Study trigger.**

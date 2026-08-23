@@ -74,6 +74,9 @@ def run_experiment_in_background(run_id: str) -> None:
     from apps.analytics.services.bullpen_attribution import (
         run_bullpen_attribution,
     )
+    from apps.analytics.services.bullpen_veto_walkforward import (
+        run_veto_walkforward,
+    )
 
     try:
         run = BullpenExperimentRun.objects.get(id=run_id)
@@ -115,6 +118,14 @@ def run_experiment_in_background(run_id: str) -> None:
 
         if run.kind == 'attribution':
             result = run_bullpen_attribution(
+                days=run.days,
+                blend_weight=run.blend_weight,
+                progress_cb=_attribution_progress,
+            )
+        elif run.kind == 'veto_walkforward':
+            # Same progress-callback shape as attribution — the veto
+            # walk-forward publishes {phase, current, total} tuples.
+            result = run_veto_walkforward(
                 days=run.days,
                 blend_weight=run.blend_weight,
                 progress_cb=_attribution_progress,

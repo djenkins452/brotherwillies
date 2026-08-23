@@ -537,7 +537,7 @@ def bullpen_experiment(request):
 
     # Pre-render the completed report on the server so the page can
     # show it inline without an extra JS fetch. Dispatch on kind so
-    # attribution runs get their (much longer) diagnostic report.
+    # each run type gets the right renderer.
     rendered_report = ''
     if last_completed is not None and last_completed.result:
         try:
@@ -546,6 +546,11 @@ def bullpen_experiment(request):
                     render_bullpen_attribution,
                 )
                 rendered_report = render_bullpen_attribution(last_completed.result)
+            elif last_completed.kind == 'veto_walkforward':
+                from apps.analytics.services.bullpen_veto_walkforward import (
+                    render_veto_walkforward,
+                )
+                rendered_report = render_veto_walkforward(last_completed.result)
             else:
                 from apps.analytics.services.bullpen_replay import (
                     render_bullpen_experiment,
@@ -611,6 +616,46 @@ def trigger_bullpen_experiment(request):
         request,
         f'Bullpen experiment started (days={days}, blend={blend}). '
         f'Page auto-refreshes every ~8s while it runs.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def trigger_bullpen_veto_walkforward(request):
+    """POST endpoint: kick off the FINAL walk-forward validation of
+    the ONE surviving bullpen formulation (veto ≤-6 threshold) in
+    a background thread. Same async framework, kind='veto_walkforward'."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_experiment')
+
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(30, min(days, 365))
+
+    run = BullpenExperimentRun.objects.create(
+        kind='veto_walkforward',
+        days=days, blend_weight=0.55,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Bullpen veto walk-forward validation started (days={days}).',
     )
     return redirect('analytics:bullpen_experiment')
 
