@@ -2,6 +2,7 @@ import uuid
 
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 
 class UserGameInteraction(models.Model):
@@ -119,6 +120,89 @@ class BacktestRun(models.Model):
 
     def __str__(self):
         return f"BacktestRun({self.sport}, {self.created_at:%Y-%m-%d %H:%M})"
+
+
+class BullpenBackfillRun(models.Model):
+    """v3.3 SHADOW — one execution of the historical bullpen backfill
+    or daily forward refresh. Mirror of `BacktestRun` — background
+    thread flips `status` running → completed/failed. All progress
+    counters are updated live from the worker so the staff control
+    page can render sub-minute progress.
+
+    kind='historical' → operator triggered a specific date-range run
+                        via POST /analytics/bullpen-backfill/trigger/
+    kind='daily'      → nightly refresh command (bullpen_daily_refresh)
+                        wrote the row.
+
+    Concurrency: `trigger_bullpen_backfill` refuses to start when any
+    row has `status='running'`. Same defense-in-depth guard used by
+    `trigger_backtest`.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    KIND_CHOICES = [
+        ('historical', 'Historical Backfill'),
+        ('daily', 'Daily Refresh'),
+    ]
+    PHASE_CHOICES = [
+        ('starting', 'Starting'),
+        ('ingest_appearances', 'Ingesting appearances'),
+        ('build_snapshots', 'Building snapshots'),
+        ('done', 'Done'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    kind = models.CharField(max_length=15, choices=KIND_CHOICES, default='historical')
+    status = models.CharField(
+        max_length=15, choices=STATUS_CHOICES, default='pending', db_index=True,
+    )
+    phase = models.CharField(
+        max_length=25, choices=PHASE_CHOICES, default='starting',
+    )
+
+    date_from = models.DateField()
+    date_to = models.DateField()
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    # Ingest phase counters.
+    games_seen = models.IntegerField(default=0)
+    boxscores_fetched = models.IntegerField(default=0)
+    appearances_created = models.IntegerField(default=0)
+    appearances_updated = models.IntegerField(default=0)
+    appearances_skipped_existing = models.IntegerField(default=0)
+    boxscore_errors = models.IntegerField(default=0)
+
+    # Snapshot phase counters.
+    snapshots_created = models.IntegerField(default=0)
+    snapshots_skipped_existing = models.IntegerField(default=0)
+
+    error_message = models.TextField(blank=True, default='')
+    # Small rolling log tail — last few progress lines for the status page.
+    log_tail = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at', 'kind']),
+        ]
+
+    def __str__(self):
+        return f"BullpenBackfillRun({self.kind}, {self.date_from}..{self.date_to}, {self.status})"
+
+    @property
+    def elapsed_seconds(self) -> int:
+        if self.started_at is None:
+            return 0
+        end = self.finished_at or timezone.now()
+        return int((end - self.started_at).total_seconds())
 
 
 class TeamEloHistory(models.Model):

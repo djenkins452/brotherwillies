@@ -26,7 +26,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from apps.analytics.models import BacktestRun
+from apps.analytics.models import BacktestRun, BullpenBackfillRun
 
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def _run_backtest_in_background(run_id: str, use_elo: bool, sport: str):
     up as `status='failed'` with the error message persisted, not a
     permanently-running row.
     """
-    from apps.analytics.models import BacktestRun
+    from apps.analytics.models import BacktestRun, BullpenBackfillRun
     from apps.core.services.backtesting_service import run_backtest
     from apps.core.services.elo_service import force_use_dynamic
 
@@ -355,6 +355,157 @@ def elo_monitor(request):
         'monitor': monitor,
         'nav_active': '',
     })
+
+
+# ---------------------------------------------------------------------------
+# Bullpen backfill control (v3.3 SHADOW, 2026-08-22)
+#
+# Staff-only page that lets the operator trigger and observe the
+# historical bullpen backfill (~11 minutes for 6 months of MLB) from
+# the browser without needing Railway shell access. Mirrors the
+# BacktestRun control-page pattern: background thread flips
+# BullpenBackfillRun.status running → completed/failed; the page
+# auto-refreshes while a run is in flight so progress is visible live.
+#
+# Zero production side effects: only writes to RelieverAppearance
+# (upsert), StartingPitcher (create-if-new), TeamBullpenSnapshot
+# (append), and the BullpenBackfillRun row itself. Cannot activate
+# any bullpen scoring — the flag settings are not touched.
+
+def bullpen_backfill(request):
+    """Control page — trigger a historical backfill + observe status."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    is_running = BullpenBackfillRun.objects.filter(status='running').exists()
+    current = (
+        BullpenBackfillRun.objects.filter(status='running').first()
+        if is_running else None
+    )
+    recent_runs = list(BullpenBackfillRun.objects.all()[:10])
+
+    # Suggest default backfill window — 180 days back from yesterday.
+    from datetime import date as _d, timedelta as _td
+    default_end = _d.today() - _td(days=1)
+    default_start = default_end - _td(days=180)
+
+    return render(request, 'analytics/bullpen_backfill.html', {
+        'is_running': is_running,
+        'current_run': current,
+        'recent_runs': recent_runs,
+        'default_start': default_start.isoformat(),
+        'default_end': default_end.isoformat(),
+        'nav_active': '',
+        # Auto-refresh only while running so idle pages don't hammer
+        # the server. 8s balances responsive progress with light load.
+        'auto_refresh_seconds': 8 if is_running else 0,
+    })
+
+
+@require_POST
+def trigger_bullpen_backfill(request):
+    """POST endpoint that kicks off a historical backfill in a background
+    thread. Idempotent — refuses to start when any run is already
+    `status='running'`. Never touches bullpen feature flags."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if BullpenBackfillRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(
+            request,
+            'A bullpen backfill is already running. Please wait for it to finish.',
+        )
+        return redirect('analytics:bullpen_backfill')
+
+    from datetime import datetime as _dt, date as _d, timedelta as _td
+
+    def _parse_date(s, default):
+        try:
+            return _dt.strptime(s, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return default
+
+    default_end = _d.today() - _td(days=1)
+    default_start = default_end - _td(days=180)
+    date_from = _parse_date(request.POST.get('date_from'), default_start)
+    date_to = _parse_date(request.POST.get('date_to'), default_end)
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    run = BullpenBackfillRun.objects.create(
+        kind='historical',
+        status='running',
+        phase='starting',
+        date_from=date_from,
+        date_to=date_to,
+        started_at=timezone.now(),
+    )
+
+    from apps.analytics.services.bullpen_backfill_service import (
+        run_backfill_in_background,
+    )
+    threading.Thread(
+        target=run_backfill_in_background,
+        args=(str(run.id),),
+        daemon=True,
+    ).start()
+
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Bullpen backfill started ({date_from}..{date_to}). '
+        f'Page auto-refreshes every ~8s while it runs.',
+    )
+    return redirect('analytics:bullpen_backfill')
+
+
+def bullpen_integrity_audit(request):
+    """Read-only PASS/FAIL check of the bullpen data integrity —
+    duplicates, determinism (sample-based re-build), coverage, etc.
+    See `apps.analytics.services.bullpen_backfill_service.integrity_audit`
+    for the full check list."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from django.http import HttpResponse
+    from apps.analytics.services.bullpen_backfill_service import integrity_audit
+
+    try:
+        try:
+            sample = int(request.GET.get('sample', 200))
+        except (TypeError, ValueError):
+            sample = 200
+        sample = max(10, min(sample, 2000))
+
+        report = integrity_audit(sample_size=sample)
+        lines = []
+        lines.append('=' * 78)
+        lines.append('v3.3 BULLPEN DATA INTEGRITY AUDIT')
+        lines.append('=' * 78)
+        lines.append(
+            f"Overall: {report['overall']}   "
+            f"PASS: {report['summary']['PASS']}   "
+            f"FAIL: {report['summary']['FAIL']}   "
+            f"INFO: {report['summary']['INFO']}   "
+            f"(sample={sample})"
+        )
+        lines.append('')
+        for f in report['findings']:
+            lines.append(f"[{f['result']:>4}] {f['check']}")
+            lines.append(f"       {f['detail']}")
+            lines.append('')
+        body = '\n'.join(lines)
+    except Exception:
+        import traceback
+        body = (
+            'BULLPEN INTEGRITY AUDIT — STAFF DIAGNOSTIC (the audit raised)\n'
+            + '=' * 78 + '\n\n' + traceback.format_exc()
+        )
+    return HttpResponse(body, content_type='text/plain; charset=utf-8')
 
 
 # ---------------------------------------------------------------------------

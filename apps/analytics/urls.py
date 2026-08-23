@@ -8,6 +8,23 @@ app_name = 'analytics'
 urlpatterns = [
     path('backtest/', views.backtest_analytics, name='backtest'),
     path('backtest/run/', views.trigger_backtest, name='trigger_backtest'),
+    # v3.3 SHADOW — bullpen historical backfill control (2026-08-22).
+    # Staff triggers the ~11-min backfill from the browser; a background
+    # thread runs the same code paths as ingest_reliever_appearances +
+    # backfill_bullpen_snapshots and streams progress into a
+    # BullpenBackfillRun row for live status.
+    path(
+        'bullpen-backfill/',
+        views.bullpen_backfill, name='bullpen_backfill',
+    ),
+    path(
+        'bullpen-backfill/trigger/',
+        views.trigger_bullpen_backfill, name='trigger_bullpen_backfill',
+    ),
+    path(
+        'bullpen-integrity/',
+        views.bullpen_integrity_audit, name='bullpen_integrity',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

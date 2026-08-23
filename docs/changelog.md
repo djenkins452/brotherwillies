@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-08-22 — v3.3 SHADOW: Bullpen backfill operationalization (in-app)
+
+**Removes the "run this shell command on Railway" hand-off.** The bullpen backfill now runs as a background thread triggered by a staff-only POST from the browser. Same code paths as the CLI commands — one operator click starts the ~11-minute run and streams live progress into a `BullpenBackfillRun` row visible on an auto-refreshing status page.
+
+Also adds the daily-forward maintenance loop, stale-data safety in the bullpen shadow layer, and a read-only in-app data-integrity audit.
+
+Nothing in this commit changes production behavior. V3.2 remains frozen. Bullpen flags remain `false`.
+
+### Ships
+
+**`BullpenBackfillRun` model** — mirror of `BacktestRun`. Tracks status (`pending`/`running`/`completed`/`failed`), kind (`historical`/`daily`), phase (`ingest_appearances`/`build_snapshots`/`done`), the run window, live counters (`appearances_created`/`updated`/`skipped_existing`, `snapshots_created`/`skipped_existing`, `boxscore_errors`), error message + rolling log tail. Migration `analytics 0008`.
+
+**Orchestration service** — [apps/analytics/services/bullpen_backfill_service.py](apps/analytics/services/bullpen_backfill_service.py):
+
+- `run_backfill_in_background(run_id)` — background-thread body. Runs the two-phase pipeline (ingest → snapshot-build) inline while updating progress counters on the run row. Wrapped in try/except → any failure ends up as `status='failed'` with the traceback persisted.
+- `integrity_audit(sample_size=200)` — read-only audit. Checks: no duplicate `(game, pitcher)` in `RelieverAppearance`; no duplicate `(team, as_of)` in `TeamBullpenSnapshot`; snapshot-determinism sample (re-builds N recent snapshots via the builder, flags divergence >0.05 ERA); one-starter-per-team-per-game sample; 30-team coverage; last-60-days both-covered %; data-confidence distribution. Returns PASS/FAIL/INFO per finding + overall.
+
+**Staff control page + endpoints** — mirror the `BacktestRun` control-page pattern:
+
+- `GET /analytics/bullpen-backfill/` — status page with trigger form, current run's live progress, log tail, and history of recent runs. Auto-refreshes every 8s while a run is in flight.
+- `POST /analytics/bullpen-backfill/trigger/` — kicks off the background thread. Concurrency guard: refuses to start when a run is already active (soft fail → redirect back with a warning flash).
+- `GET /analytics/bullpen-integrity/` — plaintext PASS/FAIL audit. Accepts `?sample=N`.
+
+All three staff-only (same `_staff_required` guard used by every other analytics view). Trigger endpoint is `@require_POST` + CSRF-protected via Django's default middleware.
+
+**Template** — `templates/analytics/bullpen_backfill.html`. Shows: trigger form (with date pickers defaulted to the last 180 days), current run's phase + progress counters, live log tail, recent-runs table, and the "after backfill completes" checklist linking to the integrity audit + `?experiment=bullpen` replay.
+
+**Daily forward maintenance** — [apps/datahub/management/commands/bullpen_daily_refresh.py](apps/datahub/management/commands/bullpen_daily_refresh.py):
+
+- Runs `ingest_reliever_appearances --yesterday` then `backfill_bullpen_snapshots --today`.
+- Records the run in `BullpenBackfillRun` (kind=`'daily'`) AND wraps the whole thing in `cron_run_log('bullpen_daily_refresh', trigger='cron')` so it surfaces on the ops dashboard alongside `refresh_data`, `capture_snapshots`, etc.
+- Failure re-raises → cron_run_log captures the traceback and marks the row failed.
+- Integrates with Railway either as a step in the custom start command or as a scheduled ops trigger.
+
+**Stale-data safety** — [apps/mlb/services/bullpen.py](apps/mlb/services/bullpen.py):
+
+- New `STALE_THRESHOLD_DAYS = 3`. If the newest `TeamBullpenSnapshot` before `reference_date` is more than 3 days old (relative to `reference_date`, NOT relative to `now()` — critical for replay correctness), the signal degrades to `(0.0, 0.0, 'low', <snapshot_as_of>)` instead of returning stale data.
+- Locked by `StaleDataSafetyTests`: (a) stale snapshot → zero, (b) fresh snapshot → real signal, (c) 60-day-old historical replay with 1-day-before-game snapshot returns real signal (guard uses `reference_date`, not now).
+
+### Tests
+
+`apps/analytics/test_bullpen_backfill.py` (NEW, 11 tests):
+
+1. Model defaults + `elapsed_seconds` accessor.
+2. Access control — 302/403 for anon and non-staff on all three endpoints; staff gets 200.
+3. Trigger concurrency guard — while a run is `status='running'`, second POST redirects back with warning + no new row created.
+4. Integrity audit runs cleanly on empty and populated databases; populates all 7 expected checks.
+5. Stale-data safety — 3 tests locking the behavior described above.
+
+**1517 tests pass** (previous 1506 + 11 new). Only two remaining failures: the pre-existing `feedback.tests` ImportError (feedback not in INSTALLED_APPS; unchanged for months) and `apps/datahub/tests.py::GolfOddsProviderPersistGateTests::test_persist_dedupes_same_day_duplicates` — a pre-existing failure at HEAD (confirmed independently via `git stash + isolated re-run`) that is NOT related to any v3.3 work. Flagged as a follow-up task; no bullpen work should be blocked on it.
+
+### Operator flow (superseding the previous "run these shell commands" step)
+
+1. Open `https://brotherwillies.com/analytics/bullpen-backfill/`.
+2. Confirm date range (defaults to last 180 days). Click **Start Backfill**.
+3. Watch the page auto-refresh — progress counters and log tail update every ~8 seconds. A 180-day run takes ~11 minutes.
+4. When status shows `completed`, hit `https://brotherwillies.com/analytics/bullpen-integrity/` — must show overall **PASS**.
+5. Hit `https://brotherwillies.com/analytics/method-replay/?experiment=bullpen&days=180` — should now show real A/B/C evidence.
+6. Paste the replay output back for the ship-criteria evaluation.
+
+**Daily forward job** (Railway operator action):
+
+Add `python manage.py bullpen_daily_refresh --trigger=cron` to the same cron / start-command chain that runs `refresh_data`. It's a single wrapper that ingests yesterday's appearances and rebuilds today's snapshots. Idempotent.
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway (production gate unchanged, still 0.62/7pp).
+- `USE_BULLPEN_QUALITY=false` (code default). Bullpen quality contribution NEVER enters the score.
+- `USE_BULLPEN_FATIGUE=false` (code default). Bullpen fatigue contribution NEVER enters the score.
+- Backfill writes ONLY to `RelieverAppearance`, `StartingPitcher` (create-if-new), `TeamBullpenSnapshot`, and `BullpenBackfillRun`. Cannot touch `BettingRecommendation`, `MockBet`, `Team.wins/losses`, or any other production-facing table.
+- Stale-data safety: even after activation, if daily refresh fails silently for 3+ days, the shadow contribution degrades to zero instead of scoring against stale data.
+
+---
+
 ## 2026-08-22 — v3.3 SHADOW: Historical bullpen reconstruction pipeline
 
 **Answers the v3.3 data-source question with empirical evidence.** MLB Stats API `/api/v1/game/{gamePk}/boxscore` is the correct source — verified against real production traffic. Same code path serves historical backfill and daily forward updates so historical reconstruction and production computation cannot drift.

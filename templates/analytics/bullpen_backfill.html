@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% load tz_extras %}
+{% block title %}Bullpen Backfill | Brother Willies{% endblock %}
+
+{% block extra_css %}
+{% if auto_refresh_seconds %}
+<meta http-equiv="refresh" content="{{ auto_refresh_seconds }}">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
+    <h1 style="margin-bottom: 0.4rem;">v3.3 Bullpen Backfill</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
+        Populates <code>RelieverAppearance</code> from MLB Stats API boxscores and
+        rebuilds <code>TeamBullpenSnapshot</code> rows via the deterministic
+        builder. Shadow-only — no production behavior change; bullpen flags
+        remain <strong>OFF</strong> regardless of what happens on this page.
+    </p>
+
+    {% if messages %}
+        {% for m in messages %}
+            <div style="margin-bottom:0.75rem; padding:0.55rem 0.8rem; border-radius:4px; background:#1a1a1a; border-left:3px solid #666; color:#ddd;">
+                {{ m }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Trigger Historical Backfill</h2>
+
+        {% if is_running %}
+            <div style="margin-bottom: 0.9rem; padding: 0.6rem 0.8rem; background: #0f1f17; border-left: 3px solid #22c55e; border-radius: 4px;">
+                <strong style="color: #22c55e;">⏳ Running…</strong>
+                {% if current_run %}
+                    <span style="color: #aaa; font-size: 0.85rem;">
+                        ({{ current_run.date_from }}..{{ current_run.date_to }},
+                        phase: {{ current_run.get_phase_display }},
+                        {{ current_run.elapsed_seconds }}s elapsed)
+                    </span>
+                    <div style="margin-top:0.5rem; color:#bbb; font-size:0.85rem;">
+                        Ingest: created={{ current_run.appearances_created }},
+                        updated={{ current_run.appearances_updated }},
+                        skipped_existing={{ current_run.appearances_skipped_existing }},
+                        boxscore_errors={{ current_run.boxscore_errors }},
+                        boxscores_fetched={{ current_run.boxscores_fetched }}/{{ current_run.games_seen }}<br>
+                        Snapshots: created={{ current_run.snapshots_created }},
+                        skipped={{ current_run.snapshots_skipped_existing }}
+                    </div>
+                {% endif %}
+                <p style="color: #888; font-size: 0.8rem; margin: 0.4rem 0 0;">
+                    Page refreshes every {{ auto_refresh_seconds }}s until the run finishes.
+                </p>
+            </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'analytics:trigger_bullpen_backfill' %}">
+            {% csrf_token %}
+            <label style="display:inline-block; margin-right:0.75rem; font-size:0.85rem; color:#bbb;">
+                From:
+                <input type="date" name="date_from" value="{{ default_start }}"
+                       style="background:#0e0e0e; color:#eee; border:1px solid #333; padding:0.3rem; border-radius:3px;">
+            </label>
+            <label style="display:inline-block; margin-right:1rem; font-size:0.85rem; color:#bbb;">
+                To:
+                <input type="date" name="date_to" value="{{ default_end }}"
+                       style="background:#0e0e0e; color:#eee; border:1px solid #333; padding:0.3rem; border-radius:3px;">
+            </label>
+            <button type="submit"
+                    {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                    {% else %}style="padding:0.5rem 1rem; background:#1f4534; color:#fff; border:1px solid #2d6147; border-radius:4px; cursor:pointer; font-size:0.9rem;"
+                    {% endif %}>
+                Start Backfill
+            </button>
+        </form>
+
+        <p style="color:#888; font-size:0.78rem; margin: 0.9rem 0 0;">
+            A 6-month backfill fetches ~2700 boxscores at ~250 ms/req → about
+            11 minutes wall-clock. Idempotent — safe to re-run; games already
+            ingested are skipped. Does not touch production recommendations.
+        </p>
+    </section>
+
+    {% if current_run and current_run.log_tail %}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Live progress log (current run)</h2>
+        <pre style="color:#bbb; font-size:0.75rem; white-space:pre-wrap; margin:0; max-height:260px; overflow-y:auto;">{{ current_run.log_tail }}</pre>
+    </section>
+    {% endif %}
+
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Recent runs</h2>
+        {% if recent_runs %}
+        <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+            <thead>
+                <tr style="text-align:left; color:#888; border-bottom:1px solid #333;">
+                    <th style="padding:6px 8px;">Started</th>
+                    <th style="padding:6px 8px;">Kind</th>
+                    <th style="padding:6px 8px;">Window</th>
+                    <th style="padding:6px 8px;">Phase</th>
+                    <th style="padding:6px 8px;">Status</th>
+                    <th style="padding:6px 8px; text-align:right;">Apps c/u/s/err</th>
+                    <th style="padding:6px 8px; text-align:right;">Snaps c/s</th>
+                    <th style="padding:6px 8px; text-align:right;">Elapsed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent_runs %}
+                <tr style="border-bottom:1px solid #232323; color:#ddd;">
+                    <td style="padding:6px 8px;">{{ r.started_at|default:r.created_at|date:"m/d H:i" }}</td>
+                    <td style="padding:6px 8px;">{{ r.get_kind_display }}</td>
+                    <td style="padding:6px 8px;">{{ r.date_from }}..{{ r.date_to }}</td>
+                    <td style="padding:6px 8px; color:#aaa;">{{ r.get_phase_display }}</td>
+                    <td style="padding:6px 8px;">
+                        {% if r.status == 'completed' %}<span style="color:#22c55e;">✓ completed</span>
+                        {% elif r.status == 'running' %}<span style="color:#eab308;">⏳ running</span>
+                        {% elif r.status == 'failed' %}<span style="color:#ef4444;">✗ failed</span>
+                        {% else %}{{ r.status }}{% endif %}
+                    </td>
+                    <td style="padding:6px 8px; text-align:right;">
+                        {{ r.appearances_created }}/{{ r.appearances_updated }}/{{ r.appearances_skipped_existing }}/{{ r.boxscore_errors }}
+                    </td>
+                    <td style="padding:6px 8px; text-align:right;">{{ r.snapshots_created }}/{{ r.snapshots_skipped_existing }}</td>
+                    <td style="padding:6px 8px; text-align:right;">{{ r.elapsed_seconds }}s</td>
+                </tr>
+                {% if r.error_message %}
+                <tr><td colspan="8" style="padding:0 8px 6px 24px; color:#ef4444; font-size:0.75rem;">{{ r.error_message|linebreaksbr|truncatechars:500 }}</td></tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <p style="color:#888; font-size:0.85rem; margin:0;">No backfill runs yet. Trigger one above.</p>
+        {% endif %}
+    </section>
+
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">After backfill completes</h2>
+        <p style="color:#bbb; font-size:0.85rem; margin: 0 0 0.6rem;">
+            Once a run finishes successfully:
+        </p>
+        <ol style="color:#ddd; font-size:0.85rem; margin: 0; padding-left:1.4rem;">
+            <li>Run the <a href="{% url 'analytics:bullpen_integrity' %}" style="color:#60a5fa;">data integrity audit</a> — must show overall <strong>PASS</strong>.</li>
+            <li>Open the <a href="/analytics/method-replay/?experiment=bullpen&days=180" style="color:#60a5fa;">bullpen replay experiment</a> — should now show <code>both_covered_pct &ge; 80%</code> and real A/B/C comparison.</li>
+        </ol>
+        <p style="color:#888; font-size:0.78rem; margin: 0.75rem 0 0;">
+            The <code>USE_BULLPEN_QUALITY</code> and <code>USE_BULLPEN_FATIGUE</code> flags remain OFF.
+            Activation is a separate authorized decision after evidence review.
+        </p>
+    </section>
+</div>
+{% endblock %}

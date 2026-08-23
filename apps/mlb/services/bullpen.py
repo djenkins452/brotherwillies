@@ -70,6 +70,23 @@ QUALITY_SCALE_FACTOR = 8.0  # rating units per 1.00 ERA gap
 # Cap the quality delta to avoid a single elite/terrible pen dominating.
 QUALITY_ABS_CAP = 12.0      # rating units
 
+# --- Stale-data safety (v3.3 operationalization, 2026-08-22) ---
+#
+# Even after backfill + daily refresh, the ingest job can silently fall
+# behind — API outage, bad deploy, missed cron. If we allow the shadow
+# layer to keep using an old snapshot forever, a future activation
+# would be scoring off stale bullpen state without any warning. The
+# guard here degrades the signal to zero when the newest snapshot
+# BEFORE reference_date is older than STALE_THRESHOLD_DAYS.
+#
+# Semantic: "as of reference_date T, is the latest available snapshot
+# more than 3 days old?" Anchoring on reference_date (not now()) means
+# replay of a historical game G is judged by data available IMMEDIATELY
+# before G — a 5-day-old-at-G snapshot is stale, but "2-months-ago-from-
+# today" is fine because the replay is scoring what would have been
+# known at G's first_pitch.
+STALE_THRESHOLD_DAYS = 3
+
 # Fatigue: applied as a negative delta when the pen is over-used or its
 # top arm isn't available. Kept small vs quality — fatigue is a
 # tie-breaker, not a primary driver.
@@ -143,6 +160,19 @@ def team_bullpen_signal(team, reference_date) -> BullpenSignal:
     snap = _latest_snapshot_before(team, reference_date)
     if snap is None:
         return BullpenSignal(0.0, 0.0, 'low', None)
+
+    # v3.3 STALE-DATA SAFETY: if the newest snapshot BEFORE
+    # reference_date is more than STALE_THRESHOLD_DAYS old, degrade
+    # to zero. Prevents production from silently scoring against
+    # arbitrarily old data if the daily refresh stops running.
+    from datetime import timedelta as _td
+    if reference_date is None:
+        from django.utils import timezone as _tz
+        reference_date_for_age = _tz.now()
+    else:
+        reference_date_for_age = reference_date
+    if reference_date_for_age - snap.as_of > _td(days=STALE_THRESHOLD_DAYS):
+        return BullpenSignal(0.0, 0.0, 'low', snap.as_of)
 
     # Quality: LOWER ERA is BETTER — signed so team-with-3.20-pen
     # yields positive quality delta.
