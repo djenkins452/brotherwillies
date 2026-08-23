@@ -51,6 +51,14 @@ urlpatterns = [
         'bullpen-experiment/trigger/',
         views.trigger_bullpen_experiment, name='trigger_bullpen_experiment',
     ),
+    # v3.3 attribution study (2026-08-23): diagnostic breakdown of the
+    # WHY behind the A/B/C degradation. Runs on the async framework
+    # (same BullpenExperimentRun model, kind='attribution').
+    path(
+        'bullpen-experiment/attribution/',
+        views.trigger_bullpen_attribution,
+        name='trigger_bullpen_attribution',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

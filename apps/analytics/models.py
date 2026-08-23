@@ -237,8 +237,23 @@ class BullpenExperimentRun(models.Model):
         ('failed', 'Failed'),
     ]
 
+    KIND_CHOICES = [
+        # Original A/B/C replay — 3 variants (baseline / +quality / +quality+fatigue).
+        ('experiment', 'A/B/C Replay Experiment'),
+        # v3.3 attribution study (2026-08-23) — diagnostic breakdown of
+        # WHY the A/B/C experiment showed bullpen degrading the model.
+        # Runs one simulate-once pass, then evaluates population partition,
+        # contribution magnitude, veto rules, bounded weights, isolated
+        # predictive value, and interactions in-memory.
+        ('attribution', 'Attribution + Salvage Study'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    kind = models.CharField(
+        max_length=20, choices=KIND_CHOICES, default='experiment',
+        db_index=True,
+    )
     status = models.CharField(
         max_length=15, choices=STATUS_CHOICES, default='pending', db_index=True,
     )

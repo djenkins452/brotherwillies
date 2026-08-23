@@ -63,12 +63,16 @@ def _json_safe(obj):
 
 def run_experiment_in_background(run_id: str) -> None:
     """Background-thread body. Loads the run row, executes the
-    experiment with a progress callback that writes back into the
-    row, persists the result. Wrapped in try/except so failure ends
-    up as status='failed' with a human-readable summary."""
+    experiment (kind='experiment' = A/B/C replay; kind='attribution'
+    = full salvage study) with a progress callback that writes back
+    into the row, persists the result. Wrapped in try/except so
+    failure ends up as status='failed' with a human-readable summary."""
     from apps.analytics.models import BullpenExperimentRun
     from apps.analytics.services.bullpen_replay import (
         run_bullpen_experiment,
+    )
+    from apps.analytics.services.bullpen_attribution import (
+        run_bullpen_attribution,
     )
 
     try:
@@ -81,12 +85,12 @@ def run_experiment_in_background(run_id: str) -> None:
         run.status = 'running'
         run.started_at = timezone.now()
         run.save()
-        _append_log(run, f'Starting experiment days={run.days} blend={run.blend_weight}')
+        _append_log(run, f'Starting {run.kind} days={run.days} blend={run.blend_weight}')
 
-        # Progress callback — called every ~25 games per variant. Batched
-        # save keeps the DB write load small while still giving the
-        # status page visible motion.
-        def _progress(*, variant, i, total, sims_kept, errors):
+        # Progress callback shape depends on kind:
+        #   experiment  → (variant, i, total, sims_kept, errors)
+        #   attribution → (phase, current, total)
+        def _experiment_progress(*, variant, i, total, sims_kept, errors):
             run.progress_variant = variant
             run.progress_current = i
             run.progress_total = total
@@ -99,11 +103,28 @@ def run_experiment_in_background(run_id: str) -> None:
                     f'variant {variant}: {i}/{total} sims, kept={sims_kept}, err={errors}',
                 )
 
-        result = run_bullpen_experiment(
-            days=run.days,
-            blend_weight=run.blend_weight,
-            progress_cb=_progress,
-        )
+        def _attribution_progress(*, phase, current, total):
+            run.progress_variant = phase
+            run.progress_current = current
+            run.progress_total = total
+            run.save(update_fields=[
+                'progress_variant', 'progress_current', 'progress_total',
+            ])
+            if current % 300 == 0:
+                _append_log(run, f'{phase}: {current}/{total}')
+
+        if run.kind == 'attribution':
+            result = run_bullpen_attribution(
+                days=run.days,
+                blend_weight=run.blend_weight,
+                progress_cb=_attribution_progress,
+            )
+        else:
+            result = run_bullpen_experiment(
+                days=run.days,
+                blend_weight=run.blend_weight,
+                progress_cb=_experiment_progress,
+            )
         run.result = _json_safe(result)
         run.status = 'completed'
         run.finished_at = timezone.now()

@@ -462,6 +462,55 @@ def trigger_bullpen_backfill(request):
     return redirect('analytics:bullpen_backfill')
 
 
+@require_POST
+def trigger_bullpen_attribution(request):
+    """POST endpoint: kick off the full A-vs-B partition + salvage
+    study in a background thread. Reuses BullpenExperimentRun with
+    kind='attribution'. Concurrency guard: soft-fails if any run
+    (experiment or attribution) is currently active."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_experiment')
+
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(7, min(days, 365))
+
+    try:
+        blend = float(request.POST.get('blend', 0.55))
+    except (TypeError, ValueError):
+        blend = 0.55
+    if not (0.0 <= blend <= 0.80):
+        blend = 0.55
+
+    run = BullpenExperimentRun.objects.create(
+        kind='attribution',
+        days=days, blend_weight=blend,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Bullpen attribution study started (days={days}). '
+        f'Page auto-refreshes every ~8s while it runs.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
 def bullpen_experiment(request):
     """v3.3 SHADOW — status page for the async bullpen A/B/C replay.
 
@@ -487,12 +536,21 @@ def bullpen_experiment(request):
     ).first()
 
     # Pre-render the completed report on the server so the page can
-    # show it inline without an extra JS fetch.
+    # show it inline without an extra JS fetch. Dispatch on kind so
+    # attribution runs get their (much longer) diagnostic report.
     rendered_report = ''
     if last_completed is not None and last_completed.result:
-        from apps.analytics.services.bullpen_replay import render_bullpen_experiment
         try:
-            rendered_report = render_bullpen_experiment(last_completed.result)
+            if last_completed.kind == 'attribution':
+                from apps.analytics.services.bullpen_attribution import (
+                    render_bullpen_attribution,
+                )
+                rendered_report = render_bullpen_attribution(last_completed.result)
+            else:
+                from apps.analytics.services.bullpen_replay import (
+                    render_bullpen_experiment,
+                )
+                rendered_report = render_bullpen_experiment(last_completed.result)
         except Exception:
             import traceback
             rendered_report = (

@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-08-23 — v3.3 SHADOW: Bullpen Attribution + Salvage Study
+
+The 180-day A/B/C bullpen replay ran cleanly and produced clear evidence of NO-GO:
+
+| Variant | n | W-L | Win | ROI | CLV+ |
+|---|---:|---|---:|---:|---:|
+| A — V3.2 baseline | 238 | 171-67 | 71.85% | +21.95% | 56.0% |
+| B — V3.2 + bullpen quality | 415 | 269-146 | 64.82% | +11.17% | 55.3% |
+| C — V3.2 + quality + fatigue | 416 | 271-145 | 65.14% | +11.82% | 55.0% |
+
+Bullpen NEARLY DOUBLED recommendation volume (238→415) while cutting win rate by ~7pp and ROI by ~11pp. Coverage 99.02%, sim populations A/B/C = 1504/1504/1504 (comparable). Classic "artificial edge" signature — bullpen contribution is pushing marginal games through the 62% / 7pp gates.
+
+**Bullpen flags remain OFF. V3.2 production remains frozen. No walk-forward validation.**
+
+### What ships: 8-section attribution study
+
+Answers the diagnostic brief: WHY did bullpen degrade the model, and does the data contain useful predictive information at all?
+
+- **New service** [apps/analytics/services/bullpen_attribution.py](apps/analytics/services/bullpen_attribution.py):
+  - `decompose_game(game, blend_weight)` — one DB pass per game, returns full `GameDecomposition` (rating/pitcher-static/pitcher-form/HFA/bullpen-quality-delta/fatigue-delta + market prob + opening/closing odds + bullpen data confidence per side + movement signals for both sides + top-reliever-available flags).
+  - `evaluate_config(decomp, config)` — reconstructs pick+prob+edge+gate under ARBITRARY bullpen weighting (scale factor + probability-pp cap + veto callable) from cached decompositions. **No re-simulation needed for any variant** — all salvage tests are in-memory operations. Walk-forward-style "simulate once, evaluate many configs" pattern.
+  - `BullpenConfig` dataclass — quality scale, fatigue scale, quality/fatigue caps in pp, optional `apply_veto` callable.
+  - `run_bullpen_attribution(days, blend_weight)` — full 8-section report:
+    1. **Section 1** — A/B population partition (both / A-only / B-only / neither) with per-partition metrics + `b_only` averages (avg pick prob, edge, pick odds, bullpen quality diff)
+    2. **Section 2** — contribution magnitude distribution (mean/median/std/min/max, |Δ| percentiles p10..p99, bucket counts <1/1-2/2-3/3-5/5-8/8+pp) + gate-crossing counts (62% prob, 7pp edge, tier, lane, status, side changes)
+    3. **Section 4** — 6 veto architectures (pen delta ≤ -2/-4/-6 units, top reliever unavailable, fatigue delta ≤ -1, combined top-out OR delta ≤ -3). Bullpen can only DOWNGRADE, never promote.
+    4. **Section 5** — 8 bounded-weight variants (scale 0.10/0.25/0.50/0.75, cap ±0.5/±1/±2/±3pp)
+    5. **Section 6** — isolated feature analysis: bet the bullpen-favored side across ALL covered games, bucket by differential magnitude (large_neg / mod_neg / neutral / mod_pos / large_pos), report per-bucket win rate. Repeats for fatigue.
+    6. **Section 7** — 11 interaction cohorts: weak-starter+strong-pen, strong-starter+weak-pen, short-fav / mid-fav / underdog picks, home / road picks, low/high baseline prob, low/high baseline edge. Baseline vs +quality metrics per cohort.
+    7. **Section 8** — mechanical verdict A–G with mechanical thresholds (ROI improvement ≥ +0.5pp AND win-rate degradation ≤ 0.5pp AND retained volume ≥ 50% of baseline). Falls to A ("abandon") when nothing clears.
+  - `render_bullpen_attribution(result)` — plaintext report with all sections + verdict letter and reason.
+
+- **Reuses BullpenExperimentRun** with new `kind='attribution'` (default `'experiment'`). Migration `analytics 0011`.
+
+- **Orchestrator** [apps/analytics/services/bullpen_experiment_service.py](apps/analytics/services/bullpen_experiment_service.py) dispatches on `kind` — same background-thread + progress-callback pattern used by A/B/C runs.
+
+- **View + trigger + URL** — `POST /analytics/bullpen-experiment/attribution/` kicks off attribution run in a background thread. The existing status page auto-detects `kind` and renders the appropriate report.
+
+- **Template** update — second trigger button labeled "Start Attribution + Salvage Study" on the existing status page.
+
+### Tests
+
+`apps/analytics/test_bullpen_attribution.py` (NEW, 9 tests):
+- Decomposition returns None on games without pre-game odds; returns populated dataclass otherwise; `both_bullpens_covered` flag set correctly.
+- `evaluate_config` at scale=0 reproduces baseline; at scale=1 with strong bullpen delta shifts pick_prob in the expected direction; bounded scale sits monotonically between full and off.
+- Veto NEVER promotes a non-recommended pick.
+- Full attribution report runs end-to-end on 10-game fixture without exception; all 8 section keys present; verdict is one of A-G; renderer produces non-empty report with SECTION 1..8 headers.
+- Orchestrator dispatches on `kind` correctly (attribution vs experiment path).
+- Verdict logic returns 'A' when no bullpen variant beats baseline sufficiently.
+
+**1559 real tests pass** (previous 1550 + 9 new). Only remaining failure is the pre-existing `feedback.tests` ImportError.
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false` — bullpen contribution NEVER enters the score. Attribution run does not touch flags.
+- Attribution service writes ONLY to `BullpenExperimentRun`. Reads MLB game/odds/pitcher/snapshot data. Cannot modify any production-facing table.
+- Leakage discipline unchanged: strict `<` against `game.first_pitch` for every snapshot/history lookup. Decomposition uses the same helpers as `_simulate_recommendation`.
+- No walk-forward validation of the current bullpen implementation. Any candidate surfaced by the attribution study requires a separate authorized walk-forward before any further consideration.
+
+### Next operator action
+
+1. Wait ~2 min for Railway to deploy this commit.
+2. Open `https://brotherwillies.com/analytics/bullpen-experiment/`.
+3. Click **"Start Attribution + Salvage Study"** (180-day default).
+4. Wait ~2-5 min for the background run to complete.
+5. When status shows `completed`, the full 8-section report renders inline on the same page. Paste back for the verdict interpretation + next-feature decision.
+
+The attribution study answers whether ANY reformulation of bullpen (bounded scale, veto architecture, narrow interaction cohort) beats V3.2 baseline. If not, verdict = **A** (abandon bullpen; move to the next predictive feature). If yes, verdict = **B/C/F** (surfaces the specific formulation to consider under separate walk-forward validation). **Even a positive verdict does NOT authorize activation** — it merely surfaces a candidate for a further explicit decision.
+
+---
+
 ## 2026-08-23 — v3.3 SHADOW: Bullpen replay 500 fix (async experiment runner)
 
 **Diagnosis** (proven, not guessed):

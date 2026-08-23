@@ -61,8 +61,24 @@
                     {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
                     {% else %}style="padding:0.5rem 1rem; background:#1f4534; color:#fff; border:1px solid #2d6147; border-radius:4px; cursor:pointer; font-size:0.9rem;"
                     {% endif %}>
-                Start Experiment
+                Start Experiment (A/B/C)
             </button>
+        </form>
+
+        <form method="post" action="{% url 'analytics:trigger_bullpen_attribution' %}" style="margin-top:0.75rem;">
+            {% csrf_token %}
+            <input type="hidden" name="days" value="180">
+            <input type="hidden" name="blend" value="0.55">
+            <button type="submit"
+                    {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                    {% else %}style="padding:0.5rem 1rem; background:#4a2f1f; color:#fff; border:1px solid #a16207; border-radius:4px; cursor:pointer; font-size:0.9rem;"
+                    {% endif %}
+                    title="Full 8-section diagnostic: A/B partition, contribution magnitude, gate crossings, veto/bounded-weight variants, isolated feature analysis, interaction cohorts, mechanical verdict.">
+                Start Attribution + Salvage Study
+            </button>
+            <span style="color:#888; font-size:0.78rem; margin-left:0.6rem;">
+                (diagnostic run — same population, deeper analysis than A/B/C)
+            </span>
         </form>
     </section>
 
