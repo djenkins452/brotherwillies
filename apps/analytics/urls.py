@@ -67,6 +67,12 @@ urlpatterns = [
         views.trigger_bullpen_veto_walkforward,
         name='trigger_bullpen_veto_walkforward',
     ),
+    # v3.4 SHADOW: lineup collection coverage report. Shows progress
+    # toward the pre-registered minimum sample for a lineup replay.
+    path(
+        'lineup-coverage/',
+        views.lineup_coverage, name='lineup_coverage',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

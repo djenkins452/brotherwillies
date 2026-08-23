@@ -82,11 +82,11 @@ class FeatureContributionCaptureTests(TestCase):
         self.assertIsNotNone(rec)
         fc = rec.feature_contributions
         self.assertEqual(fc.get('sport'), 'mlb')
-        # 2026-08-22 v3.3: engine_version bumped to 'v3.3-shadow' to
+        # 2026-08-22 v3.3: engine_version bumped to 'v3.4-shadow' to
         # reflect the added bullpen shadow-capture fields. The recent-form
         # attribution still flows through the same payload — this test
         # asserts the version tag advances alongside the shadow addition.
-        self.assertEqual(fc.get('engine_version'), 'v3.3-shadow')
+        self.assertEqual(fc.get('engine_version'), 'v3.4-shadow')
         # Pitcher contribution is in the dict; non-zero given the rating gap.
         ps = fc['contributions_pp']['pitcher_static_score_units']
         self.assertIsNotNone(ps)
@@ -122,7 +122,7 @@ class FeatureContributionCaptureTests(TestCase):
         row = persist_recommendation('mlb', g)
         self.assertIsNotNone(row)
         self.assertIsInstance(row.feature_contributions, dict)
-        self.assertEqual(row.feature_contributions.get('engine_version'), 'v3.3-shadow')
+        self.assertEqual(row.feature_contributions.get('engine_version'), 'v3.4-shadow')
         self.assertIn('contributions_pp', row.feature_contributions)
 
 

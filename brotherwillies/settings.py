@@ -352,6 +352,27 @@ USE_BULLPEN_FATIGUE = os.environ.get('USE_BULLPEN_FATIGUE', 'false').lower() in 
     'true', '1', 'yes',
 )
 
+# 2026-08-23 v3.4 SHADOW — Confirmed-lineup quality flag.
+#
+# Default 'false'. Production behavior is IDENTICAL with this flag
+# absent, false, or true, UNTIL:
+#   1. Real ConfirmedLineup data has been collected forward for
+#      >= the pre-registered minimum sample.
+#   2. Historical player offensive stats are cached and leakage-safe.
+#   3. A replay experiment has PASSED its ship criteria.
+#   4. Activation is explicitly authorized.
+#
+# When the flag is OFF (the current state and the default),
+# `apps.mlb.services.lineup.team_lineup_signal` is still computed
+# and stored on `BettingRecommendation.feature_contributions` for
+# audit — same shadow-capture pattern as bullpen.
+#
+# Rollback contract: remove or set to 'false' in Railway env vars.
+# No code change; no data change; no migration.
+USE_LINEUP_QUALITY = os.environ.get('USE_LINEUP_QUALITY', 'false').lower() in (
+    'true', '1', 'yes',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

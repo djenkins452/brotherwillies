@@ -394,6 +394,109 @@ class RelieverAppearance(models.Model):
         return f"{role} {self.pitcher.name} {self.outs_recorded}o / {self.pitches}p"
 
 
+class ConfirmedLineup(models.Model):
+    """v3.4 SHADOW — per-observation pregame lineup snapshot.
+
+    APPEND-ONLY. Every time `ingest_lineups` observes a non-empty
+    lineup for (game, team) that DIFFERS from the last stored lineup
+    for the same pair, a new row is written. Timestamps preserve
+    first-seen truth (never overwritten) — the change history is
+    reconstructable by ordering rows by `observed_at`.
+
+    Why per-observation rows (not a single mutable JSON blob):
+      * A lineup change AFTER first confirmation is itself a signal
+        (a late scratch may or may not affect the win probability
+        differently than the originally-posted lineup).
+      * Backwards compatibility with future replay: we can query
+        "what did BW know at time T?" by taking the latest row where
+        `observed_at < T`.
+      * Preserves the FIRST_SEEN_AT truth even if MLB later corrects
+        the lineup payload.
+
+    LEAKAGE DISCIPLINE (locked by test in later commit):
+      Consumers MUST query `observed_at < reference_date`, NEVER
+      `<=`. Strict inequality prevents a lineup posted at first
+      pitch from being treated as pregame knowledge.
+
+      For historical games where NO row exists with observed_at <
+      first_pitch, the game must be classified UNCOVERED — the
+      shadow signal must degrade to zero, never fabricated from
+      postgame boxscore batting order.
+    """
+    STATE_CHOICES = [
+        # No non-empty lineup ever observed. Not written to DB — the
+        # absence of any row for (game, team) implicitly means unknown.
+        ('unknown', 'Unknown'),
+        # First non-empty lineup observed BEFORE this game's first_pitch.
+        # This is the pregame confirmation state we can legitimately act on.
+        ('confirmed', 'Confirmed pregame'),
+        # A subsequent observation showed a DIFFERENT lineup after we
+        # had already recorded a confirmed one. Preserves late-scratch
+        # semantics — the ORIGINAL confirmed row remains untouched;
+        # this new row records the updated state and the delta.
+        ('updated_after_confirmation', 'Updated after confirmation'),
+        # First observation happened AT OR AFTER first_pitch. Cannot be
+        # treated as legitimate pregame knowledge — usable for coverage
+        # analysis, NEVER for scoring.
+        ('post_first_pitch', 'Observed after first pitch'),
+    ]
+
+    game = models.ForeignKey(
+        Game, on_delete=models.CASCADE, related_name='confirmed_lineups',
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='confirmed_lineups',
+    )
+    observed_at = models.DateTimeField(
+        db_index=True,
+        help_text=(
+            'Wall-clock timestamp of the poll that first saw THIS specific '
+            'lineup for this (game, team). Never overwritten.'
+        ),
+    )
+    # 9-element list of {order: 1..9, player_id, name, position}.
+    # Position taken from the schedule payload's primaryPosition.abbreviation.
+    # Additional fields (handedness etc.) may be added later without
+    # migration since it's a JSONField.
+    players = models.JSONField(default=list)
+    lineup_state = models.CharField(
+        max_length=32, choices=STATE_CHOICES, default='confirmed',
+        db_index=True,
+    )
+    source = models.CharField(
+        max_length=30, choices=SOURCE_CHOICES, default='mlb_stats_api',
+    )
+    data_confidence = models.CharField(
+        max_length=6,
+        choices=[('low', 'Low'), ('med', 'Medium'), ('high', 'High')],
+        default='high',
+    )
+    # Raw payload subset (the `lineups.{side}Players` block) for audit;
+    # bounded in size to avoid unbounded row growth.
+    raw_snapshot = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-observed_at']
+        indexes = [
+            models.Index(fields=['game', 'team', 'observed_at']),
+            models.Index(fields=['game', '-observed_at']),
+            models.Index(fields=['team', '-observed_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['game', 'team', 'observed_at'],
+                name='mlb_confirmed_lineup_unique_observation',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"Lineup[{self.team.abbreviation or self.team.slug} "
+            f"@ {self.observed_at.isoformat() if self.observed_at else '?'}] "
+            f"({self.lineup_state})"
+        )
+
+
 class InjuryImpact(models.Model):
     IMPACT_CHOICES = [
         ('low', 'Low'),

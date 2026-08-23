@@ -94,6 +94,7 @@ def _pitcher_diff(game):
 def _score(game, weights, *, return_breakdown=False,
            use_recent_form=None,
            use_bullpen_quality=None, use_bullpen_fatigue=None,
+           use_lineup_quality=None,
            reference_date=None):
     """Compute score for `game`. When `return_breakdown=True`, also returns
     a dict of per-feature contributions (signed, in score units) for the
@@ -127,6 +128,8 @@ def _score(game, weights, *, return_breakdown=False,
         use_bullpen_quality = bool(getattr(settings, 'USE_BULLPEN_QUALITY', False))
     if use_bullpen_fatigue is None:
         use_bullpen_fatigue = bool(getattr(settings, 'USE_BULLPEN_FATIGUE', False))
+    if use_lineup_quality is None:
+        use_lineup_quality = bool(getattr(settings, 'USE_LINEUP_QUALITY', False))
 
     home_team_rating = team_rating_for_model(game.home_team)
     away_team_rating = team_rating_for_model(game.away_team)
@@ -165,6 +168,20 @@ def _score(game, weights, *, return_breakdown=False,
     pen_quality_diff = (home_pen.quality_delta - away_pen.quality_delta) * pen_quality_weight
     pen_fatigue_diff = (home_pen.fatigue_delta - away_pen.fatigue_delta) * pen_fatigue_weight
 
+    # --- v3.4 SHADOW: lineup quality signal. Same pattern as bullpen —
+    # compute ALWAYS (feature_contributions capture); add to score only
+    # when the flag is on. Returns zero when no confirmed pregame
+    # lineup exists (the current state until forward collection matures)
+    # so this is a no-op numerically until real data + player-stat
+    # caching land.
+    from apps.mlb.services.lineup import team_lineup_signal
+    home_lineup = team_lineup_signal(game.home_team, reference_date)
+    away_lineup = team_lineup_signal(game.away_team, reference_date)
+    lineup_quality_weight = weights.get('lineup_quality', 1.0)
+    lineup_quality_diff = (
+        home_lineup.quality_delta - away_lineup.quality_delta
+    ) * lineup_quality_weight
+
     score = team_diff + pitcher_static + hfa
     if use_recent_form:
         score += form_diff
@@ -172,6 +189,8 @@ def _score(game, weights, *, return_breakdown=False,
         score += pen_quality_diff
     if use_bullpen_fatigue:
         score += pen_fatigue_diff
+    if use_lineup_quality:
+        score += lineup_quality_diff
 
     if not return_breakdown:
         return score
@@ -180,6 +199,7 @@ def _score(game, weights, *, return_breakdown=False,
         'use_recent_form': use_recent_form,
         'use_bullpen_quality': use_bullpen_quality,
         'use_bullpen_fatigue': use_bullpen_fatigue,
+        'use_lineup_quality': use_lineup_quality,
         'home_team_rating': float(home_team_rating),
         'away_team_rating': float(away_team_rating),
         'home_pitcher_rating': (float(game.home_pitcher.rating)
@@ -206,6 +226,17 @@ def _score(game, weights, *, return_breakdown=False,
         # summed into `score` only under the flag.
         'bullpen_quality_contribution': float(pen_quality_diff),
         'bullpen_fatigue_contribution': float(pen_fatigue_diff),
+        # v3.4 SHADOW: per-side lineup deltas + composed diff.
+        # Zero until forward-collected lineups + cached player stats land.
+        'home_lineup_quality_delta': float(home_lineup.quality_delta),
+        'away_lineup_quality_delta': float(away_lineup.quality_delta),
+        'home_lineup_state': home_lineup.lineup_state,
+        'away_lineup_state': away_lineup.lineup_state,
+        'home_lineup_data_confidence': home_lineup.data_confidence,
+        'away_lineup_data_confidence': away_lineup.data_confidence,
+        'home_lineup_n_players': home_lineup.n_players,
+        'away_lineup_n_players': away_lineup.n_players,
+        'lineup_quality_contribution': float(lineup_quality_diff),
         'score': float(score),
     }
     return score, breakdown

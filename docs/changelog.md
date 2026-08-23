@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-08-23 — v3.4 SHADOW: Forward lineup collection + Track B verdict E
+
+Two parallel research tracks per the v3.4 brief. Production remains frozen (V3.2 gate 0.62/7pp, blend 0.55, Recent Form ON). All new flags default false.
+
+### Track A — ConfirmedLineup collection foundation
+
+Every day we wait is future evidence permanently lost. This commit ships the minimum viable forward-collection stack so pregame lineup snapshots start accumulating on the next Railway deploy.
+
+- **Model** — `apps.mlb.models.ConfirmedLineup` (migration `mlb 0012`). Append-only per-observation rows keyed on `(game, team, observed_at)`. Player list is a JSON array of `{order, player_id, name, position}` — order-sensitive so a reshuffle counts as a change. `lineup_state` enum: `confirmed` / `updated_after_confirmation` / `post_first_pitch`. Preserves first-seen truth even when subsequent polls show a different lineup.
+
+- **Polling command** — `apps/datahub/management/commands/ingest_lineups.py`. Single `/v1/schedule?hydrate=probablePitcher,lineups` call per invocation covers every game in a `[now - 1h, now + 8h]` window. Uses the canonical `apps.datahub.providers.mlb.statsapi_client.fetch_json` (retry, User-Agent, timeout, error context all inherited). Compares each observed lineup to the last stored row for that `(game, team)`; skips when identical; writes new row when changed. Wrapped in `cron_run_log` so it appears alongside other cron jobs. Cost: ~100 API calls/day at 15-min cadence — trivial.
+
+- **Shadow lineup signal** — `apps.mlb.services.lineup.team_lineup_signal(team, reference_date)` — strict `observed_at < reference_date` leakage guard; excludes `post_first_pitch` rows; 24h stale-data threshold. Returns `LineupSignal(quality_delta=0.0, ...)` until player-stat caching lands (deferred follow-up commit — full historical player OPS reconstruction is a separate work item), populating feature_contributions schema now so the pipeline works against a stable shape.
+
+- **Model service wire-in** — `_score` gains `use_lineup_quality` param (defaults to `settings.USE_LINEUP_QUALITY`). Same shadow pattern as bullpen: computes always, adds to score only when flag is on. `feature_contributions` extended with `home_lineup_quality_delta` / `away_lineup_quality_delta` / `home_lineup_state` / `away_lineup_state` / `home_lineup_data_confidence` / `away_lineup_data_confidence` / `home_lineup_n_players` / `away_lineup_n_players` / `lineup_quality_score_units` / `flags.use_lineup_quality`.
+
+- **Settings** — `USE_LINEUP_QUALITY = os.environ.get('USE_LINEUP_QUALITY', 'false')`. Code default false; production behavior identical regardless of any lineup data present.
+
+- **Coverage diagnostic** — `apps/analytics/services/lineup_coverage.py` + `GET /analytics/lineup-coverage/` (staff-only, plaintext). Reports coverage %, first-confirmation lead-time percentiles (p10/p25/p50/p75/p90), pregame vs post-first-pitch obs counts, change-after-confirmation count, and progress toward the **pre-registered minimum sample of 800 both-covered games** (rationale documented in the service module).
+
+- **Engine version bump** — `feature_contributions.engine_version` advances `v3.3-shadow → v3.4-shadow`. Existing v3.1 tests updated to reflect the version tag.
+
+Test coverage: `apps/mlb/test_lineup.py` (NEW, 13 tests):
+- Model uniqueness (`game, team, observed_at`) enforced.
+- Leakage: observation AT reference_date excluded (strict `<`); before included; `post_first_pitch` state always excluded from consumption.
+- Flag routing: `USE_LINEUP_QUALITY=false` → score identical with/without lineup data. Breakdown carries lineup keys regardless of flag. No-data case returns `lineup_state='no_data'`.
+- Poll idempotency: identical lineup → no new row; differing lineup → new row with `updated_after_confirmation` state.
+- Coverage diagnostic: runs on empty DB; reports covered games correctly.
+
+**1585 real tests pass** (previous 1574 + 13 lineup + minor test-fixture updates for the engine_version bump; -2 pre-existing v3.1 assertions that expected old version string). Only remaining failure is the pre-existing `feedback.tests` ImportError plus a cluster of 16 time-flaky MLB UI tests (already flagged as a separate follow-up task).
+
+### Track B — Park Factors + Weather Investigation — VERDICT: E (insufficient evidence)
+
+Empirical probe of MLB Stats API + free weather sources (all tested live this session):
+
+- **`/api/v1/venues?sportIds=1&hydrate=fieldInfo,location`** — 62 MLB venues; complete lat/long, elevation, address, field dimensions (LF/CF/RF, capacity, turfType, roofType). Static, zero API cost, historically reconstructable.
+- **`gameData.weather` in `/feed/live`** and `/schedule?hydrate=weather`** — sparse: `{condition, temp, wind}`. No humidity, precipitation, dew point, or pressure. Timing ambiguity: populated post-game, unclear whether it represents pregame forecast or first-pitch actual conditions.
+- **Open-Meteo historical weather archive** — free, unauthenticated, works. Verified for 2026-08-10 at Rogers Centre coords: 27.5°C / 10.8 km/h wind / 234° direction / hourly resolution. Returns actual archived conditions (not a leaky forecast).
+
+**Verdict: E — insufficient evidence to justify implementation now.**
+
+Rationale:
+- Data availability is proven; ingestion cost would be trivial.
+- No empirical evidence that park factors or weather materially improve **moneyline** prediction (as opposed to totals). The academic literature suggests park effects have modest moneyline impact (~1-2% of variance).
+- Building the shadow pipeline before evidence of moneyline value would repeat the exact bullpen pathology (feature contribution introduced without proof it beats the artificial-edge risk).
+- The most promising moneyline hypothesis is **park × lineup interaction** (a wind-out day rewards a home-run-dependent lineup). That interaction requires lineup data to exist first, which lands in Track A.
+
+**Recommendation**: revisit Track B implementation ONLY after Track A produces enough coverage to test park × lineup interaction. Until then, park/weather remain unimplemented.
+
+### Global safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false` (bullpen closed NO-GO).
+- `USE_LINEUP_QUALITY=false` (new, code default).
+- ConfirmedLineup rows are shadow-only — read only by the shadow scoring path which is zero-contribution until flag is on AND player-stat caching lands.
+- V3.2 methodology unchanged. No threshold changes, no blend changes, no calibration changes.
+
+### Next operator action
+
+1. Wait ~2 min for Railway to deploy this commit.
+2. **Wire the lineup poll to Railway cron** — add to the same cron chain that runs `refresh_data`:
+   ```
+   python manage.py ingest_lineups --trigger=cron
+   ```
+   Recommended cadence: every 10-15 minutes. Cost: ~100 API calls/day.
+3. Watch coverage grow: `https://brotherwillies.com/analytics/lineup-coverage/` (staff-only).
+4. When coverage reaches the pre-registered 800 both-covered games (~70-90 days at ~15 games/day), we implement the player-stat caching layer and run the first lineup replay under proper walk-forward discipline.
+
+**Do NOT set `USE_LINEUP_QUALITY=true` on Railway.** Activation requires a separately-validated experiment PASS.
+
+---
+
 ## 2026-08-23 — v3.3 CLOSED (NO-GO) + v3.4 Lineup Investigation
 
 ### V3.3 Bullpen — FORMALLY CLOSED NO-GO

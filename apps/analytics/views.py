@@ -660,6 +660,29 @@ def trigger_bullpen_veto_walkforward(request):
     return redirect('analytics:bullpen_experiment')
 
 
+def lineup_coverage(request):
+    """v3.4 SHADOW — lineup collection coverage report (read-only,
+    plaintext). Reports coverage % + observation counts + first-
+    confirmation lead time distribution + experiment-readiness
+    gauge against the pre-registered minimum sample."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    from django.http import HttpResponse
+    from apps.analytics.services.lineup_coverage import build_coverage_report, render
+    try:
+        try:
+            days = int(request.GET.get('days', 60))
+        except (TypeError, ValueError):
+            days = 60
+        days = max(7, min(days, 365))
+        body = render(build_coverage_report(days=days))
+    except Exception:
+        import traceback
+        body = 'LINEUP COVERAGE — STAFF DIAGNOSTIC (report raised)\n' + '=' * 78 + '\n\n' + traceback.format_exc()
+    return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
+
 def bullpen_api_check(request):
     """v3.3 SHADOW — MLB Stats API connectivity diagnostic. Read-only.
 
