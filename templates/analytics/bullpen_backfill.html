@@ -26,6 +26,52 @@
         {% endfor %}
     {% endif %}
 
+    {% comment %}
+        2026-08-22 post-first-failure: prominent surface for the most recent
+        failed/completed_with_errors run — human-readable summary + retry action.
+        Falls out entirely when the most recent run is clean.
+    {% endcomment %}
+    {% with last=recent_runs.0 %}
+    {% if last.status == 'failed' or last.status == 'completed_with_errors' %}
+    <section style="margin-bottom: 1rem; padding: 1rem; background: #2a0f0f; border: 1px solid #7f1d1d; border-radius: 6px;">
+        <div style="display:flex; justify-content:space-between; gap:1rem; align-items:flex-start;">
+            <div style="flex:1;">
+                <h2 style="font-size: 1rem; margin: 0 0 0.4rem; color:#fca5a5;">
+                    {% if last.status == 'failed' %}Last run FAILED{% else %}Last run completed with errors{% endif %}
+                </h2>
+                <p style="margin:0 0 0.4rem; color:#fecaca; font-size:0.9rem;">
+                    <strong>Cause:</strong>
+                    {{ last.failure_summary|default:"(no summary — see traceback below)" }}
+                </p>
+                <p style="margin:0; color:#aaa; font-size:0.78rem;">
+                    Window: {{ last.date_from }}..{{ last.date_to }}
+                    &nbsp;·&nbsp; Phase at failure: {{ last.get_phase_display }}
+                    &nbsp;·&nbsp; Elapsed: {{ last.elapsed_seconds }}s
+                    &nbsp;·&nbsp;
+                    <a href="{% url 'analytics:bullpen_api_check' %}" style="color:#60a5fa;">
+                        run API connectivity diagnostic
+                    </a>
+                </p>
+            </div>
+            <form method="post" action="{% url 'analytics:retry_bullpen_backfill' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit"
+                        {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed; padding:0.4rem 0.9rem; background:#4a1f1f; color:#fff; border:1px solid #7f1d1d; border-radius:4px;"
+                        {% else %}style="padding:0.4rem 0.9rem; background:#4a2f1f; color:#fff; border:1px solid #a16207; border-radius:4px; cursor:pointer; font-size:0.85rem;"{% endif %}>
+                    Retry Failed Run
+                </button>
+            </form>
+        </div>
+        {% if last.error_message %}
+        <details style="margin-top:0.75rem;">
+            <summary style="cursor:pointer; color:#aaa; font-size:0.78rem;">Full Python traceback</summary>
+            <pre style="color:#fbcfe8; font-size:0.72rem; white-space:pre-wrap; margin:0.5rem 0 0; max-height:220px; overflow-y:auto;">{{ last.error_message }}</pre>
+        </details>
+        {% endif %}
+    </section>
+    {% endif %}
+    {% endwith %}
+
     <section style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;">
         <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Trigger Historical Backfill</h2>
 
@@ -123,8 +169,10 @@
                     <td style="padding:6px 8px; text-align:right;">{{ r.snapshots_created }}/{{ r.snapshots_skipped_existing }}</td>
                     <td style="padding:6px 8px; text-align:right;">{{ r.elapsed_seconds }}s</td>
                 </tr>
-                {% if r.error_message %}
-                <tr><td colspan="8" style="padding:0 8px 6px 24px; color:#ef4444; font-size:0.75rem;">{{ r.error_message|linebreaksbr|truncatechars:500 }}</td></tr>
+                {% if r.failure_summary %}
+                <tr><td colspan="8" style="padding:0 8px 6px 24px; color:#fca5a5; font-size:0.78rem;">
+                    ⚠ {{ r.failure_summary }}
+                </td></tr>
                 {% endif %}
                 {% endfor %}
             </tbody>

@@ -462,6 +462,87 @@ def trigger_bullpen_backfill(request):
     return redirect('analytics:bullpen_backfill')
 
 
+def bullpen_api_check(request):
+    """v3.3 SHADOW — MLB Stats API connectivity diagnostic. Read-only.
+
+    Exercises the three endpoints the backfill depends on (teams,
+    one-day schedule, known historical boxscore) and reports
+    PASS/FAIL per step. Uses the same statsapi_client the production
+    code uses, so a FAIL here means a backfill will also fail —
+    and the diagnostic detail tells us the exact cause.
+
+    Staff-only. Never writes data. Safe to hit as often as needed.
+    """
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    from django.http import HttpResponse
+    from apps.analytics.services.bullpen_api_check import render, run_api_check
+
+    try:
+        body = render(run_api_check())
+    except Exception:
+        import traceback
+        body = (
+            'API CHECK — STAFF DIAGNOSTIC (the diagnostic itself raised)\n'
+            + '=' * 78 + '\n\n' + traceback.format_exc()
+        )
+    return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
+
+@require_POST
+def retry_bullpen_backfill(request):
+    """POST endpoint: start a new backfill run using the window of the
+    most recent failed/completed_with_errors run. skip-existing carries
+    forward everything the prior run completed successfully so this is
+    a fast, safe re-drive rather than starting over."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if BullpenBackfillRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_backfill')
+
+    prior = (
+        BullpenBackfillRun.objects
+        .filter(status__in=('failed', 'completed_with_errors'))
+        .order_by('-created_at')
+        .first()
+    )
+    if prior is None:
+        from django.contrib import messages
+        messages.warning(request, 'No prior failed run to retry.')
+        return redirect('analytics:bullpen_backfill')
+
+    new_run = BullpenBackfillRun.objects.create(
+        kind='historical',
+        status='running',
+        phase='starting',
+        date_from=prior.date_from,
+        date_to=prior.date_to,
+        started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_backfill_service import (
+        run_backfill_in_background,
+    )
+    threading.Thread(
+        target=run_backfill_in_background,
+        args=(str(new_run.id),),
+        daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Retrying backfill for {prior.date_from}..{prior.date_to}. '
+        f'skip-existing carries forward the {prior.appearances_created} '
+        f'appearances the prior run wrote.',
+    )
+    return redirect('analytics:bullpen_backfill')
+
+
 def bullpen_integrity_audit(request):
     """Read-only PASS/FAIL check of the bullpen data integrity —
     duplicates, determinism (sample-based re-build), coverage, etc.

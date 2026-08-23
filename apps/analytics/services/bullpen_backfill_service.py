@@ -20,6 +20,13 @@ Only writes to:
   * mlb.StartingPitcher      (create when a new pitcher is discovered)
   * mlb.TeamBullpenSnapshot  (append)
   * analytics.BullpenBackfillRun (progress rows)
+
+2026-08-22 (post-first-Railway-failure): HTTP is now delegated to the
+canonical `apps.datahub.providers.mlb.statsapi_client`. That client
+chunks /schedule into small windows, sets an explicit User-Agent,
+retries transient failures with backoff, and raises `StatsApiError`
+with URL/status/body captured. See its module docstring for why the
+initial single-request 180-day /schedule call failed on Railway.
 """
 from __future__ import annotations
 
@@ -29,9 +36,11 @@ import traceback
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-import requests
-from django.conf import settings
 from django.utils import timezone
+
+from apps.datahub.providers.mlb.statsapi_client import (
+    StatsApiError, fetch_boxscore, fetch_schedule,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -93,15 +102,45 @@ def run_backfill_in_background(run_id: str, sleep_ms: int = 250) -> None:
         _build_snapshots(run)
 
         run.phase = 'done'
-        run.status = 'completed'
+        # 2026-08-22: distinguish clean completion from
+        # completion-with-boxscore-errors so ops can see at a glance
+        # whether reconciliation is needed. Zero errors → completed;
+        # any non-fatal individual boxscore errors → completed_with_errors.
+        if run.boxscore_errors > 0:
+            run.status = 'completed_with_errors'
+            run.failure_summary = (
+                f'{run.boxscore_errors} boxscore(s) failed during ingest; '
+                f'run finished. Re-run to retry those games.'
+            )
+        else:
+            run.status = 'completed'
         run.finished_at = timezone.now()
         run.save()
-        _append_log(run, f'Completed in {run.elapsed_seconds}s')
+        _append_log(run, f'{run.status} in {run.elapsed_seconds}s')
+    except StatsApiError as api_err:
+        # HTTP failure: capture the exact endpoint / status / body /
+        # attempt in a form Danny can act on without reading the Python
+        # traceback. See StatsApiError.human_summary().
+        logger.warning('bullpen_backfill_stats_api_failed run_id=%s: %s',
+                       run_id, api_err.human_summary())
+        try:
+            run = BullpenBackfillRun.objects.get(id=run_id)
+            run.status = 'failed'
+            run.failure_summary = api_err.human_summary()[:500]
+            run.error_message = ''.join(
+                traceback.format_exception(api_err)
+            )[:6000]
+            run.finished_at = timezone.now()
+            run.save()
+            _append_log(run, f'FAILED (Stats API): {api_err.human_summary()[:250]}')
+        except Exception:
+            logger.exception('bullpen_backfill_failed_save run_id=%s', run_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception('bullpen_backfill_failed run_id=%s', run_id)
         try:
             run = BullpenBackfillRun.objects.get(id=run_id)
             run.status = 'failed'
+            run.failure_summary = repr(exc)[:500]
             run.error_message = ''.join(traceback.format_exception(exc))[:6000]
             run.finished_at = timezone.now()
             run.save()
@@ -119,37 +158,34 @@ def _ingest_appearances(run, *, sleep_ms: int) -> None:
     """Walk /schedule for the run's date range, fetch /boxscore per Final
     game, upsert RelieverAppearance rows.
 
-    Reuses the parsing helpers from the management command so there's no
-    logic duplication — same code path serves both this in-app trigger
-    and the CLI command."""
+    Uses the canonical `apps.datahub.providers.mlb.statsapi_client`
+    for all HTTP so retries, User-Agent, chunking, and rich error
+    context are shared with the CLI command and the diagnostic
+    endpoint. A schedule failure raises StatsApiError which the
+    outer handler in run_backfill_in_background catches and turns
+    into a human-readable failure_summary on the run row.
+
+    Boxscore errors are per-game and DO NOT fail the whole run —
+    they're counted in run.boxscore_errors so the run finishes with
+    status='completed_with_errors'. Rationale: a single dodgy
+    boxscore shouldn't destroy an 11-minute backfill.
+    """
     from apps.datahub.management.commands.ingest_reliever_appearances import (
         _extract_pitcher_stats, _get_or_create_pitcher,
     )
     from apps.mlb.models import Game, RelieverAppearance
 
-    base = settings.MLB_STATSAPI_BASE_URL
-    # --- Schedule call ---
-    r = requests.get(
-        f'{base}/api/v1/schedule',
-        params={
-            'sportId': 1,
-            'startDate': run.date_from.isoformat(),
-            'endDate': run.date_to.isoformat(),
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    sched = r.json()
-
+    # --- Schedule (chunked internally by the client) ---
+    _append_log(run, f'Fetching schedule {run.date_from}..{run.date_to} in weekly chunks…')
+    all_games_raw = fetch_schedule(run.date_from, run.date_to)
     gamepks = []
-    for dblk in sched.get('dates', []) or []:
-        for g in dblk.get('games', []) or []:
-            status = (g.get('status') or {}).get('detailedState', '')
-            if status not in ('Final', 'Completed Early', 'Game Over'):
-                continue
-            gpk = g.get('gamePk')
-            if gpk:
-                gamepks.append(int(gpk))
+    for g in all_games_raw:
+        status = (g.get('status') or {}).get('detailedState', '')
+        if status not in ('Final', 'Completed Early', 'Game Over'):
+            continue
+        gpk = g.get('gamePk')
+        if gpk:
+            gamepks.append(int(gpk))
     run.games_seen = len(gamepks)
     _save_counters(run)
     _append_log(run, f'Schedule: {len(gamepks)} Final games')
@@ -169,13 +205,14 @@ def _ingest_appearances(run, *, sleep_ms: int) -> None:
             continue
 
         try:
-            br = requests.get(
-                f'{base}/api/v1/game/{gamepk}/boxscore', timeout=30,
-            )
-            br.raise_for_status()
-            data = br.json()
-        except (requests.RequestException, ValueError):
+            data = fetch_boxscore(gamepk)
+        except StatsApiError as e:
             run.boxscore_errors += 1
+            # First few boxscore failures per run get logged with detail
+            # so ops can see the pattern; later ones are counted only
+            # to keep the log tail readable.
+            if run.boxscore_errors <= 3:
+                _append_log(run, f'boxscore {gamepk} failed: {e.human_summary()[:200]}')
             if i % 50 == 0:
                 _save_counters(run)
             continue

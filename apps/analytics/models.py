@@ -142,6 +142,11 @@ class BullpenBackfillRun(models.Model):
         ('pending', 'Pending'),
         ('running', 'Running'),
         ('completed', 'Completed'),
+        # 2026-08-22 (post-first-failure): a run that finished but with
+        # some individual boxscore errors gets tagged completed_with_errors
+        # so the ops dashboard can distinguish "totally clean" from
+        # "mostly-good, X boxscores failed, may need reconciliation".
+        ('completed_with_errors', 'Completed with errors'),
         ('failed', 'Failed'),
     ]
     KIND_CHOICES = [
@@ -160,7 +165,7 @@ class BullpenBackfillRun(models.Model):
 
     kind = models.CharField(max_length=15, choices=KIND_CHOICES, default='historical')
     status = models.CharField(
-        max_length=15, choices=STATUS_CHOICES, default='pending', db_index=True,
+        max_length=25, choices=STATUS_CHOICES, default='pending', db_index=True,
     )
     phase = models.CharField(
         max_length=25, choices=PHASE_CHOICES, default='starting',
@@ -185,6 +190,12 @@ class BullpenBackfillRun(models.Model):
     snapshots_skipped_existing = models.IntegerField(default=0)
 
     error_message = models.TextField(blank=True, default='')
+    # 2026-08-22 (post-first-failure): human-readable one-line summary
+    # of the failure. Extracted from StatsApiError.human_summary() when
+    # the failure was an HTTP problem; from repr(exc) otherwise. The
+    # ops UI shows this front-and-center so Danny doesn't have to
+    # interpret a Python traceback.
+    failure_summary = models.CharField(max_length=500, blank=True, default='')
     # Small rolling log tail — last few progress lines for the status page.
     log_tail = models.TextField(blank=True, default='')
 

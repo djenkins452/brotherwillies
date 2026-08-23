@@ -2,6 +2,93 @@
 
 ---
 
+## 2026-08-22 — v3.3 SHADOW: Bullpen backfill fix (root cause + resilience)
+
+**Root cause of the first-run 0/0/0/0 failure**: **doubled `/api` in the URL**.
+
+`settings.MLB_STATSAPI_BASE_URL = 'https://statsapi.mlb.com/api'` — the `/api` is baked into the base. The initial `bullpen_backfill_service._ingest_appearances` (and the CLI command) constructed URLs as `f'{base}/api/v1/schedule'`, yielding `https://statsapi.mlb.com/api/api/v1/schedule` — which returns:
+
+```
+HTTP 404
+{"error":"Not Found","path":"api/api/v1/schedule","status":404,"timestamp":"..."}
+```
+
+`raise_for_status()` converted the 404 into `HTTPError`, killing the run at the first request. The traceback said only `HTTPError` because we hadn't captured the response body.
+
+**Why development succeeded but Railway failed**: My earlier `curl` and `python3` feasibility tests both hand-constructed the URL as `https://statsapi.mlb.com/api/v1/schedule` — correct. The production code path used `settings.MLB_STATSAPI_BASE_URL` and inserted `/api` again. The bug wasn't Railway-specific — it was always broken; my empirical tests just happened to bypass the settings-based URL construction.
+
+### What ships
+
+**Canonical MLB Stats API client** — [apps/datahub/providers/mlb/statsapi_client.py](apps/datahub/providers/mlb/statsapi_client.py):
+
+- One `fetch_json(path, params, method, max_attempts, ...)` used by every caller — no more URL construction duplication between the service, the CLI command, and tests. Paths are `'/v1/schedule'` (base already includes `/api`).
+- Explicit `User-Agent: BrotherWillies/1.0 (+https://brotherwillies.com; danny@brotherwillies.com)` on every request — avoids the default `python-requests/x.y` which some CDN/WAF layers rate-limit.
+- Explicit connect (10s) + read (30s) timeout tuple.
+- Retry with exponential backoff + jitter for transient failures (5xx, 408, 425, 429). Honors `Retry-After` header when supplied.
+- Permanent 4xx → no retry, immediate rich error.
+- `StatsApiError` carries URL, params, method, status, content-type, body preview (first 400 bytes), attempt number. `.human_summary()` produces a one-line ops-readable string.
+- `fetch_schedule(start, end)` **chunks internally into 7-day windows** — the initial single-request 180-day call is gone. A 6-month backfill now issues ~26 chunked requests (~150 KB each) instead of one 3 MB request, so a single transient failure costs at most one week instead of the entire run.
+- `fetch_boxscore(gamepk)` and `fetch_teams(season)` — same client, same retry / User-Agent / timeout.
+
+**Structured failure capture on `BullpenBackfillRun`** — new `failure_summary` field (500 chars, human-readable) populated from `StatsApiError.human_summary()` at failure time. The full Python traceback still lives in `error_message` for engineering diagnosis. Also new status choice `completed_with_errors` distinguishes "totally clean" from "mostly-good, N boxscores failed" so ops can see at a glance whether reconciliation is needed.
+
+**Connectivity diagnostic** — `GET /analytics/bullpen-api-check/` (staff-only, read-only). Runs a 3-step probe:
+
+1. `/v1/teams?sportId=1&season=YYYY` — smallest read
+2. `/v1/schedule?startDate=<yesterday>&endDate=<yesterday>` — exercises chunked-schedule client
+3. `/v1/game/822780/boxscore` — known-good historical gamePk from the feasibility investigation
+
+Returns `PASS`/`FAIL` per step with HTTP status + latency + safe response summary. If the diagnostic FAILs on Railway, the actual backfill will also fail — the diagnostic tells us exactly why without needing to launch an 11-min run to find out.
+
+**Retry Failed Run** — `POST /analytics/bullpen-backfill/retry/` (staff-only, CSRF-protected). Starts a new backfill with the most-recent failed/completed_with_errors run's window. `skip-existing` carries forward everything the prior run wrote, so re-drive is fast rather than starting over.
+
+**Individual boxscore failure resilience** — a single dodgy boxscore no longer fails the whole run. Boxscore-level failures are counted in `boxscore_errors`, first 3 are logged with detail, and the run finishes with `status='completed_with_errors'` (or `completed` if `boxscore_errors == 0`). Schedule failures still fail-fast — they indicate a systemic problem.
+
+**Template UX** — the status page now shows a prominent red banner with the last failed run's human-readable `failure_summary`, a Retry button, and a link to the connectivity diagnostic. Python traceback available via a collapsed `<details>` for engineering use. Recent-runs table displays `failure_summary` (not the raw traceback) per row.
+
+### Tests
+
+`apps/datahub/test_statsapi_client.py` (NEW, 20 tests):
+
+- Window chunking — 30-day/7-per-chunk = 5 chunks; single-day → 1 chunk; reversed dates → 0 chunks.
+- Success returns parsed JSON.
+- User-Agent header set on every request.
+- Timeout is connect/read tuple.
+- **`test_url_does_not_double_the_api_prefix` — regression lock for the exact 2026-08-22 bug.**
+- Permanent 400/404 → no retry, `StatsApiError` with `.status_code`, `.attempt=1`, body preview populated.
+- 429 with Retry-After header → sleep honors header value, then retry.
+- Transient 5xx → retries and eventually succeeds.
+- Exhausted retries → `StatsApiError` with `attempt == max_attempts`.
+- Timeout → `StatsApiError.cause='timeout'`.
+- Generic network error → `StatsApiError.cause='network'`.
+- Non-JSON 2xx body → `StatsApiError.cause='non_json_body'`.
+- Chunk failure propagates with the failing chunk's params intact.
+- `human_summary()` includes status, endpoint, attempt, body preview.
+
+**1536 real tests pass** (previous 1517 + 20 new client tests, minus 1 that consolidated). Only remaining failures are the two pre-existing (`feedback.tests` ImportError + `test_persist_dedupes_same_day_duplicates` — both flagged as separate follow-ups).
+
+### Migration
+
+`analytics 0009_bullpenbackfillrun_failure_summary_and_more.py` — adds `failure_summary` field + widens `status` choices.
+
+### Next operator action
+
+1. Wait ~2 min for Railway to auto-deploy this commit.
+2. **First**: `https://brotherwillies.com/analytics/bullpen-api-check/` — must show overall **PASS**. Confirms Railway can reach MLB Stats API via the new client.
+3. **Second**: `https://brotherwillies.com/analytics/bullpen-backfill/` → click **Retry Failed Run** (or Start Backfill with default 180-day window). The chunked-schedule client should complete in ~11 minutes.
+4. **Third**: check the integrity audit + open the bullpen replay experiment as before.
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false` → bullpen contribution NEVER enters the score.
+- Backfill writes only to `RelieverAppearance`, `StartingPitcher` (create-if-new), `TeamBullpenSnapshot`, `BullpenBackfillRun`.
+- Stale-data safety (3-day threshold) unchanged.
+
+**Not a methodology change. Ingestion-and-operations defect only.**
+
+---
+
 ## 2026-08-22 — v3.3 SHADOW: Bullpen backfill operationalization (in-app)
 
 **Removes the "run this shell command on Railway" hand-off.** The bullpen backfill now runs as a background thread triggered by a staff-only POST from the browser. Same code paths as the CLI commands — one operator click starts the ~11-minute run and streams live progress into a `BullpenBackfillRun` row visible on an auto-refreshing status page.

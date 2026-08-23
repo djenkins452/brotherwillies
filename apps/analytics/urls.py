@@ -25,6 +25,20 @@ urlpatterns = [
         'bullpen-integrity/',
         views.bullpen_integrity_audit, name='bullpen_integrity',
     ),
+    # v3.3 post-first-failure diagnostic (2026-08-22): read-only
+    # 3-step probe of the MLB Stats API endpoints the backfill depends
+    # on. Never writes data.
+    path(
+        'bullpen-api-check/',
+        views.bullpen_api_check, name='bullpen_api_check',
+    ),
+    # v3.3 post-first-failure retry (2026-08-22): starts a new
+    # backfill using the last failed/completed_with_errors run's
+    # window. skip-existing carries forward the prior run's work.
+    path(
+        'bullpen-backfill/retry/',
+        views.retry_bullpen_backfill, name='retry_bullpen_backfill',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

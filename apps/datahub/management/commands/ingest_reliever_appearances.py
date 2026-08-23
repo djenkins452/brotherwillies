@@ -90,6 +90,10 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
+from apps.datahub.providers.mlb.statsapi_client import (
+    StatsApiError, fetch_boxscore, fetch_schedule,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -269,28 +273,20 @@ class Command(BaseCommand):
         return start, end
 
     def _list_gamepks(self, base, date_from, date_to):
-        """One /schedule call. Filters to FINAL games only."""
-        url = f'{base}/api/v1/schedule'
-        params = {
-            'sportId': 1,
-            'startDate': date_from.isoformat(),
-            'endDate': date_to.isoformat(),
-        }
+        """Chunked /schedule via the canonical statsapi_client.
+        Filters to FINAL games only."""
         try:
-            r = requests.get(url, params=params, timeout=30)
-            r.raise_for_status()
-        except requests.RequestException as e:
-            raise CommandError(f'schedule fetch failed: {e}')
-        data = r.json()
+            all_games = fetch_schedule(date_from, date_to)
+        except StatsApiError as e:
+            raise CommandError(f'schedule fetch failed: {e.human_summary()}')
         gamepks = []
-        for date_block in data.get('dates', []) or []:
-            for g in date_block.get('games', []) or []:
-                status = (g.get('status') or {}).get('detailedState', '')
-                if status not in ('Final', 'Completed Early', 'Game Over'):
-                    continue
-                gpk = g.get('gamePk')
-                if gpk:
-                    gamepks.append(int(gpk))
+        for g in all_games:
+            status = (g.get('status') or {}).get('detailedState', '')
+            if status not in ('Final', 'Completed Early', 'Game Over'):
+                continue
+            gpk = g.get('gamePk')
+            if gpk:
+                gamepks.append(int(gpk))
         return gamepks
 
     def _ingest_game(self, base, gamepk, options):
@@ -309,17 +305,10 @@ class Command(BaseCommand):
             if RelieverAppearance.objects.filter(game=game).exists():
                 return 0, 0, 'existing'
 
-        url = f'{base}/api/v1/game/{gamepk}/boxscore'
         try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-        except requests.RequestException as e:
-            logger.warning('boxscore fetch failed gamepk=%s: %s', gamepk, e)
-            return 0, 0, 'no_game'
-        try:
-            data = r.json()
-        except ValueError as e:
-            logger.warning('boxscore JSON parse failed gamepk=%s: %s', gamepk, e)
+            data = fetch_boxscore(gamepk)
+        except StatsApiError as e:
+            logger.warning('boxscore fetch failed gamepk=%s: %s', gamepk, e.human_summary())
             return 0, 0, 'no_game'
 
         n_created = n_updated = 0
