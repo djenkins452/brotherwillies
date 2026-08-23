@@ -76,6 +76,219 @@ BUCKET_LABELS = ['strong_away', 'favors_away', 'neutral',
 
 
 # ---------------------------------------------------------------------------
+# In-memory snapshot cache.
+#
+# The per-game extractors used to hit the DB ~10 times per game (5
+# candidates × 2 teams, each doing 1-2 snapshot lookups). At ~2000
+# games × ~3ms Railway Postgres RTT this was 60+ seconds JUST for
+# snapshot lookups, plus recent-form and Elo queries — the
+# analyzer stalled well past 30 minutes.
+#
+# Fix: load ALL TeamBattingSnapshot rows for the analysis window
+# ONCE into a per-team sorted list of raw counts + as_of_date. Extract
+# rolling / season-to-date windows by bisect_left + subtraction —
+# zero additional DB queries per game.
+
+
+class _SnapshotCache:
+    """Preloaded per-team TeamBattingSnapshot index.
+
+    Access pattern mirrors the leakage-safe consumer contract:
+      * `rolling_window_for(team_id, ref_date, window_days)` — strict
+        `as_of_date < ref_date` on the "end" snapshot; strict `<=`
+        cutoff on the "start" snapshot (so a same-day-30 boundary
+        counts).
+      * `season_to_date_window_for(team_id, ref_date)` — strict
+        `as_of_date < ref_date` on the single snapshot.
+
+    Returns `TeamHittingWindow` (same dataclass the DB-backed service
+    returns) or an empty window when no snapshot exists.
+    """
+
+    def __init__(self, snapshots):
+        from collections import defaultdict
+        # {team_id: [(as_of_date, raw_tuple)]} sorted asc by date.
+        self.by_team = defaultdict(list)
+        for s in snapshots:
+            self.by_team[s.team_id].append((
+                s.as_of_date,
+                # Store as a tuple so subtraction stays fast.
+                (
+                    s.plate_appearances, s.at_bats, s.hits,
+                    s.doubles, s.triples, s.home_runs,
+                    s.walks, s.hit_by_pitch, s.sac_flies,
+                    s.strikeouts, s.runs, s.games_played,
+                ),
+            ))
+        for tid in self.by_team:
+            self.by_team[tid].sort(key=lambda p: p[0])
+
+    def _strict_before(self, team_id, ref_date):
+        arr = self.by_team.get(team_id, ())
+        if not arr:
+            return None
+        import bisect
+        idx = bisect.bisect_left(arr, (ref_date, ()))
+        return arr[idx - 1] if idx > 0 else None
+
+    def _at_or_before(self, team_id, target_date):
+        arr = self.by_team.get(team_id, ())
+        if not arr:
+            return None
+        import bisect
+        idx = bisect.bisect_right(arr, (target_date, (float('inf'),) * 12))
+        return arr[idx - 1] if idx > 0 else None
+
+    def _make_window(self, tup):
+        from apps.mlb.services.team_offense_v2 import TeamHittingWindow
+        return TeamHittingWindow(
+            pa=tup[0], ab=tup[1], hits=tup[2],
+            doubles=tup[3], triples=tup[4], home_runs=tup[5],
+            walks=tup[6], hbp=tup[7], sac_flies=tup[8],
+            strikeouts=tup[9], runs=tup[10], games=tup[11],
+        )
+
+    def _empty(self):
+        from apps.mlb.services.team_offense_v2 import TeamHittingWindow
+        return TeamHittingWindow(
+            pa=0, ab=0, hits=0, doubles=0, triples=0, home_runs=0,
+            walks=0, hbp=0, sac_flies=0, strikeouts=0, runs=0, games=0,
+        )
+
+    def _subtract_tuple(self, later, earlier):
+        return tuple(later[i] - earlier[i] for i in range(12))
+
+    def season_to_date(self, team_id, ref_date):
+        end = self._strict_before(team_id, ref_date)
+        if end is None:
+            return self._empty()
+        return self._make_window(end[1])
+
+    def rolling(self, team_id, ref_date, window_days):
+        end = self._strict_before(team_id, ref_date)
+        if end is None:
+            return self._empty()
+        lookback_target = end[0] - timedelta(days=window_days)
+        start = self._at_or_before(team_id, lookback_target)
+        if start is None:
+            return self._make_window(end[1])
+        return self._make_window(self._subtract_tuple(end[1], start[1]))
+
+
+def _load_snapshot_cache(date_from, date_to):
+    """Load every TeamBattingSnapshot that could be relevant to the
+    analysis window into memory. We over-fetch by 45 days on the
+    early side so rolling-30d windows near the start have their
+    lookback snapshots available."""
+    from apps.mlb.models import TeamBattingSnapshot
+    early = date_from - timedelta(days=45)
+    qs = (
+        TeamBattingSnapshot.objects
+        .filter(as_of_date__gte=early, as_of_date__lte=date_to)
+        .only(
+            'team_id', 'as_of_date',
+            'plate_appearances', 'at_bats', 'hits',
+            'doubles', 'triples', 'home_runs',
+            'walks', 'hit_by_pitch', 'sac_flies',
+            'strikeouts', 'runs', 'games_played',
+        )
+    )
+    return _SnapshotCache(list(qs))
+
+
+def _team_side_b(cache, team, ref_date):
+    """Return (delta_units, ok) for team B (rolling OPS)."""
+    from apps.mlb.services.team_offense_v2 import (
+        LEAGUE_AVG_OPS, MIN_ROLLING_PA, DEFAULT_ROLLING_WINDOW_DAYS,
+    )
+    if team is None:
+        return 0.0, False
+    ref = ref_date.date() if hasattr(ref_date, 'date') else ref_date
+    w = cache.rolling(team.id, ref, DEFAULT_ROLLING_WINDOW_DAYS)
+    ops = w.ops
+    if ops is None or w.pa < MIN_ROLLING_PA:
+        return 0.0, False
+    return (ops - LEAGUE_AVG_OPS), True
+
+
+def _team_side_c(cache, team, ref_date):
+    """Return ((obp_delta, ok), (slg_delta, ok))."""
+    from apps.mlb.services.team_offense_v2 import (
+        LEAGUE_AVG_OBP, LEAGUE_AVG_SLG, MIN_ROLLING_PA,
+        DEFAULT_ROLLING_WINDOW_DAYS,
+    )
+    if team is None:
+        return (0.0, False), (0.0, False)
+    ref = ref_date.date() if hasattr(ref_date, 'date') else ref_date
+    w = cache.rolling(team.id, ref, DEFAULT_ROLLING_WINDOW_DAYS)
+    obp, slg = w.obp, w.slg
+    ok = (obp is not None and slg is not None and w.pa >= MIN_ROLLING_PA)
+    if not ok:
+        return (0.0, False), (0.0, False)
+    return (obp - LEAGUE_AVG_OBP, True), (slg - LEAGUE_AVG_SLG, True)
+
+
+def _team_side_d(cache, team, ref_date, *, blend=0.5):
+    from apps.mlb.services.team_offense_v2 import (
+        LEAGUE_AVG_OPS, MIN_ROLLING_PA, MIN_SEASON_PA,
+        DEFAULT_ROLLING_WINDOW_DAYS,
+    )
+    if team is None:
+        return 0.0, False
+    ref = ref_date.date() if hasattr(ref_date, 'date') else ref_date
+    rw = cache.rolling(team.id, ref, DEFAULT_ROLLING_WINDOW_DAYS)
+    sw = cache.season_to_date(team.id, ref)
+    r_ops = rw.ops
+    s_ops = sw.ops
+    if (r_ops is None or rw.pa < MIN_ROLLING_PA
+            or s_ops is None or sw.pa < MIN_SEASON_PA):
+        return 0.0, False
+    blended = s_ops * blend + r_ops * (1.0 - blend)
+    return (blended - LEAGUE_AVG_OPS), True
+
+
+def _team_side_a(team, ref_date):
+    """Reference (runs/game) — still uses the DB but is a single query
+    per team per game (cheap enough)."""
+    from apps.mlb.services.team_offense import team_offense_signal
+    if team is None:
+        return 0.0, False
+    sig = team_offense_signal(team, ref_date)
+    return sig.quality_delta, (sig.data_confidence != 'low')
+
+
+def _cached_extractors(cache):
+    """Return a dict of extractors bound to the given SnapshotCache."""
+    def a(g):
+        hh, ho = _team_side_a(g.home_team, g.first_pitch)
+        ah, ao = _team_side_a(g.away_team, g.first_pitch)
+        return (hh, ah, hh - ah, ho and ao)
+    def b(g):
+        hh, ho = _team_side_b(cache, g.home_team, g.first_pitch)
+        ah, ao = _team_side_b(cache, g.away_team, g.first_pitch)
+        return (hh, ah, hh - ah, ho and ao)
+    def c_obp(g):
+        (h_obp, h_ok), _ = _team_side_c(cache, g.home_team, g.first_pitch)
+        (a_obp, a_ok), _ = _team_side_c(cache, g.away_team, g.first_pitch)
+        return (h_obp, a_obp, h_obp - a_obp, h_ok and a_ok)
+    def c_slg(g):
+        _, (h_slg, h_ok) = _team_side_c(cache, g.home_team, g.first_pitch)
+        _, (a_slg, a_ok) = _team_side_c(cache, g.away_team, g.first_pitch)
+        return (h_slg, a_slg, h_slg - a_slg, h_ok and a_ok)
+    def d(g):
+        hh, ho = _team_side_d(cache, g.home_team, g.first_pitch)
+        ah, ao = _team_side_d(cache, g.away_team, g.first_pitch)
+        return (hh, ah, hh - ah, ho and ao)
+    return {
+        'A_reference_runs_per_game': a,
+        'B_v2_rolling_ops': b,
+        'C_v2_rolling_obp': c_obp,
+        'C_v2_rolling_slg': c_slg,
+        'D_v2_blend_season_recent_ops': d,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Small helpers
 
 
@@ -168,19 +381,34 @@ def _pitcher_rating_diff(game):
 
 
 def _recent_form_diff(game):
-    """Recent-form (v3.1) home minus away rating adjustment."""
-    from apps.mlb.services.pitcher_form import recent_form_signal
+    """Recent-form (v3.1) home-pitcher minus away-pitcher rating
+    delta. Uses `pitcher_form.recent_form_delta(pitcher, *,
+    reference_date=)` which returns a plain float on the rating
+    scale (0.0 for no-signal cases).
+
+    2026-08-24 fix: prior version imported the non-existent name
+    `recent_form_signal` and passed teams instead of pitchers — the
+    ImportError propagated out of the wrapping try/except (which only
+    guarded the CALL, not the module-level import) and killed the
+    entire isolated-analysis run at the very first game. Fix wraps
+    the import too and calls the correct function name with a pitcher
+    argument."""
     try:
-        h = recent_form_signal(game.home_team, game.first_pitch)
-        a = recent_form_signal(game.away_team, game.first_pitch)
+        from apps.mlb.services.pitcher_form import recent_form_delta
+    except Exception:
+        return None
+    hp = getattr(game, 'home_pitcher', None)
+    ap = getattr(game, 'away_pitcher', None)
+    if hp is None or ap is None:
+        return None
+    try:
+        h = recent_form_delta(hp, reference_date=game.first_pitch)
+        a = recent_form_delta(ap, reference_date=game.first_pitch)
     except Exception:
         return None
     if h is None or a is None:
         return None
-    try:
-        return h.rating_delta - a.rating_delta
-    except Exception:
-        return None
+    return h - a
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +471,47 @@ CANDIDATE_EXTRACTORS = {
     'C_v2_rolling_slg':         _signal_c_slg,
     'D_v2_blend_season_recent_ops': _signal_d_blend,
 }
+
+
+def _build_game_row(g, extractors):
+    """Build one per-game context row. Returns None if the game has
+    no usable outcome. Raises on unexpected failures so the caller
+    can record them and skip the game."""
+    if g.home_score is None or g.away_score is None:
+        return None
+    home_won = g.home_score > g.away_score
+
+    row: Dict[str, Any] = {
+        'game_id': str(g.id),
+        'first_pitch': g.first_pitch,
+        'home_won': home_won,
+        'market_prob_home': _market_prob_home(g),
+        'pitcher_rating_diff': _pitcher_rating_diff(g),
+        'recent_form_diff': _recent_form_diff(g),
+    }
+    h_elo = _elo_rating_for(g.home_team, g)
+    a_elo = _elo_rating_for(g.away_team, g)
+    row['elo_diff'] = ((h_elo - a_elo) if (h_elo is not None
+                                            and a_elo is not None)
+                       else None)
+
+    for candidate_key, extractor in extractors.items():
+        try:
+            result = extractor(g)
+        except Exception:
+            result = None
+        if result is None:
+            row[f'{candidate_key}_home'] = None
+            row[f'{candidate_key}_away'] = None
+            row[f'{candidate_key}_diff'] = None
+            row[f'{candidate_key}_ok'] = False
+            continue
+        h, a, d, ok = result
+        row[f'{candidate_key}_home'] = h
+        row[f'{candidate_key}_away'] = a
+        row[f'{candidate_key}_diff'] = d
+        row[f'{candidate_key}_ok'] = ok
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +843,9 @@ def run_isolated_analysis(
     date_to = ref - timedelta(days=1)
     date_from = ref - timedelta(days=days)
 
+    if progress_cb is not None:
+        progress_cb(phase='load_games', current=0, total=0)
+
     games = list(
         Game.objects.filter(
             status='final',
@@ -584,52 +856,54 @@ def run_isolated_analysis(
         )
         .select_related('home_team', 'away_team',
                         'home_pitcher', 'away_pitcher')
+        .prefetch_related('odds_snapshots')
         .order_by('first_pitch')
     )
 
+    # 2026-08-24 perf fix: preload every TeamBattingSnapshot that
+    # could be relevant into a per-team sorted index. Rolling and
+    # season-to-date windows resolve in O(log n) via bisect instead
+    # of two DB roundtrips per candidate per team per game.
+    if progress_cb is not None:
+        progress_cb(phase='load_snapshots', current=0, total=len(games))
+    snapshot_cache = _load_snapshot_cache(date_from, date_to)
+    extractors = _cached_extractors(snapshot_cache)
+
+    if progress_cb is not None:
+        progress_cb(phase='analyze', current=0, total=len(games))
+
     # Build per-game context row containing every candidate signal.
+    #
+    # 2026-08-24 defense-in-depth: wrap the WHOLE per-game builder in
+    # a try/except so any single crash (bad Elo history row, weird
+    # pitcher FK, whatever) drops the game from the sample instead of
+    # killing the entire run and losing every row's analysis.
+    # `per_game_errors` is surfaced in the returned result so this
+    # remains visible instead of silent.
     rows: List[Dict[str, Any]] = []
+    per_game_errors: List[Dict[str, Any]] = []
     total = len(games)
     for i, g in enumerate(games, 1):
         try:
-            home_won = (g.home_score is not None and g.away_score is not None
-                        and g.home_score > g.away_score)
-        except Exception:
+            row = _build_game_row(g, extractors)
+        except Exception as exc:
+            per_game_errors.append({
+                'game_id': str(getattr(g, 'id', '?')),
+                'first_pitch': getattr(g, 'first_pitch', None),
+                'error_type': type(exc).__name__,
+                'error_repr': repr(exc)[:250],
+            })
             continue
-        row: Dict[str, Any] = {
-            'game_id': str(g.id),
-            'first_pitch': g.first_pitch,
-            'home_won': home_won,
-            'market_prob_home': _market_prob_home(g),
-            'pitcher_rating_diff': _pitcher_rating_diff(g),
-            'recent_form_diff': _recent_form_diff(g),
-        }
-        h_elo = _elo_rating_for(g.home_team, g)
-        a_elo = _elo_rating_for(g.away_team, g)
-        row['elo_diff'] = ((h_elo - a_elo) if (h_elo is not None
-                                               and a_elo is not None)
-                           else None)
-
-        for candidate_key, extractor in CANDIDATE_EXTRACTORS.items():
-            try:
-                result = extractor(g)
-            except Exception:
-                result = None
-            if result is None:
-                row[f'{candidate_key}_home'] = None
-                row[f'{candidate_key}_away'] = None
-                row[f'{candidate_key}_diff'] = None
-                row[f'{candidate_key}_ok'] = False
-                continue
-            h, a, d, ok = result
-            row[f'{candidate_key}_home'] = h
-            row[f'{candidate_key}_away'] = a
-            row[f'{candidate_key}_diff'] = d
-            row[f'{candidate_key}_ok'] = ok
-
+        if row is None:
+            continue
         rows.append(row)
-        if progress_cb is not None and i % 25 == 0:
+        # 2026-08-24: publish more frequently — every 10 games — so the
+        # operator sees a live counter instead of a stalled-looking UI.
+        if progress_cb is not None and i % 10 == 0:
             progress_cb(phase='analyze', current=i, total=total)
+
+    if progress_cb is not None:
+        progress_cb(phase='verdict', current=total, total=total)
 
     per_candidate = {}
     for candidate_key, extractor in CANDIDATE_EXTRACTORS.items():
@@ -669,6 +943,11 @@ def run_isolated_analysis(
         'per_candidate': per_candidate,
         'selected_candidate': selected,
         'overall_verdict': ('PROMOTE_ONE' if selected else 'NO_GO_OFFENSE'),
+        # 2026-08-24 defense-in-depth: per-game exceptions that
+        # would previously have killed the whole run. Non-empty
+        # list is a smell — bug hint for the next iteration.
+        'per_game_errors': per_game_errors[:100],
+        'per_game_errors_total': len(per_game_errors),
     }
 
 
@@ -682,6 +961,16 @@ def render_isolated_analysis(exp: Dict[str, Any]) -> str:
                  f'with_outcome={w["games_with_outcome"]}')
     lines.append('#' * 100)
     lines.append('')
+
+    pge_total = exp.get('per_game_errors_total', 0) or 0
+    if pge_total:
+        lines.append(f'PER-GAME ERRORS: {pge_total} game(s) skipped due to '
+                     'per-game exceptions (see below).')
+        for e in exp.get('per_game_errors', [])[:10]:
+            lines.append(f'  game_id={e["game_id"]} '
+                         f'first_pitch={e.get("first_pitch")} '
+                         f'{e["error_type"]}: {e["error_repr"]}')
+        lines.append('')
 
     for key, block in exp['per_candidate'].items():
         lines.append('-' * 100)

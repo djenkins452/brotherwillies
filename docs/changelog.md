@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-08-24 — v3.4 SHADOW: isolated-analysis crash fix + operational visibility
+
+**Root cause (production crash after successful backfill + READY audit)**:
+
+`apps/analytics/services/team_offense_isolated_analysis.py::_recent_form_diff` imported the non-existent name `recent_form_signal` from `apps.mlb.services.pitcher_form`. The real function is `recent_form_delta(pitcher, *, reference_date=)` and returns a plain float — not an object with a `.rating_delta` attribute.
+
+The wrapping try/except only guarded the CALL, not the module-level `from ... import`. The `ImportError` propagated out of the per-game context builder, out of the main analysis loop, up into `run_experiment_in_background`'s top-level `except Exception`, and killed the entire run at the first game. Because the failed row had no `result` payload and no `finished_at` timestamp, the operator saw a naked "FAILED" without diagnostic detail.
+
+Compounded by a second defect: the `bullpen_experiment` view's `last_completed = filter(status='completed').first()` was global, so an OLDER phase-1 offense_replay hid the phase-2 isolated_analysis status entirely. And the recent-runs table didn't display `kind`, so a running/failed isolated row was indistinguishable from a bullpen or phase-1 offense row.
+
+### Fixes
+
+**Analysis (`team_offense_isolated_analysis.py`)**:
+- `_recent_form_diff` now imports `recent_form_delta` (correct name), wraps the import itself in try/except, passes the pitcher (not team) with `reference_date=` kwarg, and returns the plain float diff.
+- Per-game context builder extracted into `_build_game_row(g, extractors)` and called under an outer try/except in the main loop. Any per-game crash is captured into `per_game_errors[]` and the game is skipped; the run continues.
+- Result dict now carries `per_game_errors` (first 100) + `per_game_errors_total` — surfaced in the renderer so future silent crashes stay visible.
+
+**Operational visibility (`views.py::bullpen_experiment` + template)**:
+- View computes `per_kind` dict — for every declared `BullpenExperimentRun` kind, the last completed / currently running / last failed / last-any run. Each experiment tool renders independently; no experiment can hide another.
+- View also computes `per_kind_reports` — pre-rendered plaintext report for each kind's last completed run.
+- Recent-runs table gained a **Kind** column so the operator can identify which experiment each row represents.
+- Dedicated "Last Isolated Predictive-Value Analysis" and "Last Bounded Integration Replay" panels render inline when a completed result exists for that kind.
+- **Stale-running detection**: any `BullpenExperimentRun` in `running` status for >60min is flagged in a red banner with a "Force-clear this run" button. Server-side guard on `POST /analytics/bullpen-experiment/force-clear/` refuses to flip a fresh row (<60min).
+- Recent-runs list expanded from 10 to 15 rows.
+
+### Tests (17 new — all pass)
+
+`apps/mlb/test_experiment_visibility.py`:
+- **Import-lock regression** — asserts every symbol the analyzer imports (`pitcher_form.recent_form_delta`, `odds.american_to_implied_prob`, `odds.devig_two_way`, `method_replay._pregame_team_rating`, `Game.odds_snapshots` related_name) exists. Would have caught the ImportError before deploy.
+- **End-to-end smoke test** — builds synthetic Game + TeamBattingSnapshot fixtures, runs `run_isolated_analysis(days=180)`, asserts it returns without raising AND per_game_errors_total==0. Locks the clean path.
+- Per-kind visibility: view context has `per_kind` populated for every declared kind; older phase-1 completion CANNOT hide phase-2 isolated completion; running isolated row visible in per_kind.
+- Stale-running detection: >60min row appears in stale_running_runs; <60min row does not.
+- Force-clear: flips stale row to `failed`; refuses to flip fresh row.
+- No duplicate run on refresh (concurrency guard).
+- Batched analyzer parity with DB-backed team_offense_v2 windows.
+- Production methodology unchanged (all shadow flags false).
+
+**Full regression: 1642 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+
+- **V3.2 production** unchanged. `USE_V3_2_SELECTION=true` on Railway. 0.62/7pp / blend 0.55 / Recent Form ON.
+- All shadow flags remain false: `USE_BULLPEN_QUALITY`, `USE_BULLPEN_FATIGUE`, `USE_LINEUP_QUALITY`, `USE_TEAM_OFFENSE`.
+- Bounded integration replay remains blocked pending clean isolated-analysis result.
+
+### Operator next-action
+
+The old failed run has no usable partial result (crashed before writing any candidate analysis). One clean retry required after deploy:
+
+1. Wait ~2 min for Railway to deploy.
+2. Open `/analytics/bullpen-experiment/` — new per-experiment status table shows each kind's independent state.
+3. If any prior isolated run is still stuck in `running` (from a dead worker), the red stale-running banner appears at top with a Force-clear button. Click it to clear before triggering a new run.
+4. Click **"Run Isolated Predictive-Value Analysis"**. Expected runtime is ~2-5 minutes with the batched cache; progress table now shows `analyze N/1652` live.
+5. When complete, the "Last Isolated Predictive-Value Analysis" panel renders the full per-candidate report inline. Paste it back for the PROMOTE / NO-GO decision.
+
+---
+
 ## 2026-08-23 — v3.4 SHADOW: TeamBattingSnapshot audit + retry-only-missing
 
 **Post-first-backfill diagnosis**: the initial phase-2 backfill on Railway finished as `completed_with_errors` after 46 minutes producing 4,496 rows (vs a naive 30 × 175 = 5,250 expected). The operator flagged: before running the isolated predictive-value analysis, audit the state and retry ONLY missing pairs.

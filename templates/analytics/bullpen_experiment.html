@@ -207,12 +207,139 @@
         </div>
     </section>
 
+    {% if stale_running_runs %}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #2a1414; border: 1px solid #ef4444; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.4rem; color:#fca5a5;">
+            ⚠ Stuck run(s) detected
+        </h2>
+        <p style="color:#fca5a5; font-size:0.8rem; margin:0 0 0.6rem;">
+            The following run(s) have been in <code>running</code> state
+            for more than 60 minutes. The daemon thread most likely died
+            silently (gunicorn restart, process exit, memory kill).
+            Force-clear to unblock new runs — this does NOT cancel any
+            genuinely in-flight worker.
+        </p>
+        {% for r in stale_running_runs %}
+        <div style="margin-bottom:0.5rem; padding:0.5rem 0.75rem; background:#1a0a0a; border-radius:4px; color:#f5d0d0; font-size:0.8rem;">
+            <strong>{{ r.get_kind_display }}</strong> —
+            id {{ r.id }} —
+            started {{ r.started_at|date:"m/d H:i" }}
+            ({{ r.elapsed_seconds }}s elapsed) —
+            progress: {{ r.progress_variant|default:"—" }}
+            {{ r.progress_current }}/{{ r.progress_total }}
+            <form method="post" action="{% url 'analytics:force_clear_stale_experiment' %}" style="display:inline; margin-left:0.6rem;">
+                {% csrf_token %}
+                <input type="hidden" name="run_id" value="{{ r.id }}">
+                <button type="submit" style="padding:0.25rem 0.6rem; background:#5f1a1a; color:#fff; border:1px solid #ef4444; border-radius:3px; cursor:pointer; font-size:0.75rem;">
+                    Force-clear this run
+                </button>
+            </form>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
     {% if current_run and current_run.log_tail %}
     <section style="margin-bottom: 1.5rem; padding: 1rem; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px;">
-        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">Live progress log (current run)</h2>
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">
+            Live progress log (current run — <em>{{ current_run.get_kind_display }}</em>)
+        </h2>
         <pre style="color:#bbb; font-size:0.75rem; white-space:pre-wrap; margin:0; max-height:260px; overflow-y:auto;">{{ current_run.log_tail }}</pre>
     </section>
     {% endif %}
+
+    {# Per-kind status panels — each experiment shows its OWN state. #}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #12121c; border: 1px solid #2a2a3a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem;">
+            Per-experiment status
+            <span style="color:#888; font-weight:normal; font-size:0.78rem;">
+                (each tool shows its own last run — nothing hides behind another)
+            </span>
+        </h2>
+        <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+            <thead>
+                <tr style="text-align:left; color:#888; border-bottom:1px solid #2a2a3a;">
+                    <th style="padding:6px 8px;">Experiment</th>
+                    <th style="padding:6px 8px;">Running?</th>
+                    <th style="padding:6px 8px;">Last completed</th>
+                    <th style="padding:6px 8px;">Last failed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for kind_key, info in per_kind.items %}
+                <tr style="border-bottom:1px solid #1e1e28; color:#ddd; vertical-align:top;">
+                    <td style="padding:6px 8px; font-weight:600; color:#c4b5fd;">{{ kind_key }}</td>
+                    <td style="padding:6px 8px;">
+                        {% if info.running %}
+                            <span style="color:#eab308;">⏳ started {{ info.running.started_at|date:"m/d H:i" }}
+                                ({{ info.running.elapsed_seconds }}s)
+                                — {{ info.running.progress_variant|default:"—" }}
+                                {{ info.running.progress_current }}/{{ info.running.progress_total }}</span>
+                        {% else %}
+                            <span style="color:#666;">—</span>
+                        {% endif %}
+                    </td>
+                    <td style="padding:6px 8px;">
+                        {% if info.last_completed %}
+                            <span style="color:#22c55e;">✓ {{ info.last_completed.finished_at|date:"m/d H:i" }}
+                                ({{ info.last_completed.elapsed_seconds }}s,
+                                days={{ info.last_completed.days }})</span>
+                        {% else %}
+                            <span style="color:#666;">never</span>
+                        {% endif %}
+                    </td>
+                    <td style="padding:6px 8px;">
+                        {% if info.last_failed %}
+                            <span style="color:#ef4444;">✗ {{ info.last_failed.finished_at|default:info.last_failed.started_at|date:"m/d H:i" }}</span>
+                            {% if info.last_failed.failure_summary %}
+                            <div style="color:#fca5a5; font-size:0.72rem; margin-top:0.15rem;">{{ info.last_failed.failure_summary|truncatechars:180 }}</div>
+                            {% endif %}
+                        {% else %}
+                            <span style="color:#666;">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% if info.last_completed and per_kind_reports|dictsort:0|first %}
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    {% comment %}
+      Inline reports per kind for the two v3.4 phase-2 tools — the
+      operator most needs to SEE the isolated + v2 results without
+      hunting.
+    {% endcomment %}
+    {% with iso=per_kind.offense_isolated.last_completed iso_report=per_kind_reports.offense_isolated %}
+    {% if iso and iso_report %}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #0d0d18; border: 1px solid #3a2a5a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem; color:#c4b5fd;">
+            Last Isolated Predictive-Value Analysis
+            <span style="color:#888; font-weight:normal; font-size:0.8rem;">
+                ({{ iso.days }} days, {{ iso.finished_at|date:"m/d H:i" }},
+                 {{ iso.elapsed_seconds }}s)
+            </span>
+        </h2>
+        <pre style="color:#ddd; font-size:0.8rem; white-space:pre; margin:0; overflow-x:auto;">{{ iso_report }}</pre>
+    </section>
+    {% endif %}
+    {% endwith %}
+
+    {% with v2=per_kind.offense_v2_replay.last_completed v2_report=per_kind_reports.offense_v2_replay %}
+    {% if v2 and v2_report %}
+    <section style="margin-bottom: 1.5rem; padding: 1rem; background: #180d18; border: 1px solid #5a2a3a; border-radius: 6px;">
+        <h2 style="font-size: 1rem; margin-bottom: 0.6rem; color:#f9a8d4;">
+            Last Bounded Integration Replay (v2)
+            <span style="color:#888; font-weight:normal; font-size:0.8rem;">
+                ({{ v2.days }} days, {{ v2.finished_at|date:"m/d H:i" }},
+                 {{ v2.elapsed_seconds }}s)
+            </span>
+        </h2>
+        <pre style="color:#ddd; font-size:0.8rem; white-space:pre; margin:0; overflow-x:auto;">{{ v2_report }}</pre>
+    </section>
+    {% endif %}
+    {% endwith %}
 
     {% if last_completed and rendered_report %}
     <section style="margin-bottom: 1.5rem; padding: 1rem; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px;">
@@ -235,6 +362,7 @@
             <thead>
                 <tr style="text-align:left; color:#888; border-bottom:1px solid #333;">
                     <th style="padding:6px 8px;">Started</th>
+                    <th style="padding:6px 8px;">Kind</th>
                     <th style="padding:6px 8px;">Days</th>
                     <th style="padding:6px 8px;">Status</th>
                     <th style="padding:6px 8px;">Progress</th>
@@ -245,6 +373,7 @@
                 {% for r in recent_runs %}
                 <tr style="border-bottom:1px solid #232323; color:#ddd;">
                     <td style="padding:6px 8px;">{{ r.started_at|default:r.created_at|date:"m/d H:i" }}</td>
+                    <td style="padding:6px 8px; font-family:monospace; color:#c4b5fd;">{{ r.kind }}</td>
                     <td style="padding:6px 8px;">{{ r.days }}</td>
                     <td style="padding:6px 8px;">
                         {% if r.status == 'completed' %}<span style="color:#22c55e;">✓ completed</span>
@@ -260,7 +389,7 @@
                     <td style="padding:6px 8px; text-align:right;">{{ r.elapsed_seconds }}s</td>
                 </tr>
                 {% if r.failure_summary %}
-                <tr><td colspan="5" style="padding:0 8px 6px 24px; color:#fca5a5; font-size:0.78rem;">⚠ {{ r.failure_summary }}</td></tr>
+                <tr><td colspan="6" style="padding:0 8px 6px 24px; color:#fca5a5; font-size:0.78rem;">⚠ {{ r.failure_summary }}</td></tr>
                 {% endif %}
                 {% endfor %}
             </tbody>

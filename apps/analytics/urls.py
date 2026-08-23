@@ -97,6 +97,14 @@ urlpatterns = [
         views.trigger_team_batting_backfill,
         name='trigger_team_batting_backfill',
     ),
+    # 2026-08-24 recovery — force-clear a BullpenExperimentRun that has
+    # been stuck in 'running' for >60min (worker likely dead). Guarded
+    # server-side: no-op unless the row actually meets the stale criterion.
+    path(
+        'bullpen-experiment/force-clear/',
+        views.force_clear_stale_experiment,
+        name='force_clear_stale_experiment',
+    ),
     # v3.4 team-offense PHASE 2 (post-first-backfill) — read-only audit
     # of the TeamBattingSnapshot state. Reports coverage, missing-pair
     # classification, game-level coverage, per-candidate coverage, and

@@ -530,10 +530,53 @@ def bullpen_experiment(request):
         BullpenExperimentRun.objects.filter(status='running').first()
         if is_running else None
     )
-    recent_runs = list(BullpenExperimentRun.objects.all()[:10])
+    recent_runs = list(BullpenExperimentRun.objects.all()[:15])
     last_completed = BullpenExperimentRun.objects.filter(
         status='completed',
     ).first()
+
+    # 2026-08-24 (post-first-isolated-analysis): per-kind status cards.
+    # The prior "single last_completed" render hid the phase-2 isolated
+    # analysis behind the phase-1 offense replay's older completion,
+    # and the recent-runs table didn't show `kind` — so a running or
+    # completed isolated row was indistinguishable from a bullpen or
+    # phase-1 offense row. Fix: expose last-per-kind + running-per-kind
+    # so each experiment tool shows its OWN status.
+    KIND_KEYS = [
+        'experiment', 'attribution', 'veto_walkforward',
+        'offense_replay', 'offense_isolated', 'offense_v2_replay',
+    ]
+    per_kind = {}
+    for k in KIND_KEYS:
+        last_c = BullpenExperimentRun.objects.filter(
+            kind=k, status='completed',
+        ).first()
+        running = BullpenExperimentRun.objects.filter(
+            kind=k, status='running',
+        ).first()
+        last_failed = BullpenExperimentRun.objects.filter(
+            kind=k, status='failed',
+        ).first()
+        last_any = BullpenExperimentRun.objects.filter(kind=k).first()
+        per_kind[k] = {
+            'last_completed': last_c,
+            'running': running,
+            'last_failed': last_failed,
+            'last_any': last_any,
+        }
+
+    # Stale-running detection: workers can die silently (gunicorn
+    # restart, memory kill, process exit) leaving a row stuck in
+    # 'running' forever. That blocks the concurrency guard from
+    # accepting a new run. If any row has been 'running' for more
+    # than 60 minutes, flag it so the operator can force-clear it.
+    from datetime import timedelta
+    stale_threshold = timezone.now() - timedelta(minutes=60)
+    stale_running_runs = list(
+        BullpenExperimentRun.objects
+        .filter(status='running', started_at__lt=stale_threshold)
+        .order_by('started_at')
+    )
 
     # v3.4 team-offense phase 2 — team batting backfill status. Shown
     # so the operator knows whether TeamBattingSnapshot data exists
@@ -549,48 +592,60 @@ def bullpen_experiment(request):
         'recent_runs': list(TeamBattingBackfillRun.objects.all()[:5]),
     }
 
-    # Pre-render the completed report on the server so the page can
-    # show it inline without an extra JS fetch. Dispatch on kind so
-    # each run type gets the right renderer.
-    rendered_report = ''
-    if last_completed is not None and last_completed.result:
+    def _render_for(run):
+        """Return rendered plaintext report for a run, using the
+        renderer matching its kind. Empty string if no result. Never
+        raises — swallows renderer errors into the returned string."""
+        if run is None or not getattr(run, 'result', None):
+            return ''
         try:
-            if last_completed.kind == 'attribution':
+            if run.kind == 'attribution':
                 from apps.analytics.services.bullpen_attribution import (
                     render_bullpen_attribution,
                 )
-                rendered_report = render_bullpen_attribution(last_completed.result)
-            elif last_completed.kind == 'veto_walkforward':
+                return render_bullpen_attribution(run.result)
+            if run.kind == 'veto_walkforward':
                 from apps.analytics.services.bullpen_veto_walkforward import (
                     render_veto_walkforward,
                 )
-                rendered_report = render_veto_walkforward(last_completed.result)
-            elif last_completed.kind == 'offense_replay':
+                return render_veto_walkforward(run.result)
+            if run.kind == 'offense_replay':
                 from apps.analytics.services.offense_replay import (
                     render_offense_experiment,
                 )
-                rendered_report = render_offense_experiment(last_completed.result)
-            elif last_completed.kind == 'offense_isolated':
+                return render_offense_experiment(run.result)
+            if run.kind == 'offense_isolated':
                 from apps.analytics.services.team_offense_isolated_analysis import (
                     render_isolated_analysis,
                 )
-                rendered_report = render_isolated_analysis(last_completed.result)
-            elif last_completed.kind == 'offense_v2_replay':
+                return render_isolated_analysis(run.result)
+            if run.kind == 'offense_v2_replay':
                 from apps.analytics.services.offense_v2_replay import (
                     render_offense_v2_replay,
                 )
-                rendered_report = render_offense_v2_replay(last_completed.result)
-            else:
-                from apps.analytics.services.bullpen_replay import (
-                    render_bullpen_experiment,
-                )
-                rendered_report = render_bullpen_experiment(last_completed.result)
+                return render_offense_v2_replay(run.result)
+            from apps.analytics.services.bullpen_replay import (
+                render_bullpen_experiment,
+            )
+            return render_bullpen_experiment(run.result)
         except Exception:
             import traceback
-            rendered_report = (
-                'Render failed for last completed run:\n'
+            return (
+                f'Render failed for {run.kind} run:\n'
                 + traceback.format_exc()
             )
+
+    # Legacy single-report field retained for the top "Last completed run"
+    # panel — still shows the globally most recent completion so the page
+    # doesn't look empty when you first land on it. Per-kind panels below
+    # provide the per-experiment view the operator asked for.
+    rendered_report = _render_for(last_completed)
+
+    # Render each kind's own last_completed inline so each per-kind
+    # panel can show its own report without extra clicks.
+    per_kind_reports = {
+        k: _render_for(per_kind[k]['last_completed']) for k in KIND_KEYS
+    }
 
     return render(request, 'analytics/bullpen_experiment.html', {
         'is_running': is_running,
@@ -598,6 +653,9 @@ def bullpen_experiment(request):
         'recent_runs': recent_runs,
         'last_completed': last_completed,
         'rendered_report': rendered_report,
+        'per_kind': per_kind,
+        'per_kind_reports': per_kind_reports,
+        'stale_running_runs': stale_running_runs,
         'team_batting': team_batting,
         'nav_active': '',
         'auto_refresh_seconds': 8 if (is_running or team_batting['is_running']) else 0,
@@ -777,6 +835,55 @@ def trigger_team_offense_v2_replay(request):
         f'Team-offense v2 bounded replay started '
         f'(candidate={selected}, days={days}, cap=±1pp).',
     )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def force_clear_stale_experiment(request):
+    """2026-08-24 recovery — a BullpenExperimentRun stuck in 'running'
+    for >60min likely means the daemon thread died silently (gunicorn
+    restart, process exit, memory kill). The concurrency guard then
+    blocks every new trigger.
+
+    This endpoint flips one specific stale row to 'failed' with a
+    reason so a fresh run can be triggered.
+
+    Guardrail: only accepts rows that meet the stale criterion
+    (`status='running' AND started_at < now - 60min`). Cannot be used
+    to cancel a run that's genuinely still in-flight."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    from datetime import timedelta
+    run_id = (request.POST.get('run_id') or '').strip()
+    if not run_id:
+        from django.contrib import messages
+        messages.error(request, 'Missing run_id.')
+        return redirect('analytics:bullpen_experiment')
+    threshold = timezone.now() - timedelta(minutes=60)
+    updated = BullpenExperimentRun.objects.filter(
+        id=run_id, status='running', started_at__lt=threshold,
+    ).update(
+        status='failed',
+        finished_at=timezone.now(),
+        failure_summary=(
+            'Force-cleared by operator: worker went silent for >60min '
+            '(likely daemon-thread death after web-request lifecycle change).'
+        ),
+    )
+    from django.contrib import messages
+    if updated == 0:
+        messages.warning(
+            request,
+            'No stale run matched — row may already be finished, or '
+            'started less than 60 minutes ago (not eligible for force-clear).',
+        )
+    else:
+        messages.success(
+            request,
+            f'Force-cleared 1 stale run. You can now trigger a fresh '
+            f'analysis.',
+        )
     return redirect('analytics:bullpen_experiment')
 
 
