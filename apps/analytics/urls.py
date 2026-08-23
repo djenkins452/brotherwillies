@@ -39,6 +39,18 @@ urlpatterns = [
         'bullpen-backfill/retry/',
         views.retry_bullpen_backfill, name='retry_bullpen_backfill',
     ),
+    # v3.3 async experiment (2026-08-23): the sync
+    # ?experiment=bullpen URL times out at production scale under
+    # gunicorn's 30s worker limit. This page runs the same A/B/C
+    # replay off the request thread and shows results when done.
+    path(
+        'bullpen-experiment/',
+        views.bullpen_experiment, name='bullpen_experiment',
+    ),
+    path(
+        'bullpen-experiment/trigger/',
+        views.trigger_bullpen_experiment, name='trigger_bullpen_experiment',
+    ),
     # Phase 1A staff diagnostic — Model Input Inventory.
     # Re-runs the live model + recommender for one game and shows the
     # full input → score → calibration → edge → gate trace. Read-only.

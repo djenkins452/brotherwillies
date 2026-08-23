@@ -26,7 +26,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from apps.analytics.models import BacktestRun, BullpenBackfillRun
+from apps.analytics.models import BacktestRun, BullpenBackfillRun, BullpenExperimentRun
 
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def _run_backtest_in_background(run_id: str, use_elo: bool, sport: str):
     up as `status='failed'` with the error message persisted, not a
     permanently-running row.
     """
-    from apps.analytics.models import BacktestRun, BullpenBackfillRun
+    from apps.analytics.models import BacktestRun, BullpenBackfillRun, BullpenExperimentRun
     from apps.core.services.backtesting_service import run_backtest
     from apps.core.services.elo_service import force_use_dynamic
 
@@ -460,6 +460,101 @@ def trigger_bullpen_backfill(request):
         f'Page auto-refreshes every ~8s while it runs.',
     )
     return redirect('analytics:bullpen_backfill')
+
+
+def bullpen_experiment(request):
+    """v3.3 SHADOW — status page for the async bullpen A/B/C replay.
+
+    The sync `?experiment=bullpen` URL fails at production scale
+    because gunicorn's 30s worker timeout is too short for a
+    2700-game × 3-variant run. This page hosts the same experiment
+    off the request thread — click Start, the background thread runs
+    the experiment (~2-5 min), the page auto-refreshes and shows
+    the full A/B/C report when done.
+    """
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    is_running = BullpenExperimentRun.objects.filter(status='running').exists()
+    current = (
+        BullpenExperimentRun.objects.filter(status='running').first()
+        if is_running else None
+    )
+    recent_runs = list(BullpenExperimentRun.objects.all()[:10])
+    last_completed = BullpenExperimentRun.objects.filter(
+        status='completed',
+    ).first()
+
+    # Pre-render the completed report on the server so the page can
+    # show it inline without an extra JS fetch.
+    rendered_report = ''
+    if last_completed is not None and last_completed.result:
+        from apps.analytics.services.bullpen_replay import render_bullpen_experiment
+        try:
+            rendered_report = render_bullpen_experiment(last_completed.result)
+        except Exception:
+            import traceback
+            rendered_report = (
+                'Render failed for last completed run:\n'
+                + traceback.format_exc()
+            )
+
+    return render(request, 'analytics/bullpen_experiment.html', {
+        'is_running': is_running,
+        'current_run': current,
+        'recent_runs': recent_runs,
+        'last_completed': last_completed,
+        'rendered_report': rendered_report,
+        'nav_active': '',
+        'auto_refresh_seconds': 8 if is_running else 0,
+    })
+
+
+@require_POST
+def trigger_bullpen_experiment(request):
+    """POST endpoint: kick off the A/B/C replay in a background thread.
+    Concurrency guard: soft-fails when a run is already active."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A bullpen experiment is already running.')
+        return redirect('analytics:bullpen_experiment')
+
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(7, min(days, 365))
+
+    try:
+        blend = float(request.POST.get('blend', 0.55))
+    except (TypeError, ValueError):
+        blend = 0.55
+    if not (0.0 <= blend <= 0.80):
+        blend = 0.55
+
+    run = BullpenExperimentRun.objects.create(
+        days=days, blend_weight=blend,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Bullpen experiment started (days={days}, blend={blend}). '
+        f'Page auto-refreshes every ~8s while it runs.',
+    )
+    return redirect('analytics:bullpen_experiment')
 
 
 def bullpen_api_check(request):

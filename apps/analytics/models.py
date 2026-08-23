@@ -216,6 +216,64 @@ class BullpenBackfillRun(models.Model):
         return int((end - self.started_at).total_seconds())
 
 
+class BullpenExperimentRun(models.Model):
+    """v3.3 SHADOW — one execution of the bullpen A/B/C replay experiment.
+
+    Mirror of `BullpenBackfillRun` / `BacktestRun`. Background thread
+    runs `apps.analytics.services.bullpen_replay.run_bullpen_experiment`
+    and stores the result on this row.
+
+    Rationale: at production scale (~2700 games × 3 variants × several
+    DB round-trips per sim) the experiment does not fit in gunicorn's
+    30-second worker timeout, so the sync `?experiment=bullpen`
+    endpoint returned HTTP 500. Moving execution off the request
+    thread preserves the operator UX (open a page, watch progress,
+    read results) without needing a gunicorn config change.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    status = models.CharField(
+        max_length=15, choices=STATUS_CHOICES, default='pending', db_index=True,
+    )
+    days = models.IntegerField(default=180)
+    blend_weight = models.FloatField(default=0.55)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    # Live progress fields (updated by the daemon thread every N games).
+    progress_variant = models.CharField(max_length=8, blank=True, default='')
+    progress_current = models.IntegerField(default=0)
+    progress_total = models.IntegerField(default=0)
+
+    # Result payload — full run_bullpen_experiment() return dict serialized.
+    result = models.JSONField(default=dict, blank=True)
+
+    failure_summary = models.CharField(max_length=500, blank=True, default='')
+    error_message = models.TextField(blank=True, default='')
+    log_tail = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'BullpenExperimentRun(days={self.days}, {self.status})'
+
+    @property
+    def elapsed_seconds(self) -> int:
+        if self.started_at is None:
+            return 0
+        end = self.finished_at or timezone.now()
+        return int((end - self.started_at).total_seconds())
+
+
 class TeamEloHistory(models.Model):
     """Append-only log of every Elo rating change.
 

@@ -41,14 +41,27 @@ logger = logging.getLogger(__name__)
 
 
 def _simulate_variant(games, *, blend_weight, use_recent_form,
-                      use_bullpen_quality, use_bullpen_fatigue, label):
+                      use_bullpen_quality, use_bullpen_fatigue, label,
+                      progress_cb=None):
     """Run the leakage-safe sim across all games under a variant config.
-    Returns (sims, sim_errors)."""
+    Returns (sims, error_report_dict).
+
+    Never raises. Individual game failures are counted and categorized
+    so ordinary incomplete historical data (e.g. a game with no
+    pre-game odds snapshot) does NOT crash the whole experiment.
+
+    progress_cb (optional) is called every 25 games with the current
+    (i, total, sims_kept, errors) — used by the background-thread
+    orchestrator to update BullpenExperimentRun progress rows live.
+    """
     from apps.analytics.services.method_replay import _simulate_recommendation
 
     sims = []
     errors = 0
-    for g in games:
+    error_categories: dict = {}
+    none_returns = 0
+    total = len(games)
+    for i, g in enumerate(games, 1):
         try:
             sim = _simulate_recommendation(
                 g, blend_weight, label,
@@ -56,16 +69,33 @@ def _simulate_variant(games, *, blend_weight, use_recent_form,
                 use_bullpen_quality=use_bullpen_quality,
                 use_bullpen_fatigue=use_bullpen_fatigue,
             )
-        except Exception:
+        except Exception as exc:
             errors += 1
+            # Categorize by exception type so ops can see if failures
+            # cluster on one root cause (e.g. TeamEloHistory missing
+            # for a subset of games) vs random one-offs.
+            cat = type(exc).__name__
+            error_categories[cat] = error_categories.get(cat, 0) + 1
             logger.exception(
                 'bullpen_replay: sim failed game=%s label=%s',
                 getattr(g, 'id', None), label,
             )
             continue
-        if sim is not None:
-            sims.append(sim)
-    return sims, errors
+        if sim is None:
+            # sim returned None because pre-game odds were missing —
+            # this is EXPECTED for some historical games and is NOT
+            # an error. Counted separately from exceptions.
+            none_returns += 1
+            continue
+        sims.append(sim)
+        if progress_cb is not None and i % 25 == 0:
+            progress_cb(i=i, total=total, sims_kept=len(sims), errors=errors)
+    return sims, {
+        'errors': errors,
+        'categories': error_categories,
+        'none_returns': none_returns,
+        'total_games_attempted': total,
+    }
 
 
 def _bullpen_data_coverage(games) -> dict:
@@ -110,6 +140,7 @@ def run_bullpen_experiment(
     reference_date=None,
     min_games_for_window: int = 20,
     coverage_ship_criterion_pct: float = 80.0,
+    progress_cb=None,
 ) -> dict:
     """Compare A (v3.2 baseline) / B (+quality) / C (+quality+fatigue).
 
@@ -143,20 +174,32 @@ def run_bullpen_experiment(
     coverage = _bullpen_data_coverage(games)
     coverage_ok = coverage['both_covered_pct'] >= coverage_ship_criterion_pct
 
+    # Pluggable progress callback per variant — lets the background
+    # orchestrator write live progress rows for the operator page.
+    def _variant_progress(prefix):
+        if progress_cb is None:
+            return None
+        def _cb(**kw):
+            progress_cb(variant=prefix, **kw)
+        return _cb
+
     a_sims, a_err = _simulate_variant(
         games, blend_weight=blend_weight, use_recent_form=True,
         use_bullpen_quality=False, use_bullpen_fatigue=False,
         label='A_v3_2_baseline',
+        progress_cb=_variant_progress('A'),
     )
     b_sims, b_err = _simulate_variant(
         games, blend_weight=blend_weight, use_recent_form=True,
         use_bullpen_quality=True, use_bullpen_fatigue=False,
         label='B_v3_2_plus_quality',
+        progress_cb=_variant_progress('B'),
     )
     c_sims, c_err = _simulate_variant(
         games, blend_weight=blend_weight, use_recent_form=True,
         use_bullpen_quality=True, use_bullpen_fatigue=True,
         label='C_v3_2_plus_quality_and_fatigue',
+        progress_cb=_variant_progress('C'),
     )
 
     def _lc(sims):
@@ -166,6 +209,20 @@ def run_bullpen_experiment(
     a_metrics = _compute_metrics(a_lc)
     b_metrics = _compute_metrics(b_lc)
     c_metrics = _compute_metrics(c_lc)
+
+    # Comparability check: variants must share the same underlying
+    # simulated-game population. Only the score decomposition (bullpen
+    # terms) may differ. If sim populations diverge (e.g. one variant
+    # hit an exception the other didn't), report it — the delta below
+    # is not comparable.
+    sim_populations = {
+        'a': len(a_sims),
+        'b': len(b_sims),
+        'c': len(c_sims),
+    }
+    populations_match = (
+        sim_populations['a'] == sim_populations['b'] == sim_populations['c']
+    )
 
     return {
         'window': {
@@ -180,6 +237,8 @@ def run_bullpen_experiment(
         'b_plus_quality':       {'metrics': b_metrics, 'count': len(b_lc), 'sim_errors': b_err},
         'c_plus_quality_and_fatigue': {'metrics': c_metrics, 'count': len(c_lc), 'sim_errors': c_err},
         'data_ok': len(games) >= min_games_for_window,
+        'sim_populations': sim_populations,
+        'populations_match': populations_match,
     }
 
 
@@ -197,6 +256,12 @@ def render_bullpen_experiment(exp: dict) -> str:
     lines.append(f"#  Window: last {w['days']} days  ({w['from']} → {w['to']})")
     lines.append(f"#  Blend weight: {w['blend_weight']:.2f}    Games evaluable: {w['games_evaluable']}")
     lines.append('#' * 100)
+    lines.append('')
+
+    lines.append('NOTE: This sync endpoint is subject to gunicorn worker timeouts')
+    lines.append('at production scale (~2700 games * 3 variants). For a full')
+    lines.append('180-day production run, use the async page instead:')
+    lines.append('  /analytics/bullpen-experiment/')
     lines.append('')
 
     lines.append('DATA COVERAGE — TeamBullpenSnapshot presence before first_pitch')
@@ -238,6 +303,32 @@ def render_bullpen_experiment(exp: dict) -> str:
     lines.append(_line('A — v3.2 baseline',            a))
     lines.append(_line('B — v3.2 + quality',           b))
     lines.append(_line('C — v3.2 + quality + fatigue', c))
+    lines.append('')
+
+    # v3.3 observability: sim-error + population comparability. Answers
+    # "why is the evidence incomplete?" without the operator needing
+    # to read logs.
+    lines.append('SIM POPULATION + ERRORS')
+    lines.append('-' * 78)
+    sp = exp.get('sim_populations', {})
+    lines.append(
+        f'  simulated_sims: A={sp.get("a", "?")}  '
+        f'B={sp.get("b", "?")}  C={sp.get("c", "?")}   '
+        f'match={"yes" if exp.get("populations_match") else "NO — deltas below are not comparable"}'
+    )
+    for variant_key, block, letter in [
+        ('a_v3_2_baseline', a, 'A'),
+        ('b_plus_quality', b, 'B'),
+        ('c_plus_quality_and_fatigue', c, 'C'),
+    ]:
+        er = block.get('sim_errors') or {}
+        cat_str = ', '.join(f'{k}={v}' for k, v in (er.get('categories') or {}).items()) or 'none'
+        lines.append(
+            f'  {letter}: errors={er.get("errors", 0)}  '
+            f'none_returns={er.get("none_returns", 0)}  '
+            f'attempted={er.get("total_games_attempted", 0)}  '
+            f'categories=[{cat_str}]'
+        )
     lines.append('')
 
     if not exp['coverage_ok']:
