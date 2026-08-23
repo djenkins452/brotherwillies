@@ -535,6 +535,20 @@ def bullpen_experiment(request):
         status='completed',
     ).first()
 
+    # v3.4 team-offense phase 2 — team batting backfill status. Shown
+    # so the operator knows whether TeamBattingSnapshot data exists
+    # BEFORE triggering the isolated analysis.
+    from apps.analytics.models import TeamBattingBackfillRun
+    from apps.mlb.models import TeamBattingSnapshot
+    team_batting = {
+        'snapshot_count': TeamBattingSnapshot.objects.count(),
+        'is_running': TeamBattingBackfillRun.objects.filter(
+            status='running',
+        ).exists(),
+        'last_run': TeamBattingBackfillRun.objects.first(),
+        'recent_runs': list(TeamBattingBackfillRun.objects.all()[:5]),
+    }
+
     # Pre-render the completed report on the server so the page can
     # show it inline without an extra JS fetch. Dispatch on kind so
     # each run type gets the right renderer.
@@ -556,6 +570,16 @@ def bullpen_experiment(request):
                     render_offense_experiment,
                 )
                 rendered_report = render_offense_experiment(last_completed.result)
+            elif last_completed.kind == 'offense_isolated':
+                from apps.analytics.services.team_offense_isolated_analysis import (
+                    render_isolated_analysis,
+                )
+                rendered_report = render_isolated_analysis(last_completed.result)
+            elif last_completed.kind == 'offense_v2_replay':
+                from apps.analytics.services.offense_v2_replay import (
+                    render_offense_v2_replay,
+                )
+                rendered_report = render_offense_v2_replay(last_completed.result)
             else:
                 from apps.analytics.services.bullpen_replay import (
                     render_bullpen_experiment,
@@ -574,8 +598,9 @@ def bullpen_experiment(request):
         'recent_runs': recent_runs,
         'last_completed': last_completed,
         'rendered_report': rendered_report,
+        'team_batting': team_batting,
         'nav_active': '',
-        'auto_refresh_seconds': 8 if is_running else 0,
+        'auto_refresh_seconds': 8 if (is_running or team_batting['is_running']) else 0,
     })
 
 
@@ -659,6 +684,154 @@ def trigger_offense_replay(request):
         request,
         f'Team-offense replay started (days={days}). '
         f'Page auto-refreshes while it runs.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def trigger_team_offense_isolated(request):
+    """v3.4 team-offense phase 2 — kick off the ISOLATED predictive-value
+    analysis in the background thread. Reuses BullpenExperimentRun with
+    kind='offense_isolated'. READ ONLY — never touches recommendations."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_experiment')
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(30, min(days, 365))
+    run = BullpenExperimentRun.objects.create(
+        kind='offense_isolated',
+        days=days, blend_weight=0.55,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Team-offense isolated analysis started (days={days}). '
+        f'Requires TeamBattingSnapshot data — trigger the backfill first '
+        f'if not yet populated.',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def trigger_team_offense_v2_replay(request):
+    """v3.4 team-offense phase 2 — bounded integration replay of ONE
+    candidate. Reads the selected candidate from POST; refuses to run
+    with an empty/unknown candidate key."""
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    if BullpenExperimentRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A run is already in progress.')
+        return redirect('analytics:bullpen_experiment')
+    selected = (request.POST.get('candidate') or '').strip()
+    from apps.analytics.services.team_offense_isolated_analysis import (
+        CANDIDATE_EXTRACTORS,
+    )
+    if selected not in CANDIDATE_EXTRACTORS:
+        from django.contrib import messages
+        messages.error(
+            request,
+            f'Unknown candidate: {selected!r}. Run the isolated analysis '
+            f'first and enter the SELECTED CANDIDATE key.',
+        )
+        return redirect('analytics:bullpen_experiment')
+    try:
+        days = int(request.POST.get('days', 180))
+    except (TypeError, ValueError):
+        days = 180
+    days = max(30, min(days, 365))
+    run = BullpenExperimentRun.objects.create(
+        kind='offense_v2_replay',
+        days=days, blend_weight=0.55,
+        # Store selected candidate in progress_variant (widened to
+        # varchar(32) for this exact use pattern).
+        progress_variant=selected,
+        status='running', started_at=timezone.now(),
+    )
+    from apps.analytics.services.bullpen_experiment_service import (
+        run_experiment_in_background,
+    )
+    threading.Thread(
+        target=run_experiment_in_background,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Team-offense v2 bounded replay started '
+        f'(candidate={selected}, days={days}, cap=±1pp).',
+    )
+    return redirect('analytics:bullpen_experiment')
+
+
+@require_POST
+def trigger_team_batting_backfill(request):
+    """v3.4 team-offense phase 2 — kick off the historical
+    TeamBattingSnapshot backfill in a background thread. Uses its own
+    async run row (TeamBattingBackfillRun) so it doesn't collide with
+    the BullpenExperimentRun single-active-run concurrency guard."""
+    from apps.analytics.models import TeamBattingBackfillRun
+    from apps.analytics.services.team_batting_backfill_service import (
+        run_team_batting_backfill,
+    )
+    from datetime import datetime as _dt
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+
+    if TeamBattingBackfillRun.objects.filter(status='running').exists():
+        from django.contrib import messages
+        messages.warning(request, 'A team-batting backfill is already running.')
+        return redirect('analytics:bullpen_experiment')
+
+    df = request.POST.get('date_from', '').strip()
+    dt = request.POST.get('date_to', '').strip()
+    if not df or not dt:
+        # Default: this season March 1 through yesterday.
+        y = timezone.localdate()
+        df_d = _dt(y.year, 3, 1).date()
+        dt_d = y - timedelta(days=1)
+    else:
+        try:
+            df_d = _dt.strptime(df, '%Y-%m-%d').date()
+            dt_d = _dt.strptime(dt, '%Y-%m-%d').date()
+        except ValueError:
+            from django.contrib import messages
+            messages.error(request, 'Bad date format; use YYYY-MM-DD.')
+            return redirect('analytics:bullpen_experiment')
+    if dt_d < df_d:
+        from django.contrib import messages
+        messages.error(request, 'date_to must be >= date_from.')
+        return redirect('analytics:bullpen_experiment')
+
+    run = TeamBattingBackfillRun.objects.create(
+        kind='historical', date_from=df_d, date_to=dt_d,
+    )
+    threading.Thread(
+        target=run_team_batting_backfill,
+        args=(str(run.id),), daemon=True,
+    ).start()
+    from django.contrib import messages
+    messages.success(
+        request,
+        f'Team-batting backfill started ({df_d}..{dt_d}). '
+        f'~{(dt_d - df_d).days * 30} API calls; runs in the background.',
     )
     return redirect('analytics:bullpen_experiment')
 

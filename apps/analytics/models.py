@@ -257,6 +257,17 @@ class BullpenExperimentRun(models.Model):
         # that killed bullpen. NO parameter search — bounded scale
         # baked in.
         ('offense_replay', 'Team Offense Replay'),
+        # v3.4 team-offense PHASE 2 isolated analysis (2026-08-23) —
+        # after the 30-day runs/game replay came back NO-GO, evaluate
+        # OPS/OBP/SLG candidates in isolation FIRST (predictive value
+        # + redundancy vs Elo/market/pitcher/form) before considering
+        # any model integration. Same discipline that closed bullpen.
+        ('offense_isolated', 'Team Offense — Isolated Predictive Value'),
+        # v3.4 team-offense PHASE 2 integration replay (2026-08-23) —
+        # ONE selected candidate under a bounded contribution cap
+        # (±1pp target). Runs ONLY if the isolated analysis surfaced
+        # meaningful independent signal.
+        ('offense_v2_replay', 'Team Offense V2 Replay (Bounded)'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -297,6 +308,77 @@ class BullpenExperimentRun(models.Model):
 
     def __str__(self):
         return f'BullpenExperimentRun(days={self.days}, {self.status})'
+
+    @property
+    def elapsed_seconds(self) -> int:
+        if self.started_at is None:
+            return 0
+        end = self.finished_at or timezone.now()
+        return int((end - self.started_at).total_seconds())
+
+
+class TeamBattingBackfillRun(models.Model):
+    """v3.4 team-offense phase 2 — one execution of the historical
+    team hitting backfill (or daily forward refresh).
+
+    Mirror of `BullpenBackfillRun`. Background thread runs
+    `apps.analytics.services.team_batting_backfill_service.run_backfill_in_background`
+    against the run row. Concurrency guard on 'running' status.
+
+    Data source: /v1/teams/{id}/stats?stats=byDateRange&group=hitting
+    — one API call per (team, as_of_date). ~30 teams × N unique dates
+    in the backfill window.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('completed_with_errors', 'Completed with errors'),
+        ('failed', 'Failed'),
+    ]
+    KIND_CHOICES = [
+        ('historical', 'Historical Backfill'),
+        ('daily', 'Daily Refresh'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    kind = models.CharField(max_length=15, choices=KIND_CHOICES, default='historical')
+    status = models.CharField(
+        max_length=25, choices=STATUS_CHOICES, default='pending', db_index=True,
+    )
+
+    date_from = models.DateField()
+    date_to = models.DateField()
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    # Counters — every (team, as_of_date) pair fetched.
+    fetches_attempted = models.IntegerField(default=0)
+    fetches_succeeded = models.IntegerField(default=0)
+    fetches_empty = models.IntegerField(default=0)      # API returned no splits
+    fetches_errored = models.IntegerField(default=0)
+    snapshots_created = models.IntegerField(default=0)
+    snapshots_updated = models.IntegerField(default=0)
+    teams_seen = models.IntegerField(default=0)
+
+    error_message = models.TextField(blank=True, default='')
+    failure_summary = models.CharField(max_length=500, blank=True, default='')
+    log_tail = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at', 'kind']),
+        ]
+
+    def __str__(self):
+        return (
+            f'TeamBattingBackfillRun({self.kind}, {self.date_from}..'
+            f'{self.date_to}, {self.status})'
+        )
 
     @property
     def elapsed_seconds(self) -> int:

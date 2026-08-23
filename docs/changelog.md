@@ -2,6 +2,94 @@
 
 ---
 
+## 2026-08-23 — v3.4 SHADOW: Team-offense PHASE 2 — OPS/OBP/SLG isolated analysis
+
+**Motivation**: the phase-1 30-day runs/game × 0.50 replay came back NO-GO on the operator's Railway execution (n=247 B vs n=236 A, win rate -1.18pp, ROI -2.10pp). Per the operator brief, the failed formulation is preserved as reference and NOT further tuned. This ships infrastructure to test whether fundamentally better metrics (OPS/OBP/SLG rate stats) contain isolated predictive value BEYOND V3.2's Elo + pitcher + recent-form + market stack — before any consideration of model integration.
+
+Same evidence-driven discipline that closed bullpen V3.3 as NO-GO. Production remains frozen. `USE_TEAM_OFFENSE=false` unchanged.
+
+### Data infrastructure (new)
+
+- **MLB Stats API integration** — `apps.datahub.providers.mlb.statsapi_client.fetch_team_hitting_range(team_mlb_id, start_date, end_date)` — one API call per (team, date) via `/v1/teams/{id}/stats?stats=byDateRange&group=hitting`. Returns raw counts (PA, AB, H, 2B, 3B, HR, BB, HBP, SF, K, R, games) plus MLB's derived OBP/SLG/OPS. ~1KB per response.
+- **`apps.mlb.models.TeamBattingSnapshot`** (migration `mlb 0013`) — append-only per (team, as_of_date) season-to-date raw hitting counts. Unique on (team, as_of_date). Rolling-30d values derived at read time by subtracting two snapshots (`snapshot(D-1) MINUS snapshot(D-31)`); this halves API cost vs storing two window kinds separately.
+- **`apps.analytics.models.TeamBattingBackfillRun`** (migration `analytics 0015`) — async orchestration row (mirror of `BullpenBackfillRun`). Concurrency guard on `status='running'`. Full-season backfill: ~30 teams × ~180 dates = **~5,400 API calls**.
+- **`apps.analytics.services.team_batting_backfill_service.run_team_batting_backfill(run_id)`** — background-thread body. Delegates HTTP to canonical statsapi_client (User-Agent + retry + `StatsApiError`). Idempotent per (team, as_of_date) via `update_or_create`.
+- **`apps.datahub.management.commands.ingest_team_batting`** — CLI wrapper. Supports `--daily` (yesterday only, cron-safe), `--date`, `--date-from --date-to`.
+
+### Leakage-safe consumer service (new)
+
+- **`apps.mlb.services.team_offense_v2`** — three pre-declared candidates (chosen BEFORE seeing any results per Phase 2 discipline):
+  - **B_v2** `candidate_b_rolling_ops` — rolling 30-day OPS.
+  - **C_v2** `candidate_c_rolling_obp_slg` — rolling 30-day OBP AND SLG returned separately so integration can weight them independently.
+  - **D_v2** `candidate_d_blend_ops` — season-to-date OPS blended 50/50 with rolling 30-day OPS.
+- Strict `as_of_date < reference_date.date()` filter on snapshot lookups (leakage-safe by construction). Sample gates: `MIN_ROLLING_PA=200`, `MIN_SEASON_PA=400`. League anchors: `LEAGUE_AVG_OPS=0.720`, `LEAGUE_AVG_OBP=0.320`, `LEAGUE_AVG_SLG=0.400`. Derived rate stats computed from raw counts using standard formulas (audit-friendly, no rounding drift).
+- Failed phase-1 reference `candidate_a` = runs/game (existing `apps.mlb.services.team_offense.team_offense_signal`) retained for continuity.
+
+### Isolated predictive-value analyzer (new)
+
+- **`apps.analytics.services.team_offense_isolated_analysis`** + async run via `BullpenExperimentRun(kind='offense_isolated')`.
+- READ-ONLY. Never touches recommendations. Never activates a flag.
+- For each of 5 candidates (A + B + C_obp + C_slg + D), reports:
+  - **Coverage** — n games with a valid signal / total games.
+  - **Signal distribution** — min/max/mean, p05/p50/p95 of home-away diff.
+  - **Bucket home-win rate** — quintile split (strong_away → strong_home).
+  - **PAST-MARKET LIFT** — within each market-implied-probability quartile, split by offense-diff sign; report home-win rate lift (sign>0 minus sign<0). **A candidate that adds info past market shows positive lift in ≥2/4 quartiles.**
+  - **Redundancy correlations** — Pearson r vs Elo diff / market prob (home) / pitcher rating diff / recent-form diff. High |r| = redundant.
+  - **Favorite split** (home-fav vs away-fav) and **monthly consistency**.
+- Pre-registered verdict rules (evaluated BEFORE seeing results):
+  - `PROMOTE` requires: coverage ≥60%, bucket monotonicity ≥3pp (strong_home vs strong_away), past-market lift >3pp in ≥2/4 quartiles, all correlations |r|<0.6.
+  - `MONITOR` = fails one non-coverage rule.
+  - `REJECT` = fails coverage or ≥2 rules.
+- Selects AT MOST ONE candidate; ties broken by past-market mean lift. If zero PROMOTE → overall verdict `NO_GO_OFFENSE` → close the team-offense research track.
+
+### Bounded integration replay (new — runs only if a candidate promotes)
+
+- **`apps.analytics.services.offense_v2_replay`** + async run via `BullpenExperimentRun(kind='offense_v2_replay', progress_variant=<selected candidate key>)`.
+- Applies the promoted candidate as a **±1pp hard cap on picked-side probability** (pre-registered `PROB_CAP_PP = 1.0`). Cap enforced numerically after the `tanh(diff_units) * PROB_CAP_PP` normalization, so a large signal saturates rather than overflowing the cap.
+- Rationale (documented BEFORE testing): the phase-1 replay produced picked-side changes up to ±32pp — the artificial-edge pattern that killed bullpen. A 1pp cap is small enough that offense can only *refine* market + Elo + pitcher + form.
+- Same instrumentation as phase-1 offense replay: aggregate A/B win/ROI/CLV, population partition, contribution magnitude percentiles, gate-crossing counts.
+- Advancement rule (pre-registered): walk-forward eligible ONLY if B win rate ≥ A, B ROI ≥ A, CLV drop ≤2pp, volume retained ≥50%, no artificial-edge pathology. Any FAIL → NO-GO.
+
+### Views / URLs / template
+
+- **New URLs** (staff-only):
+  - `POST /analytics/team-batting-backfill/trigger/` — kick off the historical backfill (accepts `date_from`/`date_to`; defaults to March 1 → yesterday of current year).
+  - `POST /analytics/bullpen-experiment/offense-isolated/` — run isolated analysis.
+  - `POST /analytics/bullpen-experiment/offense-v2-replay/` — run bounded integration replay (requires POST `candidate=<key>`).
+- **`/analytics/bullpen-experiment/`** shows the new **v3.4 Team-Offense PHASE 2** section with backfill status (snapshot count + last run), three form buttons, and dispatches renderers for the two new run kinds (`offense_isolated`, `offense_v2_replay`).
+
+### Tests (19 new — all pass)
+
+`apps/mlb/test_team_offense_v2.py`:
+- `TeamBattingSnapshot` uniqueness + save/load
+- Rolling-window subtraction math (delta counts vs known inputs)
+- Leakage boundary (`as_of_date < reference_date` strict)
+- Candidate B/C/D min-sample gating + non-zero delta on above-avg OPS
+- `fetch_team_hitting_range` parses first split; empty when no splits
+- Backfill idempotence: re-running updates in place, no duplicates
+- Isolated analyzer NO-GO on empty DB
+- v2 replay safety: empty result with no games; kind dispatcher supports new kinds
+- **`PROB_CAP_PP == 1.0` invariant** — the pre-registered ±1pp cap is locked by test.
+
+### Full regression: 1619 tests / 1 pre-existing feedback ImportError (memory-flagged) / 0 real failures.
+
+### Discipline preserved
+
+- **V3.2 production** — unchanged. `USE_V3_2_SELECTION=true` on Railway; 0.62 / 7pp gates unchanged; blend 0.55; Recent Form ON.
+- **Bullpen** — flags remain `false` (NO-GO closure preserved).
+- **Lineup quality** — `USE_LINEUP_QUALITY=false`; forward collection continues in parallel via the Track A ops-monitor.
+- **Team offense** — `USE_TEAM_OFFENSE=false`. New v2 flag has no code equivalent — it's a shadow-analysis-only pipeline; activation requires isolated PROMOTE + bounded replay clean + walk-forward validation clean, in that order.
+- **30-day runs/game formulation** — closed as NO-GO reference. Not tuned.
+
+### Operator next-action
+
+1. **Wait ~2 min** for Railway to deploy this commit.
+2. **`POST /analytics/team-batting-backfill/trigger/`** — click "Backfill Team Batting" (defaults to March 1 → yesterday, ~5,400 API calls, runs in background). Watch `/analytics/bullpen-experiment/` — the "TeamBattingSnapshot data" row shows live progress.
+3. **When backfill completes**, click "Run Isolated Predictive-Value Analysis". Result renders inline as a plaintext report with per-candidate PROMOTE/MONITOR/REJECT verdict and (if applicable) a `SELECTED CANDIDATE` line.
+4. **Paste the full report back** for the GO / NO-GO decision on whether to run the bounded integration replay.
+
+---
+
 ## 2026-08-23 — v3.4 SHADOW: Lineup ops-monitor + Team-offense research
 
 Two tracks per the operator brief, both shipping observational/shadow infrastructure only. Production remains frozen (V3.2 gate 0.62/7pp, blend 0.55, Recent Form ON). All new flags default false.

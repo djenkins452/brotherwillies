@@ -319,6 +319,89 @@ class TeamBullpenSnapshot(models.Model):
         return f"BullpenSnapshot[{self.team.abbreviation or self.team.name}] {self.as_of.isoformat() if self.as_of else 'no-date'}"
 
 
+class TeamBattingSnapshot(models.Model):
+    """v3.4 team-offense phase 2 — season-to-date team hitting counts.
+
+    One row per (team, as_of_date). `as_of_date` is the last date
+    included in the aggregate (inclusive). Values come from MLB
+    Stats API's `/v1/teams/{id}/stats?stats=byDateRange&group=hitting`
+    with `startDate=season_start` and `endDate=as_of_date`.
+
+    Why season-to-date raw counts (not derived rate stats):
+      * Rolling-30d OPS/OBP/SLG is derivable by SUBTRACTING two
+        snapshots (STD(D-1) minus STD(D-31)). One fetch per date
+        instead of two.
+      * Derived stats (OBP/SLG/OPS) computed at read time from raw
+        counts using standard formulas — no rounding drift, no
+        formula-drift-across-callers risk.
+      * Reproducible from the raw payload alone; audit friendly.
+
+    LEAKAGE DISCIPLINE — MANDATORY: every consumer queries with
+    `as_of_date < game.first_pitch.date()`. Strict `<`. The
+    `team_offense_v2` service enforces this by construction.
+
+    IDEMPOTENCY: unique on (team, as_of_date). Re-ingesting the same
+    date updates in place. Ingest is safe to retry any number of
+    times.
+
+    STATUS (2026-08-23): populated by `ingest_team_batting` command
+    (Railway cron + one-shot backfill). Empty until first ingestion
+    run completes; consumers return zero + 'low' confidence in that
+    state. Same honest posture used by the bullpen shadow before
+    its historical reconstruction shipped.
+    """
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='batting_snapshots',
+    )
+    as_of_date = models.DateField(db_index=True)
+    season = models.IntegerField(db_index=True)
+
+    # --- Raw hitting counts, season-to-date through as_of_date.
+    plate_appearances = models.IntegerField(default=0)
+    at_bats = models.IntegerField(default=0)
+    hits = models.IntegerField(default=0)
+    doubles = models.IntegerField(default=0)
+    triples = models.IntegerField(default=0)
+    home_runs = models.IntegerField(default=0)
+    walks = models.IntegerField(default=0)
+    hit_by_pitch = models.IntegerField(default=0)
+    sac_flies = models.IntegerField(default=0)
+    strikeouts = models.IntegerField(default=0)
+    runs = models.IntegerField(default=0)
+    games_played = models.IntegerField(default=0)
+
+    # --- Rate stats as reported by the API (rounded — we recompute
+    # from raw counts at read time; these are stored only for audit).
+    obp_reported = models.FloatField(null=True, blank=True)
+    slg_reported = models.FloatField(null=True, blank=True)
+    ops_reported = models.FloatField(null=True, blank=True)
+
+    source = models.CharField(
+        max_length=30, choices=SOURCE_CHOICES, blank=True, default='',
+    )
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-as_of_date']
+        indexes = [
+            models.Index(fields=['team', '-as_of_date']),
+            models.Index(fields=['season', '-as_of_date']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['team', 'as_of_date'],
+                name='mlb_team_batting_snapshot_team_asof_unique',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f'TeamBattingSnapshot[{self.team.abbreviation or self.team.slug}] '
+            f'{self.as_of_date} PA={self.plate_appearances} '
+            f'OPS={self.ops_reported}'
+        )
+
+
 class RelieverAppearance(models.Model):
     """v3.3 SHADOW — one row per pitcher per game appearance.
 

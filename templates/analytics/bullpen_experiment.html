@@ -104,12 +104,85 @@
                     {% else %}style="padding:0.5rem 1rem; background:#4a1f4a; color:#fff; border:1px solid #a855f7; border-radius:4px; cursor:pointer; font-size:0.9rem;"
                     {% endif %}
                     title="v3.4 team-offense replay: A (V3.2 baseline) vs B (V3.2 + bounded team offense contribution). Same discipline that killed bullpen.">
-                Start Team-Offense Replay (v3.4)
+                Start Team-Offense Replay (v3.4 phase 1 — FAILED reference)
             </button>
             <span style="color:#888; font-size:0.78rem; margin-left:0.6rem;">
-                (bounded contribution; discipline mirrors bullpen A/B/C)
+                (30d runs/game × 0.50 formulation — NO-GO from prior run)
             </span>
         </form>
+
+        <div style="margin-top:0.75rem; padding:0.75rem; background:#0f0d18; border-left:3px solid #a78bfa; border-radius:4px;">
+            <strong style="color:#c4b5fd;">v3.4 Team-Offense PHASE 2</strong>
+            <span style="color:#a1a1aa; font-size:0.78rem; margin-left:0.4rem;">
+                (OPS/OBP/SLG candidates — isolated predictive-value first,
+                bounded integration only if candidate promotes)
+            </span>
+
+            <div style="margin-top:0.6rem; padding:0.55rem 0.7rem; background:#0d0d0d; border-radius:4px; font-size:0.8rem; color:#bbb;">
+                <strong style="color:#ddd;">TeamBattingSnapshot data:</strong>
+                {{ team_batting.snapshot_count }} row{{ team_batting.snapshot_count|pluralize }}
+                {% if team_batting.is_running %}
+                    <span style="color:#eab308;">⏳ backfill running</span>
+                {% elif team_batting.last_run %}
+                    (last run: {{ team_batting.last_run.status }},
+                     {{ team_batting.last_run.date_from }}..{{ team_batting.last_run.date_to }},
+                     {{ team_batting.last_run.elapsed_seconds }}s)
+                {% else %}
+                    <span style="color:#fca5a5;">no backfill run yet</span>
+                {% endif %}
+            </div>
+
+            <form method="post" action="{% url 'analytics:trigger_team_batting_backfill' %}" style="margin-top:0.6rem;">
+                {% csrf_token %}
+                <label style="font-size:0.8rem; color:#aaa;">From:
+                    <input type="text" name="date_from" placeholder="YYYY-MM-DD"
+                           style="background:#0e0e0e; color:#eee; border:1px solid #333; padding:0.25rem; border-radius:3px; width:110px;">
+                </label>
+                <label style="font-size:0.8rem; color:#aaa; margin-left:0.6rem;">To:
+                    <input type="text" name="date_to" placeholder="YYYY-MM-DD"
+                           style="background:#0e0e0e; color:#eee; border:1px solid #333; padding:0.25rem; border-radius:3px; width:110px;">
+                </label>
+                <button type="submit"
+                        {% if team_batting.is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                        {% else %}style="padding:0.4rem 0.9rem; background:#3a1a5f; color:#fff; border:1px solid #7c3aed; border-radius:4px; cursor:pointer; font-size:0.85rem; margin-left:0.4rem;"
+                        {% endif %}
+                        title="Backfill TeamBattingSnapshot for the specified date range (defaults to this season March 1 → yesterday). ~30 API calls per date.">
+                    Backfill Team Batting
+                </button>
+            </form>
+
+            <form method="post" action="{% url 'analytics:trigger_team_offense_isolated' %}" style="margin-top:0.6rem;">
+                {% csrf_token %}
+                <input type="hidden" name="days" value="180">
+                <button type="submit"
+                        {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                        {% else %}style="padding:0.4rem 0.9rem; background:#3a1a5f; color:#fff; border:1px solid #7c3aed; border-radius:4px; cursor:pointer; font-size:0.85rem;"
+                        {% endif %}
+                        title="v3.4 PHASE 2 isolated analysis: does each OPS/OBP/SLG candidate contain predictive info past market/Elo/pitcher/form? READ ONLY.">
+                    Run Isolated Predictive-Value Analysis
+                </button>
+                <span style="color:#a1a1aa; font-size:0.78rem; margin-left:0.5rem;">
+                    (evaluates B_v2 rolling OPS / C_v2 OBP+SLG / D_v2 blend
+                    against pre-registered PROMOTE/MONITOR/REJECT rules)
+                </span>
+            </form>
+
+            <form method="post" action="{% url 'analytics:trigger_team_offense_v2_replay' %}" style="margin-top:0.6rem;">
+                {% csrf_token %}
+                <label style="font-size:0.8rem; color:#aaa;">Selected candidate:
+                    <input type="text" name="candidate" placeholder="B_v2_rolling_ops"
+                           style="background:#0e0e0e; color:#eee; border:1px solid #333; padding:0.25rem; border-radius:3px; width:220px;">
+                </label>
+                <input type="hidden" name="days" value="180">
+                <button type="submit"
+                        {% if is_running %}disabled style="opacity:0.5; cursor:not-allowed;"
+                        {% else %}style="padding:0.4rem 0.9rem; background:#5f1a3a; color:#fff; border:1px solid #ec4899; border-radius:4px; cursor:pointer; font-size:0.85rem; margin-left:0.4rem;"
+                        {% endif %}
+                        title="v3.4 PHASE 2 bounded integration replay: A (V3.2) vs B (V3.2 + candidate at ±1pp cap). Only run after isolated analysis PROMOTES a candidate.">
+                    Run v3.4 Bounded Integration Replay
+                </button>
+            </form>
+        </div>
     </section>
 
     {% if current_run and current_run.log_tail %}

@@ -354,3 +354,48 @@ def fetch_teams(*, season: int, sport_id: int = 1,
         max_attempts=max_attempts,
     )
     return data.get('teams', []) or []
+
+
+def fetch_team_hitting_range(
+    team_mlb_id: int, start_date: date, end_date: date,
+    *, season: Optional[int] = None,
+    max_attempts: int = DEFAULT_RETRIES,
+) -> dict:
+    """v3.4 team-offense phase 2 — fetch team-level hitting totals for
+    a date range via /v1/teams/{id}/stats?stats=byDateRange.
+
+    Returns the raw first-split `stat` dict — the by-team-date-range
+    aggregate returns exactly one split when the team + range exist.
+    Empty dict when the endpoint returns no splits (e.g. team was
+    idle in the range).
+
+    Payload contract (verified empirically 2026-08-23):
+      {'obp': '.300', 'slg': '.379', 'ops': '.679',
+       'plateAppearances': 1876, 'runs': 194, 'gamesPlayed': 51,
+       'atBats': <int>, 'hits': <int>, 'doubles': <int>,
+       'triples': <int>, 'homeRuns': <int>, 'baseOnBalls': <int>,
+       'hitByPitch': <int>, 'sacFlies': <int>, 'strikeOuts': <int>, ...}
+
+    Rate stats come back as strings with a leading dot ('.300'); raw
+    counts are integers. Caller converts as needed.
+    """
+    params: Dict[str, Any] = {
+        'stats': 'byDateRange',
+        'group': 'hitting',
+        'startDate': start_date.isoformat(),
+        'endDate': end_date.isoformat(),
+    }
+    if season is not None:
+        params['season'] = season
+    data = fetch_json(
+        f'/v1/teams/{int(team_mlb_id)}/stats',
+        params=params,
+        max_attempts=max_attempts,
+    )
+    stats = data.get('stats', []) or []
+    if not stats:
+        return {}
+    splits = stats[0].get('splits', []) or []
+    if not splits:
+        return {}
+    return splits[0].get('stat', {}) or {}

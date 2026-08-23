@@ -74,6 +74,29 @@ urlpatterns = [
         views.trigger_offense_replay,
         name='trigger_offense_replay',
     ),
+    # v3.4 team-offense PHASE 2 (2026-08-23) — isolated predictive-value
+    # analysis of OPS/OBP/SLG candidates. READ ONLY. Never touches
+    # recommendations.
+    path(
+        'bullpen-experiment/offense-isolated/',
+        views.trigger_team_offense_isolated,
+        name='trigger_team_offense_isolated',
+    ),
+    # v3.4 team-offense PHASE 2 — bounded integration replay of the
+    # candidate promoted by isolated analysis. ±1pp cap; pre-registered.
+    path(
+        'bullpen-experiment/offense-v2-replay/',
+        views.trigger_team_offense_v2_replay,
+        name='trigger_team_offense_v2_replay',
+    ),
+    # v3.4 team-offense PHASE 2 — TeamBattingSnapshot historical
+    # backfill via /v1/teams/{id}/stats?stats=byDateRange. One fetch per
+    # (team, date). ~5,400 calls for a full season.
+    path(
+        'team-batting-backfill/trigger/',
+        views.trigger_team_batting_backfill,
+        name='trigger_team_batting_backfill',
+    ),
     # v3.4 SHADOW: lineup collection coverage report. Shows progress
     # toward the pre-registered minimum sample for a lineup replay.
     path(

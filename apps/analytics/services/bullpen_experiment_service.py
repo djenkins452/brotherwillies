@@ -80,6 +80,9 @@ def run_experiment_in_background(run_id: str) -> None:
     from apps.analytics.services.offense_replay import (
         run_offense_experiment,
     )
+    from apps.analytics.services.team_offense_isolated_analysis import (
+        run_isolated_analysis,
+    )
 
     try:
         run = BullpenExperimentRun.objects.get(id=run_id)
@@ -138,6 +141,29 @@ def run_experiment_in_background(run_id: str) -> None:
             result = run_offense_experiment(
                 days=run.days,
                 blend_weight=run.blend_weight,
+                progress_cb=_attribution_progress,
+            )
+        elif run.kind == 'offense_isolated':
+            # v3.4 team-offense phase 2 isolated analysis — READ ONLY.
+            # Never touches recommendations; evaluates every pre-declared
+            # candidate for isolated predictive value + redundancy.
+            result = run_isolated_analysis(
+                days=run.days,
+                progress_cb=_attribution_progress,
+            )
+        elif run.kind == 'offense_v2_replay':
+            from apps.analytics.services.offense_v2_replay import (
+                run_offense_v2_replay,
+            )
+            # v3.4 phase 2 bounded integration replay — only makes
+            # sense if isolated analysis surfaced a candidate. The
+            # progress_variant field encodes the selected candidate
+            # key; the caller sets it BEFORE the thread starts.
+            selected = run.progress_variant or ''
+            result = run_offense_v2_replay(
+                days=run.days,
+                blend_weight=run.blend_weight,
+                selected_candidate=selected,
                 progress_cb=_attribution_progress,
             )
         else:
