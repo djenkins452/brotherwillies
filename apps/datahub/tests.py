@@ -198,6 +198,61 @@ class GolfOddsProviderPersistGateTests(TestCase):
         # Only the pre-seeded snapshot remains
         self.assertEqual(GolfOddsSnapshot.objects.count(), 1)
 
+    def test_persist_dedupes_across_utc_local_date_crossover(self):
+        """Regression: dedup must key on the application's LOCAL date.
+
+        Simulates a moment in the daily UTC/local-date crossover window:
+        UTC has ticked to the next day (2026-04-11 01:00 UTC) but the
+        active application timezone (America/Chicago) is still on the
+        previous day (2026-04-10 20:00 CDT).
+
+        Django's ``captured_at__date`` lookup converts to the active
+        timezone before extracting the date. If persist() computed
+        ``today`` from ``timezone.now().date()`` (UTC), the pre-seeded
+        row would not match and dedup would silently fail — allowing
+        duplicate daily inserts during the crossover hours. This test
+        pins that bug.
+        """
+        import zoneinfo
+        from datetime import datetime as _dt
+        from unittest.mock import patch
+
+        local_tz = zoneinfo.ZoneInfo('America/Chicago')
+        utc = zoneinfo.ZoneInfo('UTC')
+
+        frozen_local = _dt(2026, 4, 10, 20, 0, tzinfo=local_tz)
+        frozen_utc = frozen_local.astimezone(utc)
+        frozen_local_date = frozen_local.date()
+        # Sanity: the two calendars really do disagree at this moment.
+        self.assertNotEqual(frozen_utc.date(), frozen_local_date)
+
+        event = GolfEvent.objects.create(
+            name='Crossover Event', slug='crossover-event',
+            start_date=frozen_local_date + timedelta(days=3),
+            end_date=frozen_local_date + timedelta(days=6),
+        )
+        golfer = Golfer.objects.create(name='Existing Golfer')
+        GolfOddsSnapshot.objects.create(
+            event=event, golfer=golfer,
+            captured_at=frozen_utc,
+            sportsbook='DraftKings',
+            outright_odds=500,
+            implied_prob=0.1667,
+        )
+
+        module_tz = 'apps.datahub.providers.golf.odds_provider.timezone'
+        with patch(f'{module_tz}.now', return_value=frozen_utc), \
+             patch(f'{module_tz}.localdate', return_value=frozen_local_date):
+            result = self.provider.persist([
+                self._normalized_item(
+                    'Crossover Event', golfer_name='New Golfer',
+                ),
+            ])
+
+        self.assertEqual(result['created'], 0)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(GolfOddsSnapshot.objects.count(), 1)
+
 
 class ScoreOnlyProviderTests(TestCase):
     """Covers the new lightweight update path on MLB's schedule provider.

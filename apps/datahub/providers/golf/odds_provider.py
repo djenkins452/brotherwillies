@@ -162,7 +162,11 @@ class GolfOddsProvider(AbstractProvider):
         created = 0
         skipped = 0
         now = timezone.now()
-        today = now.date()
+        # Use local date so it aligns with Django's __date lookup, which
+        # converts captured_at to the active timezone before extracting the
+        # date. Using now.date() (UTC) would silently break the dedup query
+        # during the hours each day when UTC and local dates diverge.
+        today = timezone.localdate()
 
         # Cache current/upcoming events
         upcoming_events = {e.name.lower(): e for e in GolfEvent.objects.filter(
