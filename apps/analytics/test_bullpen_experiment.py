@@ -166,6 +166,95 @@ class OrchestratorFailureTests(TestCase):
         self.assertIn('RuntimeError', run.error_message)
 
 
+class ProgressVariantLengthTests(TestCase):
+    """Regression lock for the 2026-08-23 Railway failure.
+
+    BullpenExperimentRun.progress_variant was CharField(max_length=8)
+    — sized only for the A/B/C experiment variant labels. The
+    attribution run writes phase names like 'decompose' (9 chars) to
+    it, which threw psycopg2 DataError('value too long for type
+    character varying(8)') on Railway Postgres and killed the run at
+    the first progress-save.
+
+    These tests round-trip the actual production values through the
+    database so the field can never silently drift too narrow again."""
+
+    def test_saves_attribution_progress_variant_decompose(self):
+        """The exact value that produced the Railway DataError."""
+        from apps.analytics.models import BullpenExperimentRun
+        run = BullpenExperimentRun.objects.create(
+            kind='attribution', days=7,
+            status='running', started_at=timezone.now(),
+        )
+        # The failing production write:
+        run.progress_variant = 'decompose'
+        run.save(update_fields=['progress_variant'])
+        run.refresh_from_db()
+        self.assertEqual(run.progress_variant, 'decompose')
+
+    def test_saves_experiment_variant_labels(self):
+        """The A/B/C values previously supported."""
+        from apps.analytics.models import BullpenExperimentRun
+        for label in ('A', 'B', 'C'):
+            run = BullpenExperimentRun.objects.create(
+                kind='experiment', days=7,
+                status='running', started_at=timezone.now(),
+                progress_variant=label,
+            )
+            run.refresh_from_db()
+            self.assertEqual(run.progress_variant, label)
+
+    def test_field_width_accommodates_reasonable_phase_names(self):
+        """Future diagnostic run types may publish descriptive phase
+        names like 'baseline_sim', 'compute_metrics', 'render_report'.
+        Field should have room without another migration."""
+        from apps.analytics.models import BullpenExperimentRun
+        for phase in ('baseline_sim', 'compute_metrics', 'render_report',
+                      'evaluate_configs', 'aggregating_results'):
+            run = BullpenExperimentRun.objects.create(
+                kind='attribution', days=7,
+                status='running', started_at=timezone.now(),
+                progress_variant=phase,
+            )
+            run.refresh_from_db()
+            self.assertEqual(run.progress_variant, phase)
+
+
+class ChoiceFieldWidthInvariantTests(TestCase):
+    """Invariant: for every choice-backed CharField on the bullpen
+    operational models, max_length must accommodate every legal choice
+    value. This catches the exact class of defect that killed the
+    initial attribution run (a field sized for one call site but
+    written to by another with longer values).
+
+    NOTE: `progress_variant` is NOT choice-backed — it's a
+    free-form CharField whose values come from progress callbacks.
+    Its length is exercised by `ProgressVariantLengthTests` above."""
+
+    def _assert_field_fits_all_choices(self, model, field_name):
+        f = model._meta.get_field(field_name)
+        if not f.choices:
+            return
+        longest = max(len(str(c[0])) for c in f.choices)
+        self.assertGreaterEqual(
+            f.max_length, longest,
+            msg=(
+                f'{model.__name__}.{field_name}: max_length='
+                f'{f.max_length} < longest choice value ({longest} chars)'
+            ),
+        )
+
+    def test_bullpen_backfill_run_choice_widths(self):
+        from apps.analytics.models import BullpenBackfillRun
+        for name in ('kind', 'status', 'phase'):
+            self._assert_field_fits_all_choices(BullpenBackfillRun, name)
+
+    def test_bullpen_experiment_run_choice_widths(self):
+        from apps.analytics.models import BullpenExperimentRun
+        for name in ('kind', 'status'):
+            self._assert_field_fits_all_choices(BullpenExperimentRun, name)
+
+
 class JsonSafeTests(TestCase):
 
     def test_coerces_dates_and_sets(self):

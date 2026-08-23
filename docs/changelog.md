@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-08-23 — v3.3 SHADOW: progress_variant field length fix (attribution 0s failure)
+
+**Root cause of the immediate 0s failure on the first Attribution + Salvage Study trigger.**
+
+`BullpenExperimentRun.progress_variant` was `CharField(max_length=8)` — sized in the initial async model for the A/B/C experiment variant labels (`'A'`, `'B'`, `'C'` — one char each). The attribution run's progress callback writes the current **phase** name into that same field (`'decompose'` — 9 chars), which Postgres rejected with:
+
+```
+DataError: value too long for type character varying(8)
+```
+
+This killed the run at the first progress-save. Elapsed showed `0s` because the exception fired before the first save reached the elapsed calc.
+
+**Not the field the user guessed.** The failing field was `progress_variant`, not `kind` — `kind` is `max_length=20` which fits `'attribution'` fine. Confirmed by grep + trace of every write site to a CharField on the run models.
+
+### Fix
+
+- `BullpenExperimentRun.progress_variant` widened `max_length=8 → 32`. Migration `analytics 0012_alter_bullpenexperimentrun_progress_variant`. Chose 32 so future diagnostic run types can publish descriptive phase names (`'baseline_sim'`, `'compute_metrics'`, `'render_report'`, `'aggregating_results'`, etc.) without another migration.
+
+### Audit of related fields
+
+Grepped every `CharField(max_length=…)` on the new bullpen operational models against the longest legal value written to it:
+
+| Model | Field | max_length | Longest value | Fit |
+|---|---|---:|---:|---|
+| `BullpenBackfillRun` | `kind` | 15 | `'historical'` (10) | ✅ |
+| `BullpenBackfillRun` | `status` | 25 | `'completed_with_errors'` (21) | ✅ |
+| `BullpenBackfillRun` | `phase` | 25 | `'ingest_appearances'` (18) | ✅ |
+| `BullpenBackfillRun` | `failure_summary` | 500 | any short string | ✅ |
+| `BullpenExperimentRun` | `kind` | 20 | `'attribution'` (11) | ✅ |
+| `BullpenExperimentRun` | `status` | 15 | `'completed'` (9) | ✅ |
+| **`BullpenExperimentRun`** | **`progress_variant`** | **8** | **`'decompose'` (9)** | **❌ → widened to 32** |
+| `BullpenExperimentRun` | `failure_summary` | 500 | any short string | ✅ |
+| `TeamBullpenSnapshot` | `source` | 30 | `'mlb_stats_api'` (13) | ✅ |
+| `TeamBullpenSnapshot` | `data_confidence` | 6 | `'high'` (4) | ✅ |
+
+Only `progress_variant` was undersized.
+
+### Regression tests
+
+`apps/analytics/test_bullpen_experiment.py`:
+
+- **`ProgressVariantLengthTests`** — round-trips actual production values through the database:
+  - `test_saves_attribution_progress_variant_decompose` — the exact 9-char value that produced the Railway DataError.
+  - `test_saves_experiment_variant_labels` — A/B/C labels still fit.
+  - `test_field_width_accommodates_reasonable_phase_names` — sanity for future run types.
+- **`ChoiceFieldWidthInvariantTests`** — walks every choice-backed CharField on `BullpenBackfillRun` and `BullpenExperimentRun`, asserts `max_length >= longest_choice_value`. Prevents this class of defect from recurring.
+
+**1564 real tests pass** (previous 1559 + 5 new). Only failure remains the pre-existing `feedback.tests` ImportError.
+
+### Preserved
+
+- The successful 180-day A/B/C experiment result (`BullpenExperimentRun` with `kind='experiment'`, `status='completed'`) — untouched.
+- The failed attribution row from earlier today — untouched; useful operational history.
+- Historical `TeamBullpenSnapshot` rows — untouched.
+- `RelieverAppearance` rows — untouched.
+
+Data migrations do NOT delete or transform any existing row; the schema change is a widening `ALTER COLUMN progress_variant TYPE varchar(32)` which is a safe forward migration on Postgres (no rewrite, no lock outside metadata).
+
+### Next operator action
+
+1. Wait ~2 min for Railway to auto-deploy this commit.
+2. Re-open `https://brotherwillies.com/analytics/bullpen-experiment/`.
+3. Click **"Start Attribution + Salvage Study"** again (defaults: days=180, blend=0.55).
+4. This time the run enters `status='running'` cleanly, progresses through decompose → evaluate → report, and completes in ~2-5 minutes.
+5. When complete, the 8-section report renders inline. Paste back for verdict interpretation.
+
+### Safety invariants (all preserved)
+
+- `USE_V3_2_SELECTION=true` on Railway → production gate unchanged (0.62 / 7pp).
+- `USE_BULLPEN_QUALITY=false`, `USE_BULLPEN_FATIGUE=false` — bullpen contribution NEVER enters the score.
+- Prediction methodology unchanged. Attribution mathematics unchanged. This is a persistence-schema fix only.
+
+---
+
 ## 2026-08-23 — v3.3 SHADOW: Bullpen Attribution + Salvage Study
 
 The 180-day A/B/C bullpen replay ran cleanly and produced clear evidence of NO-GO:

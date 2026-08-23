@@ -264,7 +264,13 @@ class BullpenExperimentRun(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
 
     # Live progress fields (updated by the daemon thread every N games).
-    progress_variant = models.CharField(max_length=8, blank=True, default='')
+    # 2026-08-23 fix: max_length was 8 — sized for A/B/C experiment
+    # variant labels only. The attribution run's progress_cb writes
+    # the current PHASE ('decompose', ~9 chars), which exceeded
+    # varchar(8) on Railway Postgres and killed the run at the first
+    # progress save. Widened to 32 so future diagnostic run types can
+    # publish descriptive phase names without another migration.
+    progress_variant = models.CharField(max_length=32, blank=True, default='')
     progress_current = models.IntegerField(default=0)
     progress_total = models.IntegerField(default=0)
 
