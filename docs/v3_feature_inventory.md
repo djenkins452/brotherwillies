@@ -58,18 +58,18 @@ This is the running ledger of every predictive signal in the engine, its activat
 |---|---|---|---|
 | 21 | `HOUSE_WEIGHTS['injury']` | 🔴 Unwired | Phase 3 recommended removal as dead-code cleanup. |
 
-## Phase 2 — infrastructure shipped, NOT yet activated
+## Phase 2 — infrastructure preserved; NOT PRODUCTION-VALUABLE (validation failed)
 
 | # | Feature | Status | Design doc | Flag | Default | Notes |
 |---|---|---|---|---|---|---|
-| 22 | **Bullpen quality** | 🟡 **Shadow infrastructure shipped — 2026-08-22** | `docs/v3_2_bullpen_design.md` | `USE_BULLPEN_QUALITY` | `false` | Model, service, model-service wire-in, `feature_contributions` capture, replay experiment (`?experiment=bullpen`), tests all shipped. `TeamBullpenSnapshot` table exists and is empty. Ingestion command scaffolded but not wired to a live data source (see command's module docstring for 4 evaluated options). |
-| 23 | Bullpen fatigue | 🟡 **Shadow infrastructure shipped — 2026-08-22** | Same doc | `USE_BULLPEN_FATIGUE` | `false` | Toggles independently of quality. Fields present on `TeamBullpenSnapshot` (`appearances_last_1_day/2_days/3_days`, `top_reliever_available`, `high_leverage_rest_days_min`); reliever-appearance ingestion (Phase 2B) not scaffolded. |
+| 22 | **Bullpen quality** | 🔴 **NOT PRODUCTION-VALUABLE — 2026-08-23** | `docs/v3_2_bullpen_design.md`, `docs/v3_3_bullpen_final_validation.md` | `USE_BULLPEN_QUALITY` | `false` (permanent) | Full stack shipped (model, service, historical reconstruction, replay/attribution/walk-forward validation). Walk-forward FAILED 2/6 pre-registered ship criteria. Aggregate improvement was small and not temporally consistent; vetoed bets performed indistinguishably from retained bets. Formally closed NO-GO. Infrastructure preserved for future research. |
+| 23 | Bullpen fatigue | 🔴 **NOT PRODUCTION-VALUABLE — 2026-08-23** | Same docs | `USE_BULLPEN_FATIGUE` | `false` (permanent) | Same closure. Full quality+fatigue variant (+C) also failed the same validation. |
 
 ## Phase 3+ — identified, not designed
 
 | # | Feature | Phase | Status | Notes |
 |---|---|---|---|---|
-| 24 | Confirmed lineup + lineup quality | Phase 3 | 🔍 Identified | Phase 5 strategic — highest CLV alpha if delivered through Game Timing window. |
+| 24 | Confirmed lineup + lineup quality | Phase 3 | 🔬 **Active research — 2026-08-23** (v3.4) | Empirical MLB Stats API investigation underway. Historical pregame-timestamp reconstruction is the critical open question; a boxscore lineup is postgame truth, not necessarily what Brother Willies could have known before first pitch. Design doc + implementation status: see `docs/v3_4_lineup_investigation.md`. |
 | 25 | Per-bucket isotonic calibration | Phase 3 | 🔍 Identified | Architectural — pairs with feature additions. |
 | 26 | Park factor + weather | Phase 4 | 🔍 Identified | Larger impact on totals than moneyline. |
 | 27 | Sharp money / steam | Phase 4 | 🔍 Identified | Requires sharp-book ingestion (new provider). |

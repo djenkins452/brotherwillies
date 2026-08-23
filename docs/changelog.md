@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-08-23 — v3.3 CLOSED (NO-GO) + v3.4 Lineup Investigation
+
+### V3.3 Bullpen — FORMALLY CLOSED NO-GO
+
+Walk-forward validation of the veto ≤ -6 rule (the one surviving formulation from the attribution study) FAILED 2 of 6 pre-registered ship criteria:
+
+- Aggregate: A (V3.2 baseline) n=218, 71.10% win, +21.12% ROI, 57.01% CLV+
+- Aggregate: B (V3.2 + veto ≤ -6) n=178, 71.35% win, +21.48% ROI, 55.17% CLV+
+- Vetoed bets: n=40, 70.00% win, +19.51% ROI, 65.00% CLV+ (**higher CLV than retained bets** — the opposite of what a working veto should show)
+- Fold consistency: helped=3, neutral=1, **hurt=4**, no_data=2
+
+Failed criteria:
+- **#5 — helped folds ≥ hurt folds + 1**: helped=3 vs hurt=4 (difference = -1). Aggregate signal is one deep-runner-up fold away from flipping negative.
+- **#6 — vetoed bets materially worse than retained bets (ROI gap ≥ 2pp)**: vetoed ROI (+19.51%) is nearly identical to retained (+21.48%); CLV+ actually HIGHER on vetoed bets. The veto is not identifying disproportionately bad bets.
+
+**Decision:** bullpen classified NOT CURRENTLY PRODUCTION-VALUABLE. All bullpen infrastructure preserved (models, ingestion, daily refresh, shadow contributions, replay/attribution/walk-forward harnesses, staff UI). All bullpen production flags remain `false`. See [docs/v3_3_bullpen_final_validation.md](docs/v3_3_bullpen_final_validation.md) for the full validation record.
+
+Documentation:
+- **NEW** `docs/v3_3_bullpen_final_validation.md` — complete evidence trail across all 3 validation stages and the mechanical NO-GO decision.
+- `docs/v3_feature_inventory.md` — rows 22/23 (bullpen quality / fatigue) flipped to 🔴 NOT PRODUCTION-VALUABLE with the walk-forward evidence.
+
+Zero production impact. V3.2 remains frozen: `USE_V3_2_SELECTION=true` on Railway (0.62 / 7pp), Recent Form ON, blend 0.55.
+
+### V3.4 Lineup Investigation — empirical evidence + stop condition fired
+
+Empirical probe of MLB Stats API for confirmed pregame lineup data:
+
+- `/api/v1/schedule?hydrate=lineups` for **historical Final games** returns `lineups.homePlayers` and `awayPlayers` with 9 players each (verified 10/10 games yesterday).
+- Same endpoint for **future scheduled games** returns EMPTY lineups (verified 15/15 games today). The API does not publish forward-looking pregame lineups through this endpoint until close to/after game start.
+- `/api/v1.1/game/{gamePk}/feed/live/timestamps` returns 450 sequential state timestamps for the tested game, from ~3.6 hours before first pitch to game end. Reconstructing "when did the lineup card first appear pregame" would require walking `/feed/live/diffPatch` between timestamps — ~1.2M API calls for a 180-day backfill. **Infeasible.**
+- `/api/v1/people/{id}/stats?stats=gameLog&group=hitting&season=YYYY` returns per-game hitting logs (AB/H/HR/BB/K/avg/obp/slg/ops). Verified with a real player (96 game logs for 2026). Historical player-stat reconstruction: **fully feasible.**
+
+Per the brief's stop conditions:
+
+> lineup timestamps cannot distinguish pregame knowledge from postgame truth where that distinction is required
+
+**Stop condition fired.** Historical replay cannot be run without leakage risk. Do NOT abandon forward lineup collection — but do NOT run historical replay on today's batting-order payload as if it were pregame confirmed.
+
+Documentation:
+- **NEW** `docs/v3_4_lineup_investigation.md` — full empirical findings, feasibility analysis, and recommended path forward (begin forward collection now, run park factors + weather as parallel historically-testable research).
+- `docs/v3_feature_inventory.md` — row 24 flipped to 🔬 Active research with cross-reference to the investigation doc.
+
+### Operator decision requested
+
+Full details in `docs/v3_4_lineup_investigation.md`. Danny picks one of:
+
+- **A** — build the forward-collection foundation now (`ConfirmedLineup` + 15-min schedule poll + Railway cron); accept 30-90 day evidence horizon; parallel park-factor + weather research to keep the pipeline productive.
+- **B** — skip lineup for now; move directly to park factors + weather as the next feature investigation.
+- **C** — different priority; Danny names the next feature.
+
+**Nothing ships in production regardless of choice.** V3.2 remains frozen; the invariant is preserved.
+
+### Tests
+
+**1574 real tests pass** (no test changes in this commit — pure documentation). Only remaining failure is the pre-existing `feedback.tests` ImportError.
+
+---
+
 ## 2026-08-23 — v3.3 SHADOW: Final Bullpen Veto Walk-Forward Validation
 
 Attribution + Salvage Study identified ONE surviving formulation: **veto V3.2 recommendation when picked-side bullpen quality differential ≤ -6 rating units**. Exploratory improvement was small (+0.31pp win, +0.51pp ROI), so proper walk-forward validation is required before any production activation.
