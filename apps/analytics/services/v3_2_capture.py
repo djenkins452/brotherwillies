@@ -46,11 +46,36 @@ ENGINE_VERSION = 'v3_2'
 MIN_WINDOW_MIN = 45
 MAX_WINDOW_MIN = 75
 
-# Forward validation start marker — filled on first module import; the
-# capture command reads this so the forward-health report can print
-# "Forward validation started on YYYY-MM-DD" and reject any historical
-# backfill masquerading as forward data.
-FORWARD_VALIDATION_STARTED_AT_KEY = 'v3_2_forward_validation_started_at'
+
+def activation_at():
+    """Durable activation boundary for the autonomous capture system.
+
+    Read from `settings.FORWARD_VALIDATION_ACTIVATION_AT_STR` — a
+    hardcoded default overridable by env var. Never derived from the
+    oldest ForwardValidationSnapshot (that would collapse to "now"
+    on first deploy and misclassify games whose window opened
+    minutes after activation).
+
+    Returns a timezone-aware datetime. Raises ValueError if the
+    configured string is unparseable — a misconfigured boundary would
+    invalidate weeks of prospective evidence, so surface it loudly.
+    """
+    from django.conf import settings
+    from django.utils.dateparse import parse_datetime
+    from django.utils import timezone
+    raw = getattr(settings, 'FORWARD_VALIDATION_ACTIVATION_AT_STR',
+                  '2026-08-24T12:00:00+00:00')
+    dt = parse_datetime(raw)
+    if dt is None:
+        raise ValueError(
+            f'FORWARD_VALIDATION_ACTIVATION_AT_STR is not a valid ISO-8601 '
+            f'datetime: {raw!r}'
+        )
+    if timezone.is_naive(dt):
+        raise ValueError(
+            f'FORWARD_VALIDATION_ACTIVATION_AT_STR must be tz-aware: {raw!r}'
+        )
+    return dt
 
 
 def _classify_decision(rec) -> str:

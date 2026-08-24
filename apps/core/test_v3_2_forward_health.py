@@ -333,9 +333,11 @@ class RendererSmokeTests(TestCase):
 
 
 class VerdictOnEmptyPopulationTests(TestCase):
-    def test_no_snapshots_yields_insufficient_data(self):
+    def test_no_snapshots_and_no_eligible_games_yields_awaiting(self):
+        """With no games at all, verdict is AWAITING_FIRST_CAPTURE
+        (the corrected state — was INSUFFICIENT_DATA before the fix)."""
         report = fh.compute_forward_health(days=30)
-        self.assertEqual(report['verdict']['verdict'], 'INSUFFICIENT_DATA')
+        self.assertEqual(report['verdict']['verdict'], 'AWAITING_FIRST_CAPTURE')
 
 
 class CaptureCommandChainTests(TestCase):
@@ -344,3 +346,143 @@ class CaptureCommandChainTests(TestCase):
         discoverable — this is what refresh_data calls."""
         from django.core.management import get_commands
         self.assertIn('capture_v3_2_validation', get_commands())
+
+
+class ActivationBoundaryTests(TestCase):
+    """Locks the fix that stopped pre-activation history from
+    triggering DATA_COLLECTION_DEGRADED."""
+
+    def test_activation_returns_tz_aware_datetime(self):
+        act = v3_2_capture.activation_at()
+        self.assertIsNotNone(act)
+        self.assertIsNotNone(act.tzinfo)
+
+    def test_pre_activation_game_not_missed(self):
+        """A game whose canonical window closed BEFORE activation must
+        NOT appear as missed — it was never eligible for prospective
+        capture."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        # Game 20 days ago — first_pitch far before any plausible
+        # activation timestamp.
+        fp = timezone.now() - dt.timedelta(days=20)
+        _mk_game(home, away, fp, home_score=5, away_score=3, status='final')
+        report = fh.compute_forward_health(days=30)
+        ch = report['capture_health']
+        # The game IS in the report window, but classified as pre-activation.
+        self.assertEqual(ch['report_window_games'], 1)
+        self.assertEqual(ch['pre_activation_excluded'], 1)
+        self.assertEqual(ch['post_activation_eligible'], 0)
+        self.assertEqual(ch['missed_eligible'], 0)
+        # Coverage % is None when denominator is 0 — never fake it.
+        self.assertIsNone(ch['capture_coverage_pct'])
+
+    def test_verdict_awaiting_first_capture_not_degraded_on_pre_activation_only(self):
+        """The exact production regression: 409 pre-activation games
+        must not trigger DATA_COLLECTION_DEGRADED."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        for i in range(50):
+            _mk_game(home, away,
+                     timezone.now() - dt.timedelta(days=15 + i, hours=i),
+                     home_score=5, away_score=3, status='final')
+        report = fh.compute_forward_health(days=60)
+        v = report['verdict']['verdict']
+        self.assertEqual(v, 'AWAITING_FIRST_CAPTURE')
+        self.assertNotEqual(v, 'DATA_COLLECTION_DEGRADED')
+
+    def test_post_activation_uncaptured_game_is_missed(self):
+        """A game whose canonical window opened AFTER activation and
+        finished without a snapshot MUST count as missed."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        # Game 2h ago — its canonical window (T-75..T-45) was 45..75
+        # min before first_pitch, i.e. 45..75 min ago, well after
+        # any test activation.
+        activation = v3_2_capture.activation_at()
+        # Guard: only meaningful if activation is in the past.
+        if activation > timezone.now():
+            self.skipTest('activation is in the future; setup would '
+                          'not create a post-activation game')
+        fp = timezone.now() - dt.timedelta(minutes=30)
+        _mk_game(home, away, fp,
+                 home_score=5, away_score=3, status='final')
+        report = fh.compute_forward_health(days=30)
+        ch = report['capture_health']
+        self.assertEqual(ch['post_activation_eligible'], 1)
+        self.assertEqual(ch['missed_eligible'], 1)
+        # And missed_captures details include this game with a
+        # SCHEDULER_MISS classification (no CronRunLog exists).
+        misses = ch['missed_captures']
+        self.assertEqual(len(misses), 1)
+        self.assertEqual(misses[0]['classification'], 'SCHEDULER_MISS')
+
+    def test_canonical_window_unchanged(self):
+        """Locks the 45..75 window against silent widening (the brief
+        explicitly forbids widening the window to accommodate a weak
+        scheduler)."""
+        self.assertEqual(v3_2_capture.MIN_WINDOW_MIN, 45)
+        self.assertEqual(v3_2_capture.MAX_WINDOW_MIN, 75)
+
+    def test_no_backfill_via_report_computation(self):
+        """Computing the forward-health report must NOT create any
+        ForwardValidationSnapshot rows — the population is
+        prospective-only, never derived from historical replay."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        for i in range(5):
+            _mk_game(home, away,
+                     timezone.now() - dt.timedelta(days=i + 1),
+                     home_score=5, away_score=3, status='final')
+        before = ForwardValidationSnapshot.objects.count()
+        fh.compute_forward_health(days=30)
+        after = ForwardValidationSnapshot.objects.count()
+        self.assertEqual(before, after,
+                         'Report computation must not manufacture snapshots')
+
+
+class RefreshCadenceAuditTests(TestCase):
+    def test_cadence_reports_none_when_no_runs(self):
+        report = fh.compute_forward_health(days=30)
+        cad = report['capture_health']['cadence']
+        self.assertEqual(cad['run_count'], 0)
+        self.assertFalse(cad['guarantees_capture'])
+
+    def test_cadence_guarantees_when_intervals_below_window_width(self):
+        """max interval < 30min → guarantees_capture=True."""
+        from apps.ops.models import CronRunLog
+        now = timezone.now()
+        for i in range(5):
+            r = CronRunLog.objects.create(
+                command='refresh_data', trigger='cron',
+                status='success',
+            )
+            # started_at is auto_now_add on this model; force it back.
+            CronRunLog.objects.filter(id=r.id).update(
+                started_at=now - dt.timedelta(minutes=i * 10),
+            )
+        report = fh.compute_forward_health(days=30)
+        cad = report['capture_health']['cadence']
+        self.assertEqual(cad['run_count'], 5)
+        # intervals of 10min each < 30min canonical width
+        self.assertTrue(cad['guarantees_capture'])
+
+    def test_cadence_does_not_guarantee_when_max_gap_exceeds_window(self):
+        from apps.ops.models import CronRunLog
+        now = timezone.now()
+        r1 = CronRunLog.objects.create(
+            command='refresh_data', trigger='cron', status='success',
+        )
+        r2 = CronRunLog.objects.create(
+            command='refresh_data', trigger='cron', status='success',
+        )
+        CronRunLog.objects.filter(id=r1.id).update(
+            started_at=now - dt.timedelta(minutes=90),
+        )
+        CronRunLog.objects.filter(id=r2.id).update(
+            started_at=now - dt.timedelta(minutes=30),
+        )
+        report = fh.compute_forward_health(days=30)
+        cad = report['capture_health']['cadence']
+        self.assertFalse(cad['guarantees_capture'])
+        self.assertGreaterEqual(cad['max_interval_min'], 30)

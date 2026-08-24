@@ -394,6 +394,29 @@ USE_TEAM_OFFENSE = os.environ.get('USE_TEAM_OFFENSE', 'false').lower() in (
     'true', '1', 'yes',
 )
 
+# --- V3.2 forward-validation activation boundary (2026-08-24) ---
+# The autonomous ForwardValidationSnapshot capture system was deployed
+# on 2026-08-24 in commit 3a01e32. Games with a canonical capture
+# window (T-75 .. T-45min before first_pitch) that fell BEFORE this
+# instant were never eligible for prospective capture and MUST NOT
+# count as "missed" in the capture-coverage denominator.
+#
+# The default is set to 2026-08-24 12:00:00 UTC — a conservative
+# floor safely before any prospective refresh cycle that could have
+# executed the new capture command. Railway can override with a
+# tighter boundary via the FORWARD_VALIDATION_ACTIVATION_AT env var
+# (ISO-8601 format; must include tzinfo).
+#
+# CRITICAL: never derive this from the oldest ForwardValidationSnapshot.
+# Before the first snapshot exists we still need a boundary — the
+# "there are no snapshots yet BECAUSE no eligible game has entered
+# the window post-activation" case must be distinguishable from a
+# broken capture pipeline.
+FORWARD_VALIDATION_ACTIVATION_AT_STR = os.environ.get(
+    'FORWARD_VALIDATION_ACTIVATION_AT',
+    '2026-08-24T12:00:00+00:00',
+)
+
 # --- AI Insights (OpenAI) ---
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4.1-mini')

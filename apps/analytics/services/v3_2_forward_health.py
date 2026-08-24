@@ -281,6 +281,10 @@ def compute_forward_health(*, days: int = 30) -> Dict[str, Any]:
     cohorts = _cohort_metrics_snap(settled)
     calibration = _calibration_metrics_snap(settled)
     capture_health = _capture_health(days=days, now=now)
+    capture_health['cadence'] = _refresh_cadence_audit(now=now, hours=24)
+    capture_health['missed_captures'] = _missed_capture_details(
+        now=now, days=days,
+    )
     integrity = {
         'total_snaps_in_window': len(all_snaps),
         'recommended_snaps': len(rec_snaps),
@@ -341,29 +345,35 @@ def compute_forward_health(*, days: int = 30) -> Dict[str, Any]:
 def _capture_health(*, days: int, now) -> Dict[str, Any]:
     """CAPTURE HEALTH block — was capture actually running?
 
-    Reports:
-      * eligible historical games (final MLB games in window with a
-        first_pitch we could have captured against) — used as the
-        expected-snapshot denominator.
-      * snapshots actually captured in the same window.
-      * capture coverage %.
-      * average minutes-to-first-pitch at capture time.
-      * currently-in-window games (immediate next-fire preview).
-      * upcoming games — first eligible auto-capture time.
+    2026-08-24 fix: the previous denominator counted every past-window
+    game in the reporting range. That erased the scientific boundary
+    between "before autonomous capture existed" and "after". A game
+    whose canonical capture window closed BEFORE the activation
+    timestamp was never eligible for prospective capture and MUST NOT
+    count as missed.
+
+    Corrected denominator:
+      post_activation_eligible = games whose canonical capture opportunity
+      (first_pitch - MAX_WINDOW_MIN .. first_pitch - MIN_WINDOW_MIN) fell
+      AFTER activation AND has now passed (is_final = True).
+
+    Coverage % is computed against post_activation_eligible only. If
+    that's 0, verdict = AWAITING_FIRST_CAPTURE (not DATA_COLLECTION_
+    DEGRADED). No historical games count as missed.
     """
     from apps.analytics.models import ForwardValidationSnapshot
-    from apps.analytics.services.v3_2_capture import ENGINE_VERSION
+    from apps.analytics.services.v3_2_capture import (
+        ENGINE_VERSION, MIN_WINDOW_MIN, MAX_WINDOW_MIN, activation_at,
+    )
     from apps.mlb.models import Game
 
-    from django.db.models import Q
-
+    activation = activation_at()
     cutoff = now - timedelta(days=days)
 
     # Every MLB game whose first_pitch fell inside the reporting window
-    # AND is now final. Those are the games we COULD have captured a
-    # canonical snapshot for. (Games in the future are counted below
-    # under upcoming.)
-    eligible = list(
+    # AND is now final. These are the RAW candidates — some are pre-
+    # activation (excluded from denominator), some post-activation.
+    report_window_games = list(
         Game.objects
         .filter(source='mlb_stats_api',
                 first_pitch__gte=cutoff,
@@ -371,35 +381,49 @@ def _capture_health(*, days: int, now) -> Dict[str, Any]:
                 status='final')
         .only('id', 'first_pitch')
     )
-    eligible_ids = {g.id for g in eligible}
+
+    # Classify each game by whether its canonical capture WINDOW END
+    # (first_pitch - MIN_WINDOW_MIN) fell after activation.
+    # Rationale: a game whose T-45min moment was before activation had
+    # ZERO chance of being captured prospectively. Even if part of its
+    # window opened before activation, we still count it if the window
+    # closed after activation — a partial post-activation window is
+    # enough opportunity for the scheduler to fire.
+    pre_activation_ids = set()
+    post_activation_eligible = []
+    for g in report_window_games:
+        capture_window_end = g.first_pitch - timedelta(minutes=MIN_WINDOW_MIN)
+        if capture_window_end < activation:
+            pre_activation_ids.add(g.id)
+        else:
+            post_activation_eligible.append(g)
+
+    post_activation_eligible_ids = {g.id for g in post_activation_eligible}
     captured_ids = set(
         ForwardValidationSnapshot.objects
         .filter(engine_version=ENGINE_VERSION,
-                mlb_game_id__in=eligible_ids)
+                mlb_game_id__in=post_activation_eligible_ids)
         .values_list('mlb_game_id', flat=True)
     )
-    missed_ids = eligible_ids - captured_ids
+    missed_ids = post_activation_eligible_ids - captured_ids
+
     total_captured_in_window = ForwardValidationSnapshot.objects.filter(
         engine_version=ENGINE_VERSION,
-        captured_at__gte=cutoff,
+        captured_at__gte=max(cutoff, activation),
     ).count()
 
     avg_min_to_fp = None
     if total_captured_in_window:
-        agg = ForwardValidationSnapshot.objects.filter(
-            engine_version=ENGINE_VERSION,
-            captured_at__gte=cutoff,
+        vals = list(
+            ForwardValidationSnapshot.objects
+            .filter(engine_version=ENGINE_VERSION,
+                    captured_at__gte=max(cutoff, activation))
+            .values_list('minutes_to_first_pitch', flat=True)
         )
-        s = 0
-        n = 0
-        for m in agg.values_list('minutes_to_first_pitch', flat=True):
-            s += m; n += 1
-        avg_min_to_fp = round(s / n, 1) if n else None
+        if vals:
+            avg_min_to_fp = round(sum(vals) / len(vals), 1)
 
     # Currently-in-window (would be captured on next refresh cycle).
-    from apps.analytics.services.v3_2_capture import (
-        MIN_WINDOW_MIN, MAX_WINDOW_MIN,
-    )
     window_lo = now + timedelta(minutes=MIN_WINDOW_MIN)
     window_hi = now + timedelta(minutes=MAX_WINDOW_MIN)
     in_window = list(
@@ -424,15 +448,20 @@ def _capture_health(*, days: int, now) -> Dict[str, Any]:
         .first()
     )
 
-    denom = max(1, len(eligible_ids))
-    coverage_pct = round(100.0 * len(captured_ids) / denom, 2)
+    denom = max(1, len(post_activation_eligible_ids))
+    coverage_pct = round(100.0 * len(captured_ids) / denom, 2) \
+        if post_activation_eligible_ids else None
     return {
         'window_days': days,
-        'eligible_games_in_window': len(eligible_ids),
+        'activation_at': activation.isoformat(),
+        # NEW: pre/post activation split so the denominator is honest.
+        'report_window_games': len(report_window_games),
+        'pre_activation_excluded': len(pre_activation_ids),
+        'post_activation_eligible': len(post_activation_eligible_ids),
         'snapshots_captured_for_eligible': len(captured_ids),
         'missed_eligible': len(missed_ids),
         'capture_coverage_pct': coverage_pct,
-        'total_snapshots_written_in_window': total_captured_in_window,
+        'total_snapshots_written_since_activation': total_captured_in_window,
         'avg_min_to_first_pitch': avg_min_to_fp,
         'currently_in_window': [
             {'game_id': str(g.id), 'first_pitch': g.first_pitch.isoformat()}
@@ -442,14 +471,163 @@ def _capture_health(*, days: int, now) -> Dict[str, Any]:
             {
                 'game_id': str(next_upcoming.id),
                 'first_pitch': next_upcoming.first_pitch.isoformat(),
-                'earliest_auto_capture_at': (
+                'canonical_window_start': (
                     (next_upcoming.first_pitch
                      - timedelta(minutes=MAX_WINDOW_MIN)).isoformat()
+                ),
+                'canonical_window_end': (
+                    (next_upcoming.first_pitch
+                     - timedelta(minutes=MIN_WINDOW_MIN)).isoformat()
                 ),
             }
             if next_upcoming else None
         ),
+        # Cadence audit + missed-capture classification are computed
+        # separately and merged in by compute_forward_health.
     }
+
+
+def _refresh_cadence_audit(*, now, hours: int = 24) -> Dict[str, Any]:
+    """Inspect refresh_data run timestamps and compute median/max
+    intervals + longest gap. Answers mechanically: can the current
+    cadence guarantee at least one execution inside every 30-minute
+    canonical capture window?"""
+    from apps.ops.models import CronRunLog
+    from apps.analytics.services.v3_2_capture import (
+        MIN_WINDOW_MIN, MAX_WINDOW_MIN,
+    )
+
+    since = now - timedelta(hours=hours)
+    runs = list(
+        CronRunLog.objects
+        .filter(command='refresh_data', started_at__gte=since)
+        .order_by('started_at')
+        .values('started_at', 'status')
+    )
+    n = len(runs)
+    if n < 2:
+        return {
+            'window_hours': hours,
+            'run_count': n,
+            'runs': [r['started_at'].isoformat() for r in runs],
+            'median_interval_min': None,
+            'max_interval_min': None,
+            'longest_gap_min': None,
+            'failed_run_count': sum(1 for r in runs if r['status'] != 'success'),
+            'guarantees_capture': False,
+            'guarantee_reason': (
+                f'only {n} refresh_data run(s) in the last {hours}h — '
+                'cannot compute cadence yet.'
+            ),
+        }
+    intervals = []
+    for a, b in zip(runs, runs[1:]):
+        intervals.append(int((b['started_at'] - a['started_at'])
+                             .total_seconds() / 60))
+    intervals.sort()
+    mid = intervals[len(intervals) // 2]
+    mx = max(intervals)
+    canonical_width = MAX_WINDOW_MIN - MIN_WINDOW_MIN  # 30
+    # Guaranteed capture requires MAX interval < canonical window width.
+    guarantees = mx < canonical_width
+    return {
+        'window_hours': hours,
+        'run_count': n,
+        'runs_sample_first_5': [r['started_at'].isoformat()
+                                for r in runs[:5]],
+        'runs_sample_last_5': [r['started_at'].isoformat()
+                               for r in runs[-5:]],
+        'median_interval_min': mid,
+        'max_interval_min': mx,
+        'longest_gap_min': mx,
+        'canonical_window_width_min': canonical_width,
+        'failed_run_count': sum(1 for r in runs if r['status'] != 'success'),
+        'guarantees_capture': guarantees,
+        'guarantee_reason': (
+            f'max interval {mx}min < canonical window width {canonical_width}min'
+            if guarantees else
+            f'max interval {mx}min >= canonical window width {canonical_width}min '
+            '— a game whose first_pitch lands during that gap CAN be missed. '
+            'Tighten refresh_data cadence or split capture onto a dedicated '
+            'sub-30min schedule.'
+        ),
+    }
+
+
+def _missed_capture_details(*, now, days: int) -> List[Dict[str, Any]]:
+    """For each post-activation eligible game with no snapshot, classify
+    the miss and record scheduler runs that were active during its
+    canonical window."""
+    from apps.analytics.models import ForwardValidationSnapshot
+    from apps.analytics.services.v3_2_capture import (
+        ENGINE_VERSION, MIN_WINDOW_MIN, MAX_WINDOW_MIN, activation_at,
+    )
+    from apps.mlb.models import Game
+    from apps.ops.models import CronRunLog
+
+    activation = activation_at()
+    cutoff = now - timedelta(days=days)
+    games = list(
+        Game.objects
+        .filter(source='mlb_stats_api',
+                first_pitch__gte=cutoff,
+                first_pitch__lt=now,
+                status='final')
+        .only('id', 'first_pitch')
+    )
+    captured = set(
+        ForwardValidationSnapshot.objects
+        .filter(engine_version=ENGINE_VERSION,
+                mlb_game_id__in={g.id for g in games})
+        .values_list('mlb_game_id', flat=True)
+    )
+    misses = []
+    for g in games:
+        # Same eligibility filter used above.
+        window_start = g.first_pitch - timedelta(minutes=MAX_WINDOW_MIN)
+        window_end = g.first_pitch - timedelta(minutes=MIN_WINDOW_MIN)
+        if window_end < activation:
+            continue
+        if g.id in captured:
+            continue
+        # A miss — classify by whether refresh_data fired during window.
+        overlapping = CronRunLog.objects.filter(
+            command='refresh_data',
+            started_at__gte=window_start,
+            started_at__lte=window_end,
+        ).values('started_at', 'status')
+        overlap_list = list(overlapping)
+        if not overlap_list:
+            classification = 'SCHEDULER_MISS'
+            reason = ('refresh_data never fired between '
+                      f'{window_start.isoformat()} and '
+                      f'{window_end.isoformat()}')
+        else:
+            successful = [r for r in overlap_list if r['status'] == 'success']
+            if not successful:
+                classification = 'SCHEDULER_MISS'
+                reason = (f'refresh_data fired {len(overlap_list)} '
+                          f'time(s) in-window but none succeeded')
+            else:
+                # scheduler DID fire — something else broke. Cannot
+                # distinguish DATA_UNAVAILABLE vs MODEL_ERROR from the
+                # CronRunLog alone (would need per-command tail parse).
+                # Tag OTHER for now with the diagnostic hint.
+                classification = 'OTHER'
+                reason = (f'refresh_data fired successfully during window '
+                          f'but no snapshot exists — likely the capture '
+                          'sub-step raised (odds missing / model error) '
+                          'without failing the parent run.')
+        misses.append({
+            'game_id': str(g.id),
+            'first_pitch': g.first_pitch.isoformat(),
+            'canonical_window_start': window_start.isoformat(),
+            'canonical_window_end': window_end.isoformat(),
+            'scheduler_runs_in_window': len(overlap_list),
+            'classification': classification,
+            'reason': reason,
+        })
+    return misses[:100]
 
 
 def _aggregate_metrics_snap(settled_snaps) -> Dict[str, Any]:
@@ -809,32 +987,55 @@ def _compute_verdict(*, n_settled: int, aggregate: Dict[str, Any],
     # because the model is drifting. If the capture pipeline itself is
     # unhealthy, headline that instead of pretending the model has
     # insufficient data.
+    #
+    # 2026-08-24 fix: denominator now uses post-activation eligible
+    # only. Pre-activation games CANNOT trigger DATA_COLLECTION_DEGRADED
+    # — they never had a chance to be captured.
     if capture_health is not None:
-        elig = capture_health.get('eligible_games_in_window', 0)
-        cov = capture_health.get('capture_coverage_pct', 0.0)
-        if elig >= 10 and cov < 60.0:
+        elig = capture_health.get('post_activation_eligible', 0)
+        cov = capture_health.get('capture_coverage_pct')
+        if elig == 0:
+            # No post-activation games have completed their window yet.
+            reasons.append((
+                'INFO',
+                'No post-activation eligible games yet. Forward '
+                'validation is ACTIVE and awaiting the first game '
+                f'whose canonical capture window (T-{75}..T-{45}min) '
+                'opens after activation.',
+            ))
+            nu = capture_health.get('next_upcoming')
+            if nu:
+                reasons.append((
+                    'INFO',
+                    f'next upcoming eligible game_id={nu["game_id"]} '
+                    f'first_pitch={nu["first_pitch"]} '
+                    f'canonical_window={nu["canonical_window_start"]}..'
+                    f'{nu["canonical_window_end"]}',
+                ))
+            return HealthVerdict('AWAITING_FIRST_CAPTURE', tuple(reasons))
+        if cov is not None and elig >= 10 and cov < 60.0:
             reasons.append((
                 'FAIL',
-                f'capture coverage {cov:.1f}% of {elig} eligible '
-                'past-window games — DATA COLLECTION DEGRADED, model '
+                f'post-activation capture coverage {cov:.1f}% of {elig} '
+                'eligible games — DATA COLLECTION DEGRADED, model '
                 'metrics below are unreliable.',
             ))
             return HealthVerdict('DATA_COLLECTION_DEGRADED', tuple(reasons))
-        elif elig >= 10 and cov < 80.0:
+        elif cov is not None and elig >= 10 and cov < 80.0:
             reasons.append((
                 'WARN',
-                f'capture coverage {cov:.1f}% of {elig} eligible '
-                'past-window games — WATCH the collection pipeline.',
+                f'post-activation capture coverage {cov:.1f}% of {elig} '
+                'eligible games — WATCH the collection pipeline.',
             ))
 
     if forward_started is None:
         reasons.append((
             'INFO',
             'No canonical snapshots persisted yet. Forward validation '
-            'starts on the first refresh cycle that finds a game inside '
-            'the T-60min ±15min window post-deploy.',
+            'is ACTIVE and awaiting the first refresh cycle that finds '
+            'a game inside the T-60min ±15min window post-activation.',
         ))
-        return HealthVerdict('INSUFFICIENT_DATA', tuple(reasons))
+        return HealthVerdict('AWAITING_FIRST_CAPTURE', tuple(reasons))
 
     if n_settled < MIN_SETTLED_FOR_JUDGMENT:
         reasons.append((
@@ -984,24 +1185,56 @@ def render_forward_health(h: Dict[str, Any]) -> str:
     ch = h.get('capture_health', {})
     lines.append('CAPTURE HEALTH (autonomous — no user activity required)')
     lines.append('-' * 78)
-    lines.append(f'  eligible past-window games : {ch.get("eligible_games_in_window", 0)}')
-    lines.append(f'  captured of those          : {ch.get("snapshots_captured_for_eligible", 0)}'
-                 f'  (coverage {ch.get("capture_coverage_pct", 0.0)}%)')
-    lines.append(f'  missed eligible            : {ch.get("missed_eligible", 0)}')
-    lines.append(f'  total snapshots in window  : {ch.get("total_snapshots_written_in_window", 0)}')
-    lines.append(f'  avg min-to-first-pitch     : {ch.get("avg_min_to_first_pitch")}')
+    lines.append(f'  activation_at                : {ch.get("activation_at")}')
+    lines.append(f'  report-window games          : {ch.get("report_window_games", 0)}')
+    lines.append(f'  pre-activation excluded      : {ch.get("pre_activation_excluded", 0)}'
+                 ' (never eligible; not counted as missed)')
+    lines.append(f'  post-activation eligible     : {ch.get("post_activation_eligible", 0)}')
+    lines.append(f'  captured (of post-activation): {ch.get("snapshots_captured_for_eligible", 0)}'
+                 f'  (coverage {ch.get("capture_coverage_pct")}%)')
+    lines.append(f'  missed post-activation       : {ch.get("missed_eligible", 0)}')
+    lines.append(f'  total snapshots since activation: {ch.get("total_snapshots_written_since_activation", 0)}')
+    lines.append(f'  avg min-to-first-pitch       : {ch.get("avg_min_to_first_pitch")}')
     in_win = ch.get('currently_in_window', [])
-    lines.append(f'  currently in window        : {len(in_win)} game(s)')
+    lines.append(f'  currently in window          : {len(in_win)} game(s)')
     for g in in_win[:10]:
         lines.append(f'    - game_id={g["game_id"]} first_pitch={g["first_pitch"]}')
     nu = ch.get('next_upcoming')
     if nu:
-        lines.append(f'  next upcoming eligible     : game_id={nu["game_id"]} '
-                     f'first_pitch={nu["first_pitch"]} '
-                     f'earliest_capture={nu["earliest_auto_capture_at"]}')
+        lines.append(f'  next upcoming eligible       : game_id={nu["game_id"]}')
+        lines.append(f'    first_pitch                : {nu["first_pitch"]}')
+        lines.append(f'    canonical window           : '
+                     f'{nu["canonical_window_start"]} .. {nu["canonical_window_end"]}')
     else:
-        lines.append('  next upcoming eligible     : none scheduled')
+        lines.append('  next upcoming eligible       : none scheduled')
     lines.append('')
+
+    cad = ch.get('cadence', {})
+    lines.append('REFRESH_DATA CADENCE (last 24h)')
+    lines.append('-' * 78)
+    lines.append(f'  run count                   : {cad.get("run_count", 0)}')
+    lines.append(f'  failed run count            : {cad.get("failed_run_count", 0)}')
+    lines.append(f'  median interval             : {cad.get("median_interval_min")} min')
+    lines.append(f'  max interval (longest gap)  : {cad.get("max_interval_min")} min')
+    lines.append(f'  canonical window width      : {cad.get("canonical_window_width_min", 30)} min')
+    lines.append(f'  guarantees capture?         : {cad.get("guarantees_capture")}')
+    lines.append(f'    → {cad.get("guarantee_reason", "")}')
+    lines.append('')
+
+    misses = ch.get('missed_captures', [])
+    if misses:
+        lines.append(f'MISSED-CAPTURE DETAIL ({len(misses)} shown; up to 100)')
+        lines.append('-' * 78)
+        for m in misses[:20]:
+            lines.append(
+                f'  game={m["game_id"]} fp={m["first_pitch"]} '
+                f'classification={m["classification"]}'
+            )
+            lines.append(f'    window={m["canonical_window_start"]}..'
+                         f'{m["canonical_window_end"]}  '
+                         f'scheduler_runs={m["scheduler_runs_in_window"]}')
+            lines.append(f'    reason: {m["reason"]}')
+        lines.append('')
 
     p = h['population']
     lines.append('POPULATION (autonomous canonical capture — model_source=house implicit)')
@@ -1101,9 +1334,12 @@ def render_forward_health(h: Dict[str, Any]) -> str:
     lines.append('=' * 78)
     lines.append('')
     lines.append('Verdict thresholds (pre-registered, do NOT change without evidence):')
-    lines.append(f'  DATA_COLLECTION_DEGRADED when capture coverage <60% '
-                 f'AND >=10 eligible past-window games')
-    lines.append(f'  INSUFFICIENT_DATA when no snapshots yet OR '
+    lines.append(f'  AWAITING_FIRST_CAPTURE when 0 post-activation eligible '
+                 f'games OR no snapshots yet')
+    lines.append(f'  DATA_COLLECTION_DEGRADED when post-activation capture '
+                 f'coverage <60% AND >=10 post-activation eligible games. '
+                 f'Pre-activation history NEVER triggers this state.')
+    lines.append(f'  INSUFFICIENT_DATA when eligible games exist but '
                  f'n_settled < {MIN_SETTLED_FOR_JUDGMENT}')
     lines.append(f'  WATCH  on win-rate drop >= {WATCH_WIN_RATE_DROP_PP}pp OR '
                  f'ROI drop >= {WATCH_ROI_DROP_PP}pp OR '

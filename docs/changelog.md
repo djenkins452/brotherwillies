@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-08-24 — V3.2 forward-validation activation boundary + cadence audit
+
+**Root cause of the spurious DATA_COLLECTION_DEGRADED**: the previous denominator counted every past-window MLB game in the reporting window regardless of whether the autonomous capture system existed when the game's canonical window closed. First live report showed 409 eligible / 0 captured / 100% missed → DATA_COLLECTION_DEGRADED — but every one of those 409 games happened BEFORE commit `3a01e32` deployed the capture system. They were never eligible for prospective capture.
+
+### Fix
+
+- **`settings.FORWARD_VALIDATION_ACTIVATION_AT_STR`** — durable activation boundary, hardcoded default `'2026-08-24T12:00:00+00:00'` (conservative floor safely before any post-deploy refresh cycle). Env-overridable via `FORWARD_VALIDATION_ACTIVATION_AT` on Railway if the operator wants to tighten it to the exact deploy timestamp.
+- **`v3_2_capture.activation_at()`** — parses the setting; raises loudly on unparseable/naive values so a misconfigured boundary can never silently invalidate weeks of evidence.
+- **`_capture_health()` denominator corrected** — a game is post-activation-eligible ONLY when its canonical window END (`first_pitch - MIN_WINDOW_MIN`) falls after activation. Games whose window closed before activation are classified `pre_activation_excluded` and NEVER count as missed. Coverage % returns `None` (not `0.0`) when the post-activation denominator is 0 — no faked zero-coverage signal.
+- **Verdict state machine corrected** — new state `AWAITING_FIRST_CAPTURE` fires when 0 post-activation eligible games AND no snapshots exist. `DATA_COLLECTION_DEGRADED` requires ≥10 post-activation eligible AND <60% coverage. **Pre-activation history NEVER triggers DEGRADED.**
+
+### Cadence audit (new)
+
+- **`_refresh_cadence_audit(hours=24)`** — queries `CronRunLog(command='refresh_data')`, reports run count, median interval, max interval (longest gap), failed count.
+- **Mechanical guarantee check**: `guarantees_capture = max_interval_min < canonical_window_width_min` (30). If the longest gap between refresh cycles ≥ 30 min, a game can fall into that gap unnoticed — flagged with actionable reason text.
+
+### Missed-capture classification (new)
+
+- **`_missed_capture_details()`** — for every post-activation eligible game with no snapshot, classifies:
+  - `SCHEDULER_MISS` — no refresh_data run inside the canonical window (or none succeeded)
+  - `OTHER` — refresh_data fired successfully but no snapshot exists (capture sub-step probably raised without failing parent)
+- Reports scheduler runs in-window + reason text so the operator can distinguish scheduler starvation from downstream errors.
+
+### No historical backfill guaranteed
+
+- `captured_at` remains `auto_now_add` — cannot be forged.
+- New test `test_no_backfill_via_report_computation` locks that generating the report never creates snapshots.
+
+### Tests (10 new — 25 total in the file, all pass)
+
+`ActivationBoundaryTests`: activation returns tz-aware datetime, pre-activation game not missed, verdict AWAITING_FIRST_CAPTURE not DEGRADED on pre-activation-only, post-activation uncaptured IS missed, canonical window remains 45..75 (widening forbidden), no backfill.
+
+`RefreshCadenceAuditTests`: reports None on empty CronRunLog, `guarantees_capture=True` when max interval < 30min, `guarantees_capture=False` when a 60-min gap exists.
+
+**Full regression: 1667 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+
+- V3.2 production unchanged: gate 0.62/7pp, blend 0.55, Recent Form ON.
+- All shadow flags remain false.
+- Canonical window remains 45..75min — the brief explicitly forbade widening it to accommodate a weak scheduler.
+- No historical ForwardValidationSnapshot rows manufactured.
+
+### Operator next-action
+
+1. Wait ~2 min for Railway to deploy.
+2. Open `/analytics/v3-2-forward-health/?days=30`. Expected:
+   - `activation_at: 2026-08-24T12:00:00+00:00` (or your env override).
+   - `pre_activation_excluded: N` (large — the historical 409 games get properly excluded).
+   - `post_activation_eligible: 0` (until first game's window closes post-activation).
+   - `capture_coverage_pct: None` (never faked to 0).
+   - `verdict: AWAITING_FIRST_CAPTURE` — the correct, honest state.
+3. Check the REFRESH_DATA CADENCE block:
+   - If `guarantees_capture: True` → you're set; capture will fire in every canonical window.
+   - If `guarantees_capture: False` → the reason line tells you exactly what's insufficient. **Tighten Railway's refresh_data cadence to < 30 min max gap OR split capture onto its own sub-30min schedule.** The brief explicitly forbade widening the canonical window.
+4. Once the first eligible game passes and gets captured, the verdict transitions naturally to `HEALTHY` after ≥30 settled snapshots.
+
+---
+
 ## 2026-08-24 — V3.2 Autonomous Canonical Capture (forward-validation fix)
 
 **Root cause of the "generated=0" report**: `BettingRecommendation.objects.create()` is called only from `apps/mockbets/views.py::place_mock_bet` and `apps/mockbets/services/bulk_actions.py::_persist_bulk_selection`. Both require Danny to actively place or bulk-add a bet. No refresh cycle, no page view, and no scheduled job persists a recommendation. Forward validation was therefore gated on user activity — the report always returned zero absent bets.
