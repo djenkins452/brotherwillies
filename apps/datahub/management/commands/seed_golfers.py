@@ -236,10 +236,11 @@ class Command(BaseCommand):
                 continue
             seen.add(name)
 
-            golfer, was_created = Golfer.objects.get_or_create(
-                name=name,
-                defaults={},
-            )
+            # 2026-08-24 identity fix: canonical name-normalized
+            # lookup so a re-run never creates a duplicate row for the
+            # same golfer regardless of whitespace / case in the seed
+            # list.
+            golfer, was_created = Golfer.get_or_create_by_name(name)
 
             if was_created:
                 created += 1

@@ -211,10 +211,15 @@ class GolfOddsProvider(AbstractProvider):
                 skipped += 1
                 continue
 
-            # Match or create golfer
-            golfer, _ = Golfer.objects.get_or_create(
-                name=item['golfer_name'],
-            )
+            # Match or create golfer.
+            # 2026-08-24 identity fix: use the canonical name-normalized
+            # lookup. The old `Golfer.objects.get_or_create(name=X)`
+            # exploded with MultipleObjectsReturned when the DB carried
+            # duplicate rows for the same name (which had accumulated
+            # because the two ingestion paths used different identity
+            # keys). Post-fix: `name_normalized` is uniqueness-locked,
+            # so a lookup can never return >1 row.
+            golfer, _ = Golfer.get_or_create_by_name(item['golfer_name'])
 
             GolfOddsSnapshot.objects.create(
                 event=event,

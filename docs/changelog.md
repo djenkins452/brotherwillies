@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-08-24 — Golf refresh_data fix: canonical Golfer identity + FK-preserving reconciliation
+
+**Root cause** of the production `MultipleObjectsReturned: get() returned more than one Golfer -- it returned more than 20` that made all 4 recent refresh_data runs partial:
+
+`Golfer` had **no uniqueness constraint** on any field. Three ingestion paths wrote with **different identity keys**:
+- `apps/datahub/providers/golf/odds_provider.py:215` — `Golfer.objects.get_or_create(name=item['golfer_name'])` — identity by NAME
+- `apps/datahub/providers/golf/schedule_provider.py:104` — `Golfer.objects.get_or_create(external_id=g['external_id'], defaults={'name': ...})` — identity by EXTERNAL_ID
+- `apps/datahub/management/commands/seed_golfers.py:239` — `Golfer.objects.get_or_create(name=name, defaults={})` — identity by NAME
+
+Because schedule_provider and odds_provider used different identity keys for the same real-world golfer, duplicate rows accumulated. Over many deploys and cycles, dozens of duplicate rows for common names built up. Any subsequent `get_or_create(name=X)` on a duplicated name then hit `MultipleObjectsReturned`.
+
+### Fix — canonical identity + FK-preserving reconciliation
+
+- **`Golfer.name_normalized`** (new field, migration `golf 0007`) — computed as `' '.join(name.strip().split()).lower()`. Auto-populated in `Golfer.save()`. Guarantees exactly one row per human-readable golfer regardless of whitespace/case variance in incoming payloads.
+- **`Golfer.get_or_create_by_name(name)`** (new classmethod) — canonical name-based lookup. Never explodes; uses `name_normalized`. Provides idempotent replacement for the old `Golfer.objects.get_or_create(name=X)` pattern.
+- **Migration `golf 0008_reconcile_duplicate_golfers`** — two-pass merge:
+  1. Group by `external_id` where non-blank → merge duplicates, keep lowest id
+  2. Group by `name_normalized` → merge duplicates, prefer row that has an `external_id`, keep lowest id
+  - **FK re-parenting**: every `GolfOddsSnapshot.golfer`, `GolfRound.golfer`, `MockBet.golf_golfer` reference is updated to point at the winner BEFORE the loser row is deleted. No snapshot / round / bet is orphaned.
+  - **External-id absorption**: if the winner has no external_id and any loser had one, copy it up to the winner (guarded against conflicts with other-group winners).
+  - **Idempotent** — re-running finds no duplicates and is a no-op. Test-locked.
+- **Migration `golf 0009_golfer_enforce_uniqueness`** — adds two partial `UniqueConstraint`s:
+  - `external_id` unique when non-blank
+  - `name_normalized` unique when non-blank
+  - Uses `condition=~Q(field='')` so pre-reconciliation blanks never blocked constraint creation, and post-reconciliation no duplicates remain.
+- **`odds_provider.py`** — switched to `Golfer.get_or_create_by_name(item['golfer_name'])`.
+- **`seed_golfers.py`** — switched to `Golfer.get_or_create_by_name(name)`.
+
+Rationale for the split-migration approach: adding both the field AND the unique constraints in one auto-generated migration fails on any DB with pre-existing duplicates. Splitting into field → data-reconciliation → constraints lets `0008` merge the duplicates BEFORE `0009` enforces uniqueness.
+
+### Preserved
+
+- **Commit 452012b** (golf odds daily dedup by `timezone.localdate()`) — locked by grep-style regression test `PreservesGolfOddsDateDedupTests.test_module_uses_localdate_for_dedup`. The UTC/local crossover dedup logic is unchanged.
+- **refresh_data isolation** — Golf failure already produces `status='partial'` rather than blocking MLB. Confirmed unchanged. This fix restores Golf to `status='success'` while preserving the isolation.
+
+### Tests (15 new — all pass)
+
+`apps/golf/test_golfer_identity.py`:
+- `NameNormalizationTests` — save populates `name_normalized`; whitespace/case collapsed; `name_normalized` unique constraint blocks second insert; `external_id` unique when non-blank; blank `external_id` allows multiple.
+- `GetOrCreateByNameTests` — finds existing by normalized name; creates when no match; repeated calls idempotent (25x → 1 row); empty name raises.
+- `OddsProviderIdempotenceTests` — new ingestion path never creates duplicates; 3 name variants normalize to 1 row.
+- `MigrationReconciliationTests` — re-parenting a FK before deleting a loser preserves the snapshot's link; reconciler re-run on a clean DB is a no-op.
+- `PreservesGolfOddsDateDedupTests` — commit 452012b regression lock.
+- `ProductionFlagsFrozenTests` — all shadow flags remain false.
+
+**Full regression: 1704 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### V3.2 autonomous capture confirmed unaffected
+
+The V3.2 forward-validation scheduler is fully decoupled from `refresh_data`. Zero changes to:
+- V3.2 gate 0.62/7pp, blend 0.55, Recent Form ON
+- Bullpen / lineup / team-offense scoring flags (all remain false)
+- Canonical T-75..T-45 window
+- Dedicated 10-min scheduler
+- `pg_try_advisory_lock` coordination
+
+Test-locked via `ProductionFlagsFrozenTests`.
+
+### Operator next-action
+
+**None.** Deploy is autonomous:
+1. Railway auto-deploys.
+2. Migrations `golf 0007 → 0008 → 0009` run at boot. `0008` performs the FK-preserving merge; `0009` locks uniqueness.
+3. Next `refresh_data` cycle runs Golf via the fixed ingestion path.
+4. The `refresh_data` CronRunLog rows should transition from `partial` (Golf-failing) to `success`.
+5. Meanwhile the V3.2 dedicated capture scheduler continues firing every 10 min — completely unaffected.
+
+---
+
 ## 2026-08-24 — V3.2 dedicated capture scheduler (application-owned, PG advisory-lock)
 
 **Constraint** (from CLAUDE.md + repo inspection):
