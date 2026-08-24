@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-08-24 — V3.2 dedicated capture scheduler (application-owned, PG advisory-lock)
+
+**Constraint** (from CLAUDE.md + repo inspection):
+- No `railway.toml` / `Procfile` / `Dockerfile` / `nixpacks.toml` in the repo — the repository has NO deployment-config knob for cron scheduling.
+- Railway Cron Jobs are provisioned via the Railway UI; nothing in the repo can add or edit them.
+- No existing background scheduler framework (no APScheduler, Celery, Redis).
+- Introducing one of those for a single 10-min tick would be a major dependency for a small need.
+
+**Conclusion**: the correct implementation is an application-owned background daemon thread inside the Django web process, coordinated across gunicorn workers via PostgreSQL advisory locks. Ships end-to-end with no Railway UI action required.
+
+### Implementation
+
+- **`apps.analytics.services.dedicated_capture_scheduler`** (new):
+  - `start_scheduler_if_appropriate()` — spawned from `AnalyticsConfig.ready()`. Idempotent; a second call returns the existing thread reference. Gated to skip in tests, migrations, one-off management commands, and any `DISABLE_V3_2_SCHEDULER=true` env override. Starts only under gunicorn or `manage.py runserver`.
+  - `_scheduler_loop()` — daemon thread. Wakes every `POLL_SECONDS=60`. Fires `capture_v3_2_validation` when `INTERVAL_SECONDS=600` (10 min) has elapsed since the last CronRunLog row.
+  - **`pg_try_advisory_lock(901102401)`** on PostgreSQL — single-instance coordination across N gunicorn workers. Non-blocking. Interval check happens INSIDE the lock so no race can double-fire. Released in `try/finally` so a mid-tick crash never leaks the lock.
+  - **SQLite dev fallback** — no advisory lock (SQLite doesn't support it). Safe because dev uses a single worker; interval-check alone is enough.
+  - **Broad exception handling** — one bad tick never propagates out of `scheduler_tick()`. Logged via `logger.exception`; loop continues.
+  - **Idempotence defense-in-depth** — `capture_v3_2_validation`'s existing `(mlb_game, engine_version)` unique constraint means a scheduler race we might miss still cannot produce a duplicate snapshot.
+
+- **`apps.analytics.apps.AnalyticsConfig.ready()`** — calls `start_scheduler_if_appropriate()`, wrapped in try/except so scheduler bootstrap can never crash Django boot.
+
+### Gating (test-locked)
+
+Skip when:
+- `DISABLE_V3_2_SCHEDULER=true` env
+- `sys.argv[0]` ends with `manage.py` AND `sys.argv[1]` is in `_MANAGE_COMMANDS_TO_SKIP` (test / migrate / makemigrations / collectstatic / shell / dbshell / ensure_seed / ensure_superuser / `capture_v3_2_validation` itself / refresh_data / any ingest_* command)
+- pytest / py.test in `sys.argv[0]`
+- unknown context
+
+Start when:
+- `sys.argv[0]` contains `gunicorn`
+- `manage.py runserver`
+
+### Tests (18 new — all pass)
+
+`apps/analytics/test_dedicated_capture_scheduler.py`:
+- **Gating**: DISABLE env, `manage.py test`, `manage.py migrate`, `manage.py capture_v3_2_validation` (self-invocation would nest), gunicorn (starts), runserver (starts).
+- **Interval check**: true when no prior runs, true when >20min ago, false when <10min ago.
+- **Tick firing**: fires when no prior runs, skips when recent run exists.
+- **Broad exception does not propagate**.
+- **Refresh_data failure rows do NOT block the scheduler tick** — 4 failed refresh_data rows still allow the tick to fire.
+- **Idempotence**: double-firing the capture path does NOT create a second snapshot for the same (game, engine_version).
+- **Startup idempotence**: second `start_scheduler_if_appropriate()` returns the existing thread reference, no duplicate scheduler.
+- **Canonical window LOCKED at 45..75min**. **Scheduler interval LOCKED below canonical-window width**.
+- Production flags remain false.
+
+**Full regression: 1689 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+
+- V3.2 production unchanged: gate 0.62/7pp, blend 0.55, Recent Form ON.
+- All shadow flags remain false.
+- Canonical capture window remains 45..75min (widening explicitly forbidden).
+- No historical backfill.
+- Uses only existing dependencies (django, psycopg2-binary already in requirements.txt).
+- No Redis, no Celery, no APScheduler, no new Railway service.
+
+### Operator next-action
+
+**None required.** Deploy is autonomous:
+1. Railway auto-deploys `c...` on push.
+2. gunicorn boots → `AnalyticsConfig.ready()` fires → daemon thread starts in each worker.
+3. First worker to acquire `pg_try_advisory_lock(901102401)` runs the capture; others no-op.
+4. The forward-health report's **DEDICATED — capture_v3_2_validation** cadence block populates within ~10 minutes of deploy (first tick after `STARTUP_DELAY_SECONDS=30`).
+5. `guarantees_capture` transitions to True as soon as 2+ ticks have completed with max interval < 30min.
+6. Wait for prospective evidence to accumulate. First forward-validation snapshot fires automatically when a game enters the T-75..T-45 window during a tick.
+
+---
+
 ## 2026-08-24 — V3.2 dedicated capture schedule + refresh_data failure diagnostic
 
 **Production diagnosis**: the corrected forward-health report exposed a critical scheduling problem — refresh_data ran only 4 times in the last 24h (median interval 359 min) AND all 4 runs failed. The chained capture path cannot support the 30-min canonical window under any circumstances. Also — the recent refresh_data failures may reflect a broader ingestion stall.
