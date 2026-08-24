@@ -281,9 +281,12 @@ def compute_forward_health(*, days: int = 30) -> Dict[str, Any]:
     cohorts = _cohort_metrics_snap(settled)
     calibration = _calibration_metrics_snap(settled)
     capture_health = _capture_health(days=days, now=now)
-    capture_health['cadence'] = _refresh_cadence_audit(now=now, hours=24)
+    capture_health['cadence'] = _forward_validation_cadence(now=now, hours=24)
     capture_health['missed_captures'] = _missed_capture_details(
         now=now, days=days,
+    )
+    capture_health['refresh_data_failures'] = _refresh_data_failure_diagnostic(
+        now=now, hours=24,
     )
     integrity = {
         'total_snaps_in_window': len(all_snaps),
@@ -487,11 +490,8 @@ def _capture_health(*, days: int, now) -> Dict[str, Any]:
     }
 
 
-def _refresh_cadence_audit(*, now, hours: int = 24) -> Dict[str, Any]:
-    """Inspect refresh_data run timestamps and compute median/max
-    intervals + longest gap. Answers mechanically: can the current
-    cadence guarantee at least one execution inside every 30-minute
-    canonical capture window?"""
+def _cadence_audit_for(command: str, *, now, hours: int) -> Dict[str, Any]:
+    """Generic cadence audit for a given CronRunLog command."""
     from apps.ops.models import CronRunLog
     from apps.analytics.services.v3_2_capture import (
         MIN_WINDOW_MIN, MAX_WINDOW_MIN,
@@ -500,23 +500,29 @@ def _refresh_cadence_audit(*, now, hours: int = 24) -> Dict[str, Any]:
     since = now - timedelta(hours=hours)
     runs = list(
         CronRunLog.objects
-        .filter(command='refresh_data', started_at__gte=since)
+        .filter(command=command, started_at__gte=since)
         .order_by('started_at')
         .values('started_at', 'status')
     )
+    canonical_width = MAX_WINDOW_MIN - MIN_WINDOW_MIN  # 30
+
     n = len(runs)
+    failed = sum(1 for r in runs if r['status'] in ('failure', 'partial'))
     if n < 2:
         return {
+            'command': command,
             'window_hours': hours,
             'run_count': n,
-            'runs': [r['started_at'].isoformat() for r in runs],
+            'failed_run_count': failed,
+            'last_run_at': runs[-1]['started_at'].isoformat() if runs else None,
+            'last_run_status': runs[-1]['status'] if runs else None,
             'median_interval_min': None,
             'max_interval_min': None,
             'longest_gap_min': None,
-            'failed_run_count': sum(1 for r in runs if r['status'] != 'success'),
+            'canonical_window_width_min': canonical_width,
             'guarantees_capture': False,
             'guarantee_reason': (
-                f'only {n} refresh_data run(s) in the last {hours}h — '
+                f'only {n} {command} run(s) in the last {hours}h — '
                 'cannot compute cadence yet.'
             ),
         }
@@ -527,30 +533,110 @@ def _refresh_cadence_audit(*, now, hours: int = 24) -> Dict[str, Any]:
     intervals.sort()
     mid = intervals[len(intervals) // 2]
     mx = max(intervals)
-    canonical_width = MAX_WINDOW_MIN - MIN_WINDOW_MIN  # 30
-    # Guaranteed capture requires MAX interval < canonical window width.
     guarantees = mx < canonical_width
     return {
+        'command': command,
         'window_hours': hours,
         'run_count': n,
         'runs_sample_first_5': [r['started_at'].isoformat()
                                 for r in runs[:5]],
         'runs_sample_last_5': [r['started_at'].isoformat()
                                for r in runs[-5:]],
+        'last_run_at': runs[-1]['started_at'].isoformat(),
+        'last_run_status': runs[-1]['status'],
         'median_interval_min': mid,
         'max_interval_min': mx,
         'longest_gap_min': mx,
         'canonical_window_width_min': canonical_width,
-        'failed_run_count': sum(1 for r in runs if r['status'] != 'success'),
+        'failed_run_count': failed,
         'guarantees_capture': guarantees,
         'guarantee_reason': (
             f'max interval {mx}min < canonical window width {canonical_width}min'
             if guarantees else
             f'max interval {mx}min >= canonical window width {canonical_width}min '
-            '— a game whose first_pitch lands during that gap CAN be missed. '
-            'Tighten refresh_data cadence or split capture onto a dedicated '
-            'sub-30min schedule.'
+            '— a game whose first_pitch lands during that gap CAN be missed.'
         ),
+    }
+
+
+def _forward_validation_cadence(*, now, hours: int = 24) -> Dict[str, Any]:
+    """Cadence for the DEDICATED capture command. Preferred source of
+    truth for capture scheduling health once a dedicated Railway cron
+    entry exists.
+
+    Also inspects refresh_data cadence separately so full-refresh
+    health isn't conflated with capture-scheduler health.
+    """
+    dedicated = _cadence_audit_for(
+        'capture_v3_2_validation', now=now, hours=hours,
+    )
+    refresh = _cadence_audit_for(
+        'refresh_data', now=now, hours=hours,
+    )
+    # Guidance line — the operator-facing recommendation.
+    if dedicated['run_count'] >= 2 and dedicated['guarantees_capture']:
+        guidance = ('DEDICATED capture cadence is healthy; refresh_data '
+                    'health below is informational only.')
+    elif dedicated['run_count'] >= 2:
+        guidance = ('DEDICATED capture command IS running, but the max '
+                    'interval exceeds the 30-min canonical window. '
+                    'Tighten the Railway cron entry to fire every 10-15 min.')
+    elif refresh['run_count'] >= 2 and refresh['guarantees_capture']:
+        guidance = ('No dedicated capture cadence yet. refresh_data cadence '
+                    'happens to guarantee capture, but the CORRECT fix is to '
+                    'add a dedicated Railway cron entry running '
+                    '"python manage.py capture_v3_2_validation" every '
+                    '10-15 min. refresh_data is a 6-hour job and should NOT '
+                    'be relied on for the 30-min canonical window.')
+    else:
+        guidance = ('NEITHER the dedicated capture command NOR refresh_data '
+                    'satisfies the 30-min canonical window. Add a Railway '
+                    'cron entry running '
+                    '"python manage.py capture_v3_2_validation" every '
+                    '10-15 minutes. Do NOT widen the canonical window.')
+    return {
+        'dedicated': dedicated,
+        'refresh_data': refresh,
+        'guidance': guidance,
+    }
+
+
+def _refresh_data_failure_diagnostic(*, now, hours: int = 24) -> Dict[str, Any]:
+    """Inspect recent refresh_data runs whose status is failure or
+    partial. Report exact error/summary text — the operator needs to
+    know why 4 recent runs failed."""
+    from apps.ops.models import CronRunLog
+    since = now - timedelta(hours=hours)
+    runs = list(
+        CronRunLog.objects
+        .filter(command='refresh_data',
+                started_at__gte=since,
+                status__in=('failure', 'partial'))
+        .order_by('-started_at')[:10]
+    )
+    if not runs:
+        return {'window_hours': hours, 'failed_run_count': 0, 'runs': []}
+    entries = []
+    for r in runs:
+        entries.append({
+            'started_at': r.started_at.isoformat(),
+            'completed_at': (r.completed_at.isoformat()
+                             if r.completed_at else None),
+            'status': r.status,
+            'duration_seconds': r.duration_seconds,
+            'summary': (r.summary or '')[:800],
+            'error_message_head': (r.error_message or '')[:1500],
+            'stdout_tail_head': (r.stdout_tail or '')[:1500],
+        })
+    # Pattern detection — do all recent failures share the same error
+    # signature?
+    fingerprints = {(e['status'], e['summary'][:200]) for e in entries}
+    single_pattern = (len(fingerprints) == 1)
+    return {
+        'window_hours': hours,
+        'failed_run_count': len(entries),
+        'single_pattern': single_pattern,
+        'runs': entries,
     }
 
 
@@ -1210,16 +1296,51 @@ def render_forward_health(h: Dict[str, Any]) -> str:
     lines.append('')
 
     cad = ch.get('cadence', {})
-    lines.append('REFRESH_DATA CADENCE (last 24h)')
+    ded = cad.get('dedicated', {})
+    ref = cad.get('refresh_data', {})
+    lines.append('FORWARD-VALIDATION CAPTURE CADENCE (last 24h)')
     lines.append('-' * 78)
-    lines.append(f'  run count                   : {cad.get("run_count", 0)}')
-    lines.append(f'  failed run count            : {cad.get("failed_run_count", 0)}')
-    lines.append(f'  median interval             : {cad.get("median_interval_min")} min')
-    lines.append(f'  max interval (longest gap)  : {cad.get("max_interval_min")} min')
-    lines.append(f'  canonical window width      : {cad.get("canonical_window_width_min", 30)} min')
-    lines.append(f'  guarantees capture?         : {cad.get("guarantees_capture")}')
-    lines.append(f'    → {cad.get("guarantee_reason", "")}')
+    lines.append('  DEDICATED — capture_v3_2_validation')
+    lines.append(f'    run count                 : {ded.get("run_count", 0)}')
+    lines.append(f'    failed run count          : {ded.get("failed_run_count", 0)}')
+    lines.append(f'    last run                  : {ded.get("last_run_at")}  '
+                 f'status={ded.get("last_run_status")}')
+    lines.append(f'    median interval           : {ded.get("median_interval_min")} min')
+    lines.append(f'    max interval (longest gap): {ded.get("max_interval_min")} min')
+    lines.append(f'    guarantees capture?       : {ded.get("guarantees_capture")}')
+    lines.append(f'      → {ded.get("guarantee_reason", "")}')
     lines.append('')
+    lines.append('  refresh_data (informational only — do NOT rely on this)')
+    lines.append(f'    run count                 : {ref.get("run_count", 0)}')
+    lines.append(f'    failed run count          : {ref.get("failed_run_count", 0)}')
+    lines.append(f'    median interval           : {ref.get("median_interval_min")} min')
+    lines.append(f'    max interval              : {ref.get("max_interval_min")} min')
+    lines.append(f'  canonical window width      : {ded.get("canonical_window_width_min", 30)} min')
+    lines.append(f'  GUIDANCE                    : {cad.get("guidance", "")}')
+    lines.append('')
+
+    rf = ch.get('refresh_data_failures', {})
+    if rf.get('failed_run_count', 0) > 0:
+        lines.append(f'REFRESH_DATA FAILURE DIAGNOSTIC (last 24h — '
+                     f'{rf["failed_run_count"]} failed run(s))')
+        lines.append('-' * 78)
+        if rf.get('single_pattern'):
+            lines.append('  All failed runs share the same status+summary '
+                         'fingerprint — likely a single root cause.')
+        for i, e in enumerate(rf.get('runs', [])[:5], 1):
+            lines.append(f'  [{i}] {e["started_at"]} status={e["status"]} '
+                         f'dur={e.get("duration_seconds")}s')
+            if e.get('summary'):
+                lines.append(f'      summary       : {e["summary"]}')
+            if e.get('error_message_head'):
+                lines.append('      error_message (first 1500 chars):')
+                for ln in e['error_message_head'].splitlines()[:20]:
+                    lines.append(f'        {ln}')
+            if e.get('stdout_tail_head'):
+                lines.append('      stdout_tail (first 1500 chars):')
+                for ln in e['stdout_tail_head'].splitlines()[-10:]:
+                    lines.append(f'        {ln}')
+        lines.append('')
 
     misses = ch.get('missed_captures', [])
     if misses:

@@ -2,6 +2,73 @@
 
 ---
 
+## 2026-08-24 — V3.2 dedicated capture schedule + refresh_data failure diagnostic
+
+**Production diagnosis**: the corrected forward-health report exposed a critical scheduling problem — refresh_data ran only 4 times in the last 24h (median interval 359 min) AND all 4 runs failed. The chained capture path cannot support the 30-min canonical window under any circumstances. Also — the recent refresh_data failures may reflect a broader ingestion stall.
+
+### Fix — decoupled capture schedule
+
+- **`capture_v3_2_validation` command wrapped in `cron_run_log`** — standalone Railway cron entries produce their own CronRunLog rows keyed on `'capture_v3_2_validation'`, independent of `refresh_data`. Terminal status is always `success` or `failure` — never left stuck as `running`.
+- The chained call inside `refresh_data` remains as harmless defense-in-depth. Idempotence via `(mlb_game, engine_version)` unique constraint means both paths can fire without ever duplicating.
+
+### Forward-health cadence block — restructured
+
+- Old **REFRESH_DATA CADENCE** section replaced with **FORWARD-VALIDATION CAPTURE CADENCE** with two sub-blocks:
+  - **DEDICATED — capture_v3_2_validation**: run count, failed count, last run status, median/max interval, `guarantees_capture`, reason text.
+  - **refresh_data (informational only — do NOT rely on this)**: same metrics; kept for full-refresh visibility.
+- **`guidance`** line surfaces the exact operator-facing recommendation:
+  - `"DEDICATED capture cadence is healthy; refresh_data health below is informational only."` — the target state
+  - `"DEDICATED capture command IS running, but the max interval exceeds the 30-min canonical window. Tighten the Railway cron entry to fire every 10-15 min."` — near miss
+  - `"No dedicated capture cadence yet. refresh_data cadence happens to guarantee capture, but the CORRECT fix is to add a dedicated Railway cron entry…"` — accidental-guarantee state (which currently doesn't apply — refresh_data is at 6h)
+  - `"NEITHER the dedicated capture command NOR refresh_data satisfies the 30-min canonical window. Add a Railway cron entry running 'python manage.py capture_v3_2_validation' every 10-15 minutes. Do NOT widen the canonical window."` — current production state until Railway config is updated
+
+### Refresh_data failure diagnostic — new block
+
+- **`_refresh_data_failure_diagnostic()`** — surfaces the last N failed refresh_data runs' `summary`, `error_message` head (first 1500 chars), and `stdout_tail` head. Pattern-detects whether all failures share a fingerprint (single root cause vs multiple).
+- Report renders inline under "REFRESH_DATA FAILURE DIAGNOSTIC (last 24h)" — the operator sees the actual traceback text without hunting through `/ops/cron/`.
+
+### Failure isolation (already in place, verified)
+
+- The existing per-sport try/except in `refresh_data` isolates sport-level failures — if MLB ingest fails, CFB continues.
+- `ingest_lineups` (NON-CRITICAL) already runs under its own inner try/except so a lineup poll failure does not halt the rest of the sport's refresh.
+- `capture_v3_2_validation` chained call likewise has its own inner try/except.
+- **Verified test-locked**: `DedicatedCaptureIndependenceTests.test_refresh_data_failure_does_not_prevent_dedicated_capture` — 4 failed refresh_data rows do NOT block the dedicated capture from running cleanly.
+
+### Tests (7 new — 34 total in the file, all pass)
+
+`RefreshCadenceAuditTests` (updated for nested structure):
+- Zero runs → both dedicated and refresh_data blocks show 0.
+- 5 `capture_v3_2_validation` rows at 12-min intervals → `dedicated.guarantees_capture=True`, `refresh_data.run_count=0` (independence).
+- 60-min gap between dedicated runs → `guarantees_capture=False`.
+
+`RefreshDataFailureDiagnosticTests`:
+- Zero failed rows → `failed_run_count=0`.
+- Failed row with summary + error_message + stdout_tail → all fields exposed in the report.
+
+`DedicatedCaptureIndependenceTests`:
+- Standalone `capture_v3_2_validation` creates a CronRunLog row keyed on its OWN command name.
+- 4 failed refresh_data rows do NOT block the dedicated capture — it still runs cleanly.
+
+**Full regression: 1671 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+
+- V3.2 production unchanged: gate 0.62/7pp, blend 0.55, Recent Form ON.
+- All shadow flags remain false.
+- Canonical capture window remains 45..75min (widening explicitly forbidden by the brief).
+- No historical backfill.
+- Duplicate execution safe via the `(game, engine_version)` unique constraint — repeated Railway ticks are no-ops.
+
+### Operator next-action
+
+1. **Wait ~2 min** for Railway to deploy.
+2. **Add a Railway cron entry** running `python manage.py capture_v3_2_validation --trigger=cron` every **10 minutes** (or 15 min at absolute max — must stay comfortably below the 30-min canonical window). Railway UI → Cron Jobs → New → command as above → schedule `*/10 * * * *`. This is the durable capture cadence.
+3. **Refresh** `https://brotherwillies.com/analytics/v3-2-forward-health/?days=30`. The **DEDICATED** cadence block should populate within one interval of the first Railway cron fire.
+4. **Diagnose the 4 failed refresh_data runs** — open the same URL and read the **REFRESH_DATA FAILURE DIAGNOSTIC** block. The traceback and summary are printed inline. Root cause + fix follow from what that block shows.
+5. Once dedicated cadence is `guarantees_capture=True` and a game enters the T-75..T-45 window, verify a new `ForwardValidationSnapshot` row appears WITHOUT any user action.
+
+---
+
 ## 2026-08-24 — V3.2 forward-validation activation boundary + cadence audit
 
 **Root cause of the spurious DATA_COLLECTION_DEGRADED**: the previous denominator counted every past-window MLB game in the reporting window regardless of whether the autonomous capture system existed when the game's canonical window closed. First live report showed 409 eligible / 0 captured / 100% missed → DATA_COLLECTION_DEGRADED — but every one of those 409 games happened BEFORE commit `3a01e32` deployed the capture system. They were never eligible for prospective capture.

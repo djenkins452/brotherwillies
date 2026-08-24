@@ -445,36 +445,40 @@ class RefreshCadenceAuditTests(TestCase):
     def test_cadence_reports_none_when_no_runs(self):
         report = fh.compute_forward_health(days=30)
         cad = report['capture_health']['cadence']
-        self.assertEqual(cad['run_count'], 0)
-        self.assertFalse(cad['guarantees_capture'])
+        # Now nested — dedicated + refresh_data blocks.
+        self.assertEqual(cad['dedicated']['run_count'], 0)
+        self.assertEqual(cad['refresh_data']['run_count'], 0)
+        self.assertFalse(cad['dedicated']['guarantees_capture'])
 
-    def test_cadence_guarantees_when_intervals_below_window_width(self):
-        """max interval < 30min → guarantees_capture=True."""
+    def test_dedicated_command_tracked_independently(self):
+        """capture_v3_2_validation CronRunLog rows populate the
+        dedicated cadence block, independent of refresh_data."""
         from apps.ops.models import CronRunLog
         now = timezone.now()
         for i in range(5):
             r = CronRunLog.objects.create(
-                command='refresh_data', trigger='cron',
+                command='capture_v3_2_validation', trigger='cron',
                 status='success',
             )
-            # started_at is auto_now_add on this model; force it back.
             CronRunLog.objects.filter(id=r.id).update(
-                started_at=now - dt.timedelta(minutes=i * 10),
+                started_at=now - dt.timedelta(minutes=i * 12),
             )
         report = fh.compute_forward_health(days=30)
         cad = report['capture_health']['cadence']
-        self.assertEqual(cad['run_count'], 5)
-        # intervals of 10min each < 30min canonical width
-        self.assertTrue(cad['guarantees_capture'])
+        self.assertEqual(cad['dedicated']['run_count'], 5)
+        # intervals of 12min each < 30min canonical width
+        self.assertTrue(cad['dedicated']['guarantees_capture'])
+        # refresh_data untouched, no rows.
+        self.assertEqual(cad['refresh_data']['run_count'], 0)
 
-    def test_cadence_does_not_guarantee_when_max_gap_exceeds_window(self):
+    def test_max_gap_exceeds_window_fails_guarantee(self):
         from apps.ops.models import CronRunLog
         now = timezone.now()
         r1 = CronRunLog.objects.create(
-            command='refresh_data', trigger='cron', status='success',
+            command='capture_v3_2_validation', trigger='cron', status='success',
         )
         r2 = CronRunLog.objects.create(
-            command='refresh_data', trigger='cron', status='success',
+            command='capture_v3_2_validation', trigger='cron', status='success',
         )
         CronRunLog.objects.filter(id=r1.id).update(
             started_at=now - dt.timedelta(minutes=90),
@@ -483,6 +487,73 @@ class RefreshCadenceAuditTests(TestCase):
             started_at=now - dt.timedelta(minutes=30),
         )
         report = fh.compute_forward_health(days=30)
-        cad = report['capture_health']['cadence']
+        cad = report['capture_health']['cadence']['dedicated']
         self.assertFalse(cad['guarantees_capture'])
         self.assertGreaterEqual(cad['max_interval_min'], 30)
+
+
+class RefreshDataFailureDiagnosticTests(TestCase):
+    def test_reports_zero_when_no_failures(self):
+        report = fh.compute_forward_health(days=30)
+        rf = report['capture_health']['refresh_data_failures']
+        self.assertEqual(rf['failed_run_count'], 0)
+
+    def test_reports_failure_details(self):
+        """Failed refresh_data rows must appear with error_message +
+        summary text so the operator can diagnose without hunting."""
+        from apps.ops.models import CronRunLog
+        r = CronRunLog.objects.create(
+            command='refresh_data', trigger='cron', status='failure',
+            summary='mlb failed: 401 Unauthorized',
+            error_message='Traceback (most recent call last):\n'
+                          '  File ...\nRuntimeError: bad thing',
+            stdout_tail='mlb: 401 Unauthorized\n',
+        )
+        CronRunLog.objects.filter(id=r.id).update(
+            started_at=timezone.now() - dt.timedelta(hours=1),
+        )
+        report = fh.compute_forward_health(days=30)
+        rf = report['capture_health']['refresh_data_failures']
+        self.assertEqual(rf['failed_run_count'], 1)
+        self.assertIn('Unauthorized',
+                      rf['runs'][0]['summary'])
+        self.assertIn('bad thing',
+                      rf['runs'][0]['error_message_head'])
+
+
+class DedicatedCaptureIndependenceTests(TestCase):
+    def test_capture_command_uses_own_cron_run_log(self):
+        """When capture_v3_2_validation runs standalone, it must
+        create a CronRunLog row keyed on its own command name (NOT
+        'refresh_data')."""
+        from django.core.management import call_command
+        from apps.ops.models import CronRunLog
+        # Zero rows to start.
+        self.assertEqual(CronRunLog.objects.count(), 0)
+        # Dry-run to avoid needing get_recommendation to succeed.
+        call_command('capture_v3_2_validation', '--dry-run', '--trigger=manual')
+        rows = list(CronRunLog.objects.all())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].command, 'capture_v3_2_validation')
+        # Terminal status must be success or failure — never left
+        # stuck as 'running'.
+        self.assertIn(rows[0].status, ('success', 'failure'))
+
+    def test_refresh_data_failure_does_not_prevent_dedicated_capture(self):
+        """A stack of failed refresh_data rows must NOT block the
+        dedicated capture command from executing. This is the whole
+        point of decoupling."""
+        from django.core.management import call_command
+        from apps.ops.models import CronRunLog
+        for _ in range(4):
+            CronRunLog.objects.create(
+                command='refresh_data', trigger='cron', status='failure',
+                summary='mlb failed: something',
+            )
+        # Dedicated command still runs cleanly.
+        call_command('capture_v3_2_validation', '--dry-run')
+        dedicated_rows = CronRunLog.objects.filter(
+            command='capture_v3_2_validation',
+        )
+        self.assertEqual(dedicated_rows.count(), 1)
+        self.assertEqual(dedicated_rows.first().status, 'success')
