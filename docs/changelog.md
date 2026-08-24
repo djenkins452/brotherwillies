@@ -2,6 +2,69 @@
 
 ---
 
+## 2026-08-24 — V3.2 Autonomous Canonical Capture (forward-validation fix)
+
+**Root cause of the "generated=0" report**: `BettingRecommendation.objects.create()` is called only from `apps/mockbets/views.py::place_mock_bet` and `apps/mockbets/services/bulk_actions.py::_persist_bulk_selection`. Both require Danny to actively place or bulk-add a bet. No refresh cycle, no page view, and no scheduled job persists a recommendation. Forward validation was therefore gated on user activity — the report always returned zero absent bets.
+
+### Fix — autonomous canonical capture
+
+- **`apps.analytics.models.ForwardValidationSnapshot`** (migration `analytics 0017`) — immutable per-game canonical decision snapshot. Unique on `(mlb_game, engine_version)`. Decision fields written once; settlement fields appended after game final.
+- **`apps.analytics.services.v3_2_capture.capture_pending()`** — canonical window rule: `first_pitch ∈ [now+45min, now+75min]` (target ~T-60min). One snapshot per (game, engine_version); repeated ticks are no-ops.
+- **`apps.datahub.management.commands.capture_v3_2_validation`** — CLI wrapper chained into `refresh_data` for MLB. Fires on every refresh cycle; short-circuit-safe when no games in window.
+- **`apps.analytics.services.v3_2_settlement.settle_pending()`** — attaches outcome / profit / closing market prob / CLV to unsettled snapshots whose games are final. Chained into the same command. Writes only settlement fields; decision fields remain byte-identical.
+- **Every decision class captured** — not just recommended. `decision_class` on each row: `recommended` (status=recommended AND lane=core), `potential` (status=recommended AND lane=qualified), `not_recommended`, or `no_signal` (no odds). Forward-health headlines only `recommended`; other classes are retained for research (gate diagnostics, distribution-shift detection, future threshold research).
+
+### Forward-health report — pivoted to canonical population
+
+- `apps.analytics.services.v3_2_forward_health.compute_forward_health()` now reads `ForwardValidationSnapshot` filtered by `engine_version='v3_2'`. Never reads `BettingRecommendation` (user activity dependency eliminated).
+- New **CAPTURE HEALTH** block: eligible past-window games, captured coverage %, missed eligible, avg minutes-to-first-pitch, currently-in-window games, next upcoming eligible auto-capture time.
+- New verdict state: **DATA_COLLECTION_DEGRADED** — fires when ≥10 eligible past-window games and capture coverage <60%. Prevents "insufficient sample" from masking a broken capture pipeline.
+- `forward_validation_started_at` derived from the first snapshot's `captured_at` (`auto_now_add` — cannot be forged historically). Report prints "NOT YET STARTED" until the first eligible game hits the window post-deploy.
+
+### Frozen V3.2 guarantee
+
+Capture calls the exact `get_recommendation('mlb', game, user=None)` path that produces user-facing recommendations. Any drift in one propagates to the other. Engine version constant `v3_2` MUST bump if the stack changes so historical snapshots stay interpretable.
+
+### Lineup metadata (zero scoring authority)
+
+Every snapshot records `lineup_state ∈ {unknown, projected, confirmed, updated_after_confirmation}` and a `lineup_snapshot_ref`. Recorded only — has zero influence on the captured decision. Builds the future dataset for a legitimate lineup-quality feature test.
+
+### Tests (16 new — all pass)
+
+`apps/core/test_v3_2_forward_health.py` (rewritten):
+- Canonical window: in-window captured, too-early not captured, too-late not captured.
+- Idempotence: repeated capture ticks do not duplicate.
+- All decision classes stored (recommended/potential/not_recommended/no_signal).
+- **Immutability lock** — after settlement, every decision field is byte-identical to its captured value.
+- Autonomous settlement — no user activity required.
+- Forward-health reads canonical population, not BettingRecommendation.
+- Forward-health ignores user-placed BettingRecommendation rows (validation population isolated from user bets).
+- No historical backfill — `captured_at` uses `auto_now_add`; started_at cannot be forged.
+- Wilson CI hand-verified + pre-registered threshold lock.
+- Production flags remain false.
+- Renderer smoke — CAPTURE HEALTH + POPULATION + VERDICT + canonical window all present.
+- Management command `capture_v3_2_validation` is registered.
+
+**Full regression: 1658 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+
+- V3.2 production unchanged: gate 0.62/7pp, blend 0.55, Recent Form ON.
+- All shadow flags remain false: bullpen quality/fatigue, lineup quality, team offense.
+- No historical replay rows inserted as forward observations.
+
+### Operator next-action
+
+1. Wait ~2 min for Railway to deploy.
+2. Wait for the first `refresh_data` cycle after deploy — chained `capture_v3_2_validation` will fire.
+3. Open `https://brotherwillies.com/analytics/v3-2-forward-health/?days=30`. Expected sequence:
+   - **First open**: verdict `INSUFFICIENT_DATA`, `forward_validation_started_at: NOT YET STARTED`.
+   - **Once first game reaches window (T-60min ±15min)**: the CAPTURE HEALTH block's "currently in window" list will show that game before it's captured, then "total snapshots written in window" will increment on the next refresh cycle.
+   - The report's "next upcoming eligible" line tells the operator the exact `first_pitch` and `earliest_auto_capture_at` for the next game if none is currently in-window.
+4. Do NOT trigger anything manually — this is autonomous. Do NOT open the MLB page — capture is decoupled from browsing.
+
+---
+
 ## 2026-08-24 — Team-Offense CLOSED (NO-GO) + V3.2 Forward-Health program
 
 **Strategic pivot**: after the phase-2 isolated analysis (99.9% coverage, 1,652 games) returned `NO_GO_OFFENSE` with 0/4 candidates promoted, the team-offense track is formally closed. The priority shifts from adding features to proving V3.2 performs forward in production while lineup collection accumulates for the next legitimate feature test.

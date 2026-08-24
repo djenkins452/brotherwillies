@@ -242,61 +242,85 @@ def _bucket_for_value(value: float, buckets) -> Optional[str]:
 
 
 def compute_forward_health(*, days: int = 30) -> Dict[str, Any]:
-    """Assemble the full forward-health report for the last `days`
-    system recommendations."""
-    from django.utils import timezone
-    from apps.core.models import BettingRecommendation
+    """Assemble the full forward-health report from the autonomous
+    canonical capture population.
 
-    cutoff = timezone.now() - timedelta(days=days)
-    # SYSTEM recommendations only. User-tuned model rows are excluded.
-    all_recs = list(
-        BettingRecommendation.objects
-        .filter(sport='mlb', model_source='house',
-                created_at__gte=cutoff)
+    2026-08-24 pivot: was previously reading `BettingRecommendation`
+    filtered by model_source='house' — but persistence there was
+    gated on user activity (place_mock_bet / bulk_actions), so the
+    report was always generated=0 in production. Now reads
+    `ForwardValidationSnapshot` written every refresh cycle by
+    `capture_v3_2_validation`.
+    """
+    from django.utils import timezone
+    from apps.analytics.models import ForwardValidationSnapshot
+    from apps.analytics.services.v3_2_capture import (
+        capture_pending, ENGINE_VERSION, MIN_WINDOW_MIN, MAX_WINDOW_MIN,
+        get_forward_validation_started_at,
+    )
+    from apps.mlb.models import Game
+
+    now = timezone.now()
+    cutoff = now - timedelta(days=days)
+
+    all_snaps = list(
+        ForwardValidationSnapshot.objects
+        .filter(engine_version=ENGINE_VERSION,
+                captured_at__gte=cutoff)
         .select_related('mlb_game', 'mlb_game__home_team',
                         'mlb_game__away_team')
-        .order_by('created_at')
+        .order_by('captured_at')
     )
-    generated = len(all_recs)
-    lc_recs = [r for r in all_recs
-               if r.status == 'recommended' and r.lane == 'core']
+    generated = len(all_snaps)
+    rec_snaps = [s for s in all_snaps if s.decision_class == 'recommended']
+    settled = [s for s in rec_snaps if s.settled_at is not None]
+    unsettled = [s for s in rec_snaps if s.settled_at is None]
 
-    # Compute outcome / profit / CLV for each LC rec.
-    settled_rows = []
-    unsettled_rows = []
-    for r in lc_recs:
-        won = _rec_outcome(r)
-        if won is None:
-            unsettled_rows.append(r)
-            continue
-        profit = _rec_profit(r, won)
-        closing = _closing_market_prob_for(r)
-        clv = _rec_clv(r, closing)
-        settled_rows.append({
-            'rec': r,
-            'won': won,
-            'profit_per_dollar': profit,
-            'clv_pp': (clv * 100.0) if clv is not None else None,
-        })
-
-    n_settled = len(settled_rows)
-    aggregate = _aggregate_metrics(settled_rows)
-    distribution = _distribution_metrics(lc_recs)
-    cohorts = _cohort_metrics(settled_rows)
-    calibration = _calibration_metrics(settled_rows)
-    integrity = _integrity_findings(all_recs, lc_recs, unsettled_rows)
-    verdict = _compute_verdict(n_settled, aggregate)
-
+    aggregate = _aggregate_metrics_snap(settled)
+    distribution = _distribution_metrics_snap(rec_snaps)
+    cohorts = _cohort_metrics_snap(settled)
+    calibration = _calibration_metrics_snap(settled)
+    capture_health = _capture_health(days=days, now=now)
+    integrity = {
+        'total_snaps_in_window': len(all_snaps),
+        'recommended_snaps': len(rec_snaps),
+        'potential_snaps': sum(1 for s in all_snaps
+                               if s.decision_class == 'potential'),
+        'not_recommended_snaps': sum(1 for s in all_snaps
+                                     if s.decision_class == 'not_recommended'),
+        'no_signal_snaps': sum(1 for s in all_snaps
+                               if s.decision_class == 'no_signal'),
+        'snaps_missing_feature_contributions': sum(
+            1 for s in all_snaps if not s.feature_contributions
+        ),
+    }
+    forward_started = get_forward_validation_started_at()
+    verdict = _compute_verdict(
+        n_settled=len(settled),
+        aggregate=aggregate,
+        capture_health=capture_health,
+        forward_started=forward_started,
+    )
     return {
         'window': {'days': days,
                    'from': cutoff.date().isoformat(),
                    'to': timezone.localdate().isoformat()},
-        'population': {
-            'generated': generated,
-            'lane_core_recommended': len(lc_recs),
-            'settled': n_settled,
-            'unsettled': len(unsettled_rows),
+        'engine_version': ENGINE_VERSION,
+        'canonical_window': {
+            'min_min_to_first_pitch': MIN_WINDOW_MIN,
+            'max_min_to_first_pitch': MAX_WINDOW_MIN,
+            'target_min_to_first_pitch': (MIN_WINDOW_MIN + MAX_WINDOW_MIN) // 2,
         },
+        'forward_validation_started_at': (
+            forward_started.isoformat() if forward_started else None
+        ),
+        'population': {
+            'total_captured': generated,
+            'recommended': len(rec_snaps),
+            'settled': len(settled),
+            'unsettled': len(unsettled),
+        },
+        'capture_health': capture_health,
         'aggregate': aggregate,
         'distribution': distribution,
         'cohorts': cohorts,
@@ -312,6 +336,267 @@ def compute_forward_health(*, days: int = 30) -> Dict[str, Any]:
             'reasons': [{'level': l, 'message': m} for l, m in verdict.reasons],
         },
     }
+
+
+def _capture_health(*, days: int, now) -> Dict[str, Any]:
+    """CAPTURE HEALTH block — was capture actually running?
+
+    Reports:
+      * eligible historical games (final MLB games in window with a
+        first_pitch we could have captured against) — used as the
+        expected-snapshot denominator.
+      * snapshots actually captured in the same window.
+      * capture coverage %.
+      * average minutes-to-first-pitch at capture time.
+      * currently-in-window games (immediate next-fire preview).
+      * upcoming games — first eligible auto-capture time.
+    """
+    from apps.analytics.models import ForwardValidationSnapshot
+    from apps.analytics.services.v3_2_capture import ENGINE_VERSION
+    from apps.mlb.models import Game
+
+    from django.db.models import Q
+
+    cutoff = now - timedelta(days=days)
+
+    # Every MLB game whose first_pitch fell inside the reporting window
+    # AND is now final. Those are the games we COULD have captured a
+    # canonical snapshot for. (Games in the future are counted below
+    # under upcoming.)
+    eligible = list(
+        Game.objects
+        .filter(source='mlb_stats_api',
+                first_pitch__gte=cutoff,
+                first_pitch__lt=now,
+                status='final')
+        .only('id', 'first_pitch')
+    )
+    eligible_ids = {g.id for g in eligible}
+    captured_ids = set(
+        ForwardValidationSnapshot.objects
+        .filter(engine_version=ENGINE_VERSION,
+                mlb_game_id__in=eligible_ids)
+        .values_list('mlb_game_id', flat=True)
+    )
+    missed_ids = eligible_ids - captured_ids
+    total_captured_in_window = ForwardValidationSnapshot.objects.filter(
+        engine_version=ENGINE_VERSION,
+        captured_at__gte=cutoff,
+    ).count()
+
+    avg_min_to_fp = None
+    if total_captured_in_window:
+        agg = ForwardValidationSnapshot.objects.filter(
+            engine_version=ENGINE_VERSION,
+            captured_at__gte=cutoff,
+        )
+        s = 0
+        n = 0
+        for m in agg.values_list('minutes_to_first_pitch', flat=True):
+            s += m; n += 1
+        avg_min_to_fp = round(s / n, 1) if n else None
+
+    # Currently-in-window (would be captured on next refresh cycle).
+    from apps.analytics.services.v3_2_capture import (
+        MIN_WINDOW_MIN, MAX_WINDOW_MIN,
+    )
+    window_lo = now + timedelta(minutes=MIN_WINDOW_MIN)
+    window_hi = now + timedelta(minutes=MAX_WINDOW_MIN)
+    in_window = list(
+        Game.objects
+        .filter(source='mlb_stats_api',
+                first_pitch__gte=window_lo,
+                first_pitch__lte=window_hi)
+        .exclude(status='final')
+        .only('id', 'first_pitch', 'home_team_id', 'away_team_id')
+        .order_by('first_pitch')[:20]
+    )
+
+    # Next eligible upcoming game (first game whose first_pitch is
+    # after now + MIN_WINDOW_MIN — the next scheduled auto-capture).
+    next_upcoming = (
+        Game.objects
+        .filter(source='mlb_stats_api',
+                first_pitch__gt=window_hi)
+        .exclude(status='final')
+        .order_by('first_pitch')
+        .only('id', 'first_pitch')
+        .first()
+    )
+
+    denom = max(1, len(eligible_ids))
+    coverage_pct = round(100.0 * len(captured_ids) / denom, 2)
+    return {
+        'window_days': days,
+        'eligible_games_in_window': len(eligible_ids),
+        'snapshots_captured_for_eligible': len(captured_ids),
+        'missed_eligible': len(missed_ids),
+        'capture_coverage_pct': coverage_pct,
+        'total_snapshots_written_in_window': total_captured_in_window,
+        'avg_min_to_first_pitch': avg_min_to_fp,
+        'currently_in_window': [
+            {'game_id': str(g.id), 'first_pitch': g.first_pitch.isoformat()}
+            for g in in_window
+        ],
+        'next_upcoming': (
+            {
+                'game_id': str(next_upcoming.id),
+                'first_pitch': next_upcoming.first_pitch.isoformat(),
+                'earliest_auto_capture_at': (
+                    (next_upcoming.first_pitch
+                     - timedelta(minutes=MAX_WINDOW_MIN)).isoformat()
+                ),
+            }
+            if next_upcoming else None
+        ),
+    }
+
+
+def _aggregate_metrics_snap(settled_snaps) -> Dict[str, Any]:
+    """Snapshot-based version of _aggregate_metrics. Reads
+    ForwardValidationSnapshot rows that have been settled."""
+    n = len(settled_snaps)
+    if n == 0:
+        return {'n': 0, 'wins': 0, 'losses': 0,
+                'win_rate_pp': None, 'wilson_lo_pp': None, 'wilson_hi_pp': None,
+                'roi_pp': None, 'clv_pos_pp': None,
+                'avg_clv_pp': None, 'avg_prob_pp': None,
+                'net_p_l_per_dollar': None, 'clv_sample_n': 0}
+    wins = sum(1 for s in settled_snaps if s.won is True)
+    losses = sum(1 for s in settled_snaps if s.won is False)
+    profits = [s.profit_per_dollar for s in settled_snaps
+               if s.profit_per_dollar is not None]
+    total_profit = sum(profits)
+    lo, hi = _wilson_ci(wins, wins + losses)
+    clvs = [s.clv_pp for s in settled_snaps if s.clv_pp is not None]
+    pos_clvs = [c for c in clvs if c > 0]
+    probs = [s.final_model_prob for s in settled_snaps
+             if s.final_model_prob is not None]
+    return {
+        'n': n, 'wins': wins, 'losses': losses,
+        'win_rate_pp': round(100.0 * wins / max(1, wins + losses), 2)
+                       if (wins + losses) else None,
+        'wilson_lo_pp': round(100.0 * lo, 2),
+        'wilson_hi_pp': round(100.0 * hi, 2),
+        'roi_pp': round(100.0 * total_profit / len(profits), 2) if profits else None,
+        'net_p_l_per_dollar': round(total_profit, 2) if profits else None,
+        'clv_sample_n': len(clvs),
+        'clv_pos_pp': round(100.0 * len(pos_clvs) / len(clvs), 2) if clvs else None,
+        'avg_clv_pp': round(sum(clvs) / len(clvs), 2) if clvs else None,
+        'avg_prob_pp': round(100.0 * sum(probs) / len(probs), 2) if probs else None,
+    }
+
+
+def _distribution_metrics_snap(rec_snaps) -> Dict[str, Any]:
+    by_day: Counter = Counter()
+    odds: List[int] = []
+    edges: List[float] = []
+    probs: List[float] = []
+    tier_ct = Counter()
+    lane_ct = Counter()
+    for s in rec_snaps:
+        by_day[s.captured_at.date().isoformat()] += 1
+        if s.odds_american is not None:
+            odds.append(int(s.odds_american))
+        if s.edge_pp is not None:
+            edges.append(float(s.edge_pp))
+        if s.final_model_prob is not None:
+            probs.append(float(s.final_model_prob))
+        tier_ct[s.tier or ''] += 1
+        lane_ct[s.lane or ''] += 1
+    return {
+        'per_day': dict(sorted(by_day.items())),
+        'avg_per_day': (sum(by_day.values()) / len(by_day)) if by_day else 0,
+        'odds_distribution': _distribution_summary(odds),
+        'edge_distribution': _distribution_summary(edges),
+        'prob_distribution': _distribution_summary([p * 100 for p in probs]),
+        'tier_counts': dict(tier_ct),
+        'lane_counts': dict(lane_ct),
+    }
+
+
+def _cohort_metrics_snap(settled_snaps) -> Dict[str, Any]:
+    def _bucket(rows):
+        n = len(rows)
+        if n == 0:
+            return {'n': 0}
+        wins = sum(1 for r in rows if r.won is True)
+        losses = sum(1 for r in rows if r.won is False)
+        lo, hi = _wilson_ci(wins, wins + losses) if (wins + losses) else (0, 0)
+        profits = [r.profit_per_dollar for r in rows
+                   if r.profit_per_dollar is not None]
+        return {
+            'n': n, 'wins': wins,
+            'win_rate_pp': round(100.0 * wins / max(1, wins + losses), 2)
+                           if (wins + losses) else None,
+            'wilson_lo_pp': round(100.0 * lo, 2),
+            'wilson_hi_pp': round(100.0 * hi, 2),
+            'roi_pp': round(100.0 * sum(profits) / len(profits), 2) if profits else None,
+        }
+
+    by_prob = {label: [] for label, _, _ in PROB_BUCKETS}
+    for s in settled_snaps:
+        p = s.final_model_prob
+        if p is None: continue
+        b = _bucket_for_value(float(p), PROB_BUCKETS)
+        if b: by_prob[b].append(s)
+
+    by_edge = {label: [] for label, _, _ in EDGE_BUCKETS}
+    for s in settled_snaps:
+        e = s.edge_pp
+        if e is None: continue
+        b = _bucket_for_value(float(e), EDGE_BUCKETS)
+        if b: by_edge[b].append(s)
+
+    by_side = {'home': [], 'away': []}
+    for s in settled_snaps:
+        if s.pick_side in by_side:
+            by_side[s.pick_side].append(s)
+
+    by_role = {'favorite_short': [], 'favorite_mid': [], 'underdog': []}
+    for s in settled_snaps:
+        o = s.odds_american
+        if o is None: continue
+        if o <= -150: by_role['favorite_mid'].append(s)
+        elif o < 0:   by_role['favorite_short'].append(s)
+        else:         by_role['underdog'].append(s)
+
+    return {
+        'by_probability': {k: _bucket(v) for k, v in by_prob.items()},
+        'by_edge':        {k: _bucket(v) for k, v in by_edge.items()},
+        'by_side':        {k: _bucket(v) for k, v in by_side.items()},
+        'by_role':        {k: _bucket(v) for k, v in by_role.items()},
+    }
+
+
+def _calibration_metrics_snap(settled_snaps) -> Dict[str, Any]:
+    rows = [s for s in settled_snaps if s.final_model_prob is not None
+            and s.won is not None]
+    if not rows:
+        return {'bins': [], 'brier_like': None}
+    rows.sort(key=lambda s: s.final_model_prob)
+    n = len(rows); step = n / 5.0
+    bins = []
+    brier_terms = []
+    for i in range(5):
+        lo = int(round(i * step)); hi = int(round((i + 1) * step))
+        chunk = rows[lo:hi]
+        if not chunk: continue
+        avg_p = sum(float(s.final_model_prob) for s in chunk) / len(chunk)
+        wins = sum(1 for s in chunk if s.won)
+        actual = wins / len(chunk)
+        bins.append({
+            'bucket': f'q{i + 1}',
+            'n': len(chunk),
+            'avg_predicted_pp': round(100.0 * avg_p, 2),
+            'actual_win_rate_pp': round(100.0 * actual, 2),
+            'diff_pp': round(100.0 * (actual - avg_p), 2),
+        })
+        for s in chunk:
+            p = float(s.final_model_prob)
+            brier_terms.append((p - (1.0 if s.won else 0.0)) ** 2)
+    brier_like = round(sum(brier_terms) / len(brier_terms), 4) if brier_terms else None
+    return {'bins': bins, 'brier_like': brier_like}
 
 
 def _aggregate_metrics(settled_rows) -> Dict[str, Any]:
@@ -514,8 +799,43 @@ def _integrity_findings(all_recs, lc_recs, unsettled_rows) -> Dict[str, Any]:
     }
 
 
-def _compute_verdict(n_settled: int, aggregate: Dict[str, Any]) -> HealthVerdict:
+def _compute_verdict(*, n_settled: int, aggregate: Dict[str, Any],
+                     capture_health: Optional[Dict[str, Any]] = None,
+                     forward_started=None) -> HealthVerdict:
     reasons: List[Tuple[str, str]] = []
+
+    # Capture-health check FIRST: bad model performance because capture
+    # is broken is a different diagnosis than bad model performance
+    # because the model is drifting. If the capture pipeline itself is
+    # unhealthy, headline that instead of pretending the model has
+    # insufficient data.
+    if capture_health is not None:
+        elig = capture_health.get('eligible_games_in_window', 0)
+        cov = capture_health.get('capture_coverage_pct', 0.0)
+        if elig >= 10 and cov < 60.0:
+            reasons.append((
+                'FAIL',
+                f'capture coverage {cov:.1f}% of {elig} eligible '
+                'past-window games — DATA COLLECTION DEGRADED, model '
+                'metrics below are unreliable.',
+            ))
+            return HealthVerdict('DATA_COLLECTION_DEGRADED', tuple(reasons))
+        elif elig >= 10 and cov < 80.0:
+            reasons.append((
+                'WARN',
+                f'capture coverage {cov:.1f}% of {elig} eligible '
+                'past-window games — WATCH the collection pipeline.',
+            ))
+
+    if forward_started is None:
+        reasons.append((
+            'INFO',
+            'No canonical snapshots persisted yet. Forward validation '
+            'starts on the first refresh cycle that finds a game inside '
+            'the T-60min ±15min window post-deploy.',
+        ))
+        return HealthVerdict('INSUFFICIENT_DATA', tuple(reasons))
+
     if n_settled < MIN_SETTLED_FOR_JUDGMENT:
         reasons.append((
             'INFO',
@@ -648,10 +968,45 @@ def render_forward_health(h: Dict[str, Any]) -> str:
     lines.append('#' * 100)
     lines.append('')
 
+    if h.get('forward_validation_started_at'):
+        lines.append(f'#  forward validation started: '
+                     f'{h["forward_validation_started_at"]}')
+    else:
+        lines.append('#  forward validation: NOT YET STARTED — '
+                     'awaiting first eligible capture window post-deploy.')
+    lines.append('#  engine version: ' + h.get('engine_version', 'v3_2'))
+    cw = h.get('canonical_window', {})
+    lines.append(f'#  canonical window: T-{cw.get("min_min_to_first_pitch")}min '
+                 f'to T-{cw.get("max_min_to_first_pitch")}min '
+                 f'(target ~T-{cw.get("target_min_to_first_pitch")}min)')
+    lines.append('')
+
+    ch = h.get('capture_health', {})
+    lines.append('CAPTURE HEALTH (autonomous — no user activity required)')
+    lines.append('-' * 78)
+    lines.append(f'  eligible past-window games : {ch.get("eligible_games_in_window", 0)}')
+    lines.append(f'  captured of those          : {ch.get("snapshots_captured_for_eligible", 0)}'
+                 f'  (coverage {ch.get("capture_coverage_pct", 0.0)}%)')
+    lines.append(f'  missed eligible            : {ch.get("missed_eligible", 0)}')
+    lines.append(f'  total snapshots in window  : {ch.get("total_snapshots_written_in_window", 0)}')
+    lines.append(f'  avg min-to-first-pitch     : {ch.get("avg_min_to_first_pitch")}')
+    in_win = ch.get('currently_in_window', [])
+    lines.append(f'  currently in window        : {len(in_win)} game(s)')
+    for g in in_win[:10]:
+        lines.append(f'    - game_id={g["game_id"]} first_pitch={g["first_pitch"]}')
+    nu = ch.get('next_upcoming')
+    if nu:
+        lines.append(f'  next upcoming eligible     : game_id={nu["game_id"]} '
+                     f'first_pitch={nu["first_pitch"]} '
+                     f'earliest_capture={nu["earliest_auto_capture_at"]}')
+    else:
+        lines.append('  next upcoming eligible     : none scheduled')
+    lines.append('')
+
     p = h['population']
-    lines.append('POPULATION (system recommendations only — model_source=house)')
-    lines.append(f'  generated               : {p["generated"]}')
-    lines.append(f'  lane-core recommended   : {p["lane_core_recommended"]}')
+    lines.append('POPULATION (autonomous canonical capture — model_source=house implicit)')
+    lines.append(f'  total captured          : {p["total_captured"]}')
+    lines.append(f'  recommended             : {p["recommended"]}')
     lines.append(f'  settled                 : {p["settled"]}')
     lines.append(f'  unsettled               : {p["unsettled"]}')
     lines.append('')
@@ -728,11 +1083,13 @@ def render_forward_health(h: Dict[str, Any]) -> str:
 
     i = h['integrity']
     lines.append('DATA INTEGRITY')
-    lines.append(f'  recs in window         : {i["total_recs_in_window"]}')
-    lines.append(f'  lane-core recs         : {i["lane_core_recs"]}')
-    lines.append(f'  missing feature_contributions : {i["missing_feature_contributions"]}')
-    lines.append(f'  unsettled >6h past first_pitch: {i["unsettled_past_first_pitch_by_6h"]}'
-                 ' (ingestion may be stale if > 0)')
+    lines.append(f'  total snapshots in window     : {i["total_snaps_in_window"]}')
+    lines.append(f'  recommended snapshots         : {i["recommended_snaps"]}')
+    lines.append(f'  potential snapshots           : {i["potential_snaps"]}')
+    lines.append(f'  not_recommended snapshots     : {i["not_recommended_snaps"]}')
+    lines.append(f'  no_signal snapshots           : {i["no_signal_snaps"]}')
+    lines.append(f'  snapshots missing feature_contributions : '
+                 f'{i["snaps_missing_feature_contributions"]}')
     lines.append('')
 
     v = h['verdict']
@@ -744,7 +1101,10 @@ def render_forward_health(h: Dict[str, Any]) -> str:
     lines.append('=' * 78)
     lines.append('')
     lines.append('Verdict thresholds (pre-registered, do NOT change without evidence):')
-    lines.append(f'  INSUFFICIENT_DATA when n_settled < {MIN_SETTLED_FOR_JUDGMENT}')
+    lines.append(f'  DATA_COLLECTION_DEGRADED when capture coverage <60% '
+                 f'AND >=10 eligible past-window games')
+    lines.append(f'  INSUFFICIENT_DATA when no snapshots yet OR '
+                 f'n_settled < {MIN_SETTLED_FOR_JUDGMENT}')
     lines.append(f'  WATCH  on win-rate drop >= {WATCH_WIN_RATE_DROP_PP}pp OR '
                  f'ROI drop >= {WATCH_ROI_DROP_PP}pp OR '
                  f'CLV+ drop >= {WATCH_CLV_DROP_PP}pp')

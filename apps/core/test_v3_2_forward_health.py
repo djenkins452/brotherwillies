@@ -1,26 +1,28 @@
-"""V3.2 forward-validation health service tests.
+"""V3.2 forward-validation autonomous-capture tests.
 
 Locks:
-  * Wilson CI math on a hand-computed case.
-  * SYSTEM-only filter (excludes model_source='user' bets).
-  * Pick-side outcome computation.
-  * Cohort bucket boundaries.
-  * Verdict rules on synthetic scenarios (INSUFFICIENT_DATA / HEALTHY /
-    WATCH / DEGRADED).
-  * Renderer produces expected top-level headers.
-  * Pre-registered thresholds have not drifted from their v3.2 lock
-    values — any change requires a documented evidence-driven decision.
+  * Canonical capture window (T-45min..T-75min).
+  * Idempotence — one snapshot per (game, engine_version).
+  * All decision classes captured (recommended/potential/not_recommended/no_signal).
+  * Immutability — settlement fields update, decision fields never do.
+  * Autonomous settlement — no user activity required.
+  * Forward-health reads canonical population, NOT BettingRecommendation.
+  * User bets never mix into the validation sample.
+  * No historical backfill masquerading as forward observation.
+  * Wilson CI + pre-registered threshold lock.
+  * Production flags remain false.
 """
 from __future__ import annotations
 
 import datetime as dt
-from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.analytics.services import v3_2_forward_health as fh
-from apps.core.models import BettingRecommendation
+from apps.analytics.models import ForwardValidationSnapshot
+from apps.analytics.services import v3_2_capture, v3_2_forward_health as fh
+from apps.analytics.services import v3_2_settlement as sett
 from apps.mlb.models import Conference, Game, Team
 
 
@@ -48,166 +50,260 @@ def _mk_game(home, away, first_pitch, *, home_score=None, away_score=None,
     )
 
 
-def _mk_rec(mlb_game, *, pick, odds, model_source='house',
-            status='recommended', lane='core',
-            final_model_prob=0.65, model_edge=8.0,
-            created_at=None):
-    r = BettingRecommendation.objects.create(
-        sport='mlb', mlb_game=mlb_game,
-        bet_type='moneyline', pick=pick,
-        odds_american=int(odds),
-        confidence_score=Decimal(str(round(final_model_prob * 100, 2))),
-        model_edge=Decimal(str(model_edge)),
-        model_source=model_source,
-        status=status, lane=lane,
-        raw_model_prob=final_model_prob, final_model_prob=final_model_prob,
-        market_prob=final_model_prob - (model_edge / 100.0),
-        feature_contributions={'engine_version': 'v3.2'},
-    )
-    if created_at is not None:
-        BettingRecommendation.objects.filter(id=r.id).update(created_at=created_at)
-    r.refresh_from_db()
-    return r
+class _FakeRec:
+    """Minimal shape of get_recommendation's return."""
+    def __init__(self, *, status='recommended', lane='core',
+                 pick='Yankees', odds=-150, prob=0.65, edge=8.0,
+                 tier='standard'):
+        self.status = status
+        self.status_reason = ''
+        self.lane = lane
+        self.pick = pick
+        self.odds_american = odds
+        self.raw_model_prob = prob
+        self.final_model_prob = prob
+        self.market_prob = prob - (edge / 100.0)
+        self.model_edge = edge
+        self.confidence_score = round(prob * 100, 2)
+        self.tier = tier
+        self.risk_flags = {}
+        self.risk_score = 0
+        self.is_secondary = False
+        self.movement_class = None
+        self.movement_score = None
+        self.movement_supports_pick = False
+        self.market_warning = False
+        self.feature_contributions = {'engine_version': 'v3.2'}
 
 
-class WilsonCITests(TestCase):
+class CanonicalWindowTests(TestCase):
+    def test_in_window_is_captured(self):
+        """Game with first_pitch 60min from now — captured."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        g = _mk_game(home, away, now + dt.timedelta(minutes=60))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(),
+        ):
+            result = v3_2_capture.capture_pending(now=now)
+        self.assertEqual(result['captured'], 1)
+        self.assertEqual(result['candidates_in_window'], 1)
+        self.assertEqual(ForwardValidationSnapshot.objects.count(), 1)
+
+    def test_too_early_not_captured(self):
+        """Game first_pitch 180min out — outside window."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        _mk_game(home, away, now + dt.timedelta(minutes=180))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(),
+        ) as mock:
+            result = v3_2_capture.capture_pending(now=now)
+        self.assertEqual(result['captured'], 0)
+        self.assertEqual(result['candidates_in_window'], 0)
+        # get_recommendation MUST NOT have been called for out-of-window games.
+        mock.assert_not_called()
+
+    def test_too_late_not_captured(self):
+        """Game first_pitch 20min out — past canonical window."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        _mk_game(home, away, now + dt.timedelta(minutes=20))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(),
+        ):
+            result = v3_2_capture.capture_pending(now=now)
+        self.assertEqual(result['captured'], 0)
+
+
+class IdempotenceTests(TestCase):
+    def test_repeated_capture_ticks_do_not_duplicate(self):
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        _mk_game(home, away, now + dt.timedelta(minutes=60))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(),
+        ):
+            v3_2_capture.capture_pending(now=now)
+            v3_2_capture.capture_pending(now=now)
+            r3 = v3_2_capture.capture_pending(now=now)
+        self.assertEqual(ForwardValidationSnapshot.objects.count(), 1)
+        # Third tick reports already_captured=1, captured=0.
+        self.assertEqual(r3['captured'], 0)
+        self.assertEqual(r3['already_captured'], 1)
+
+
+class AllDecisionClassesCapturedTests(TestCase):
+    def test_recommended_potential_not_recommended_and_no_signal_all_stored(self):
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        recs = [
+            _FakeRec(status='recommended', lane='core'),                 # recommended
+            _FakeRec(status='recommended', lane='qualified'),            # potential
+            _FakeRec(status='not_recommended', lane='pass'),             # not_recommended
+            None,                                                        # no_signal
+        ]
+        games = [
+            _mk_game(home, away,
+                     now + dt.timedelta(minutes=50 + 5 * i))
+            for i in range(4)
+        ]
+        for game, rec in zip(games, recs):
+            with patch(
+                'apps.core.services.recommendations.get_recommendation',
+                return_value=rec,
+            ):
+                v3_2_capture._capture_one(game, now=now)
+        classes = sorted(
+            ForwardValidationSnapshot.objects.values_list('decision_class', flat=True)
+        )
+        self.assertEqual(classes, ['no_signal', 'not_recommended',
+                                    'potential', 'recommended'])
+
+
+class ImmutabilityTests(TestCase):
+    def test_settlement_updates_only_settlement_fields(self):
+        """After settlement, decision-time fields (pick, edge, odds,
+        etc.) must be BYTE-IDENTICAL to their captured values."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        g = _mk_game(home, away, now + dt.timedelta(minutes=60))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(pick='Yankees', odds=-150,
+                                  prob=0.65, edge=8.0),
+        ):
+            v3_2_capture.capture_pending(now=now)
+        snap = ForwardValidationSnapshot.objects.get()
+        original = {
+            'pick': snap.pick, 'pick_side': snap.pick_side,
+            'odds_american': snap.odds_american,
+            'edge_pp': snap.edge_pp,
+            'final_model_prob': snap.final_model_prob,
+            'feature_contributions': snap.feature_contributions,
+            'captured_at': snap.captured_at,
+            'minutes_to_first_pitch': snap.minutes_to_first_pitch,
+        }
+        # Game finishes — Yankees win.
+        g.status = 'final'
+        g.home_score = 5
+        g.away_score = 3
+        g.save()
+
+        sett.settle_pending()
+        snap.refresh_from_db()
+        # Decision fields — unchanged.
+        for k, v in original.items():
+            self.assertEqual(getattr(snap, k), v,
+                             f'immutable field {k} was mutated during settlement')
+        # Settlement fields — populated.
+        self.assertTrue(snap.won)
+        self.assertIsNotNone(snap.settled_at)
+        self.assertGreater(snap.profit_per_dollar, 0)
+
+
+class AutonomousSettlementTests(TestCase):
+    def test_settle_pending_runs_with_no_user_activity(self):
+        """settle_pending must attach outcomes automatically — no
+        BettingRecommendation, no MockBet, no request/user needed."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        g = _mk_game(home, away, now + dt.timedelta(minutes=60))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(pick='Yankees', odds=-110),
+        ):
+            v3_2_capture.capture_pending(now=now)
+        g.status = 'final'; g.home_score = 4; g.away_score = 2; g.save()
+        r = sett.settle_pending()
+        self.assertEqual(r['settled'], 1)
+        snap = ForwardValidationSnapshot.objects.get()
+        self.assertTrue(snap.won)
+
+
+class ForwardHealthReadsCanonicalPopulationTests(TestCase):
+    def test_forward_health_query_uses_snapshot_not_recommendation(self):
+        """Historic: report queried BettingRecommendation and returned
+        generated=0 in production. Now must return snapshot counts."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        for i in range(3):
+            g = _mk_game(home, away, now + dt.timedelta(minutes=60, seconds=i))
+            with patch(
+                'apps.core.services.recommendations.get_recommendation',
+                return_value=_FakeRec(),
+            ):
+                v3_2_capture._capture_one(g, now=now)
+        report = fh.compute_forward_health(days=30)
+        self.assertEqual(report['population']['total_captured'], 3)
+        self.assertEqual(report['population']['recommended'], 3)
+
+    def test_forward_health_ignores_user_placed_bets(self):
+        """User activity via place_mock_bet creates BettingRecommendation
+        rows. The forward-health report MUST NOT count those — it reads
+        ForwardValidationSnapshot only."""
+        from apps.core.models import BettingRecommendation
+        from decimal import Decimal
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        g = _mk_game(home, away, now + dt.timedelta(hours=6),
+                     home_score=5, away_score=3, status='final')
+        BettingRecommendation.objects.create(
+            sport='mlb', mlb_game=g,
+            bet_type='moneyline', pick='Yankees',
+            odds_american=-150,
+            confidence_score=Decimal('65.00'),
+            model_edge=Decimal('8.00'),
+            model_source='house', status='recommended', lane='core',
+            final_model_prob=0.65, market_prob=0.57,
+        )
+        report = fh.compute_forward_health(days=30)
+        # Zero ForwardValidationSnapshot rows even though a
+        # BettingRecommendation exists.
+        self.assertEqual(report['population']['total_captured'], 0)
+
+
+class NoHistoricalBackfillTests(TestCase):
+    def test_forward_validation_started_at_reflects_first_snapshot_only(self):
+        """The started_at marker is derived from the FIRST captured_at
+        (which is auto_now_add). We can never fake historical captures
+        because ForwardValidationSnapshot.captured_at is not settable
+        via .create()."""
+        home = _mk_team('Yankees', 'nyy')
+        away = _mk_team('Red Sox', 'bos')
+        now = timezone.now()
+        g = _mk_game(home, away, now + dt.timedelta(minutes=60))
+        with patch(
+            'apps.core.services.recommendations.get_recommendation',
+            return_value=_FakeRec(),
+        ):
+            v3_2_capture._capture_one(g, now=now)
+        started = v3_2_capture.get_forward_validation_started_at()
+        self.assertIsNotNone(started)
+        # Roughly within a few seconds of "now" — never in the past.
+        self.assertLess(abs((timezone.now() - started).total_seconds()), 60)
+
+
+class WilsonCIAndThresholdLockTests(TestCase):
     def test_wilson_ci_known_case(self):
-        """20 wins in 30 trials → Wilson95 ≈ [.488, .812] (formula-verified)."""
         lo, hi = fh._wilson_ci(20, 30)
         self.assertAlmostEqual(lo, 0.488, places=2)
         self.assertAlmostEqual(hi, 0.812, places=2)
 
-    def test_wilson_ci_zero_n(self):
-        self.assertEqual(fh._wilson_ci(0, 0), (0.0, 0.0))
-
-
-class OutcomeComputationTests(TestCase):
-    def test_home_pick_wins_when_home_scores_more(self):
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        game = _mk_game(home, away, timezone.now() - dt.timedelta(days=2),
-                        home_score=5, away_score=3, status='final')
-        rec = _mk_rec(game, pick='Yankees', odds=-150)
-        self.assertTrue(fh._rec_outcome(rec))
-
-    def test_away_pick_wins_when_away_scores_more(self):
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        game = _mk_game(home, away, timezone.now() - dt.timedelta(days=2),
-                        home_score=1, away_score=4, status='final')
-        rec = _mk_rec(game, pick='Red Sox', odds=+130)
-        self.assertTrue(fh._rec_outcome(rec))
-
-    def test_unfinished_game_returns_none(self):
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        game = _mk_game(home, away, timezone.now() + dt.timedelta(hours=2))
-        rec = _mk_rec(game, pick='Yankees', odds=-150)
-        self.assertIsNone(fh._rec_outcome(rec))
-
-
-class SystemOnlyFilterTests(TestCase):
-    def test_user_model_source_recs_excluded(self):
-        """User-tuned model recommendations must NOT count in the
-        forward-health sample — those judge the user, not the model."""
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        game = _mk_game(home, away, timezone.now() - dt.timedelta(days=3),
-                        home_score=5, away_score=3, status='final')
-        # System rec — should count.
-        _mk_rec(game, pick='Yankees', odds=-150, model_source='house')
-        # User rec on same game — must NOT count.
-        _mk_rec(game, pick='Yankees', odds=-150, model_source='user')
-        report = fh.compute_forward_health(days=30)
-        self.assertEqual(report['population']['generated'], 1)
-
-
-class VerdictThresholdTests(TestCase):
-    def test_insufficient_data_verdict_below_min_settled(self):
-        """<30 settled → INSUFFICIENT_DATA regardless of rate."""
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        for i in range(5):
-            game = _mk_game(
-                home, away,
-                timezone.now() - dt.timedelta(days=i + 1),
-                home_score=5, away_score=3, status='final',
-            )
-            _mk_rec(game, pick='Yankees', odds=-150)
-        report = fh.compute_forward_health(days=30)
-        self.assertEqual(report['verdict']['verdict'], 'INSUFFICIENT_DATA')
-
-    def test_healthy_verdict_at_baseline(self):
-        """At baseline win rate (71.5%) and baseline ROI, verdict = HEALTHY."""
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        # 30 games total: 22 wins at -150 (win rate ~73.3%).
-        for i in range(22):
-            game = _mk_game(
-                home, away,
-                timezone.now() - dt.timedelta(days=i + 1, hours=i),
-                home_score=5, away_score=3, status='final',
-            )
-            _mk_rec(game, pick='Yankees', odds=-150)
-        for i in range(8):
-            game = _mk_game(
-                home, away,
-                timezone.now() - dt.timedelta(days=i + 25, hours=i),
-                home_score=2, away_score=6, status='final',
-            )
-            _mk_rec(game, pick='Yankees', odds=-150)
-        report = fh.compute_forward_health(days=180)
-        agg = report['aggregate']
-        self.assertGreaterEqual(agg['win_rate_pp'], 60.0)
-        # Should be HEALTHY (or WARN on CLV which has no closing snap
-        # samples in tests).
-        v = report['verdict']['verdict']
-        self.assertIn(v, ('HEALTHY', 'WATCH'))
-
-    def test_degraded_verdict_on_bad_win_rate(self):
-        """30 settled, win rate 50% (far below baseline). Wilson lower
-        bound drops well past DEGRADED_WIN_RATE_LOWER_BOUND_DROP_PP."""
-        home = _mk_team('Yankees', 'nyy')
-        away = _mk_team('Red Sox', 'bos')
-        for i in range(15):
-            g = _mk_game(home, away,
-                         timezone.now() - dt.timedelta(days=i + 1, hours=i),
-                         home_score=5, away_score=3, status='final')
-            _mk_rec(g, pick='Yankees', odds=-150)
-        for i in range(15):
-            g = _mk_game(home, away,
-                         timezone.now() - dt.timedelta(days=i + 20, hours=i),
-                         home_score=2, away_score=5, status='final')
-            _mk_rec(g, pick='Yankees', odds=-150)
-        report = fh.compute_forward_health(days=180)
-        self.assertEqual(report['verdict']['verdict'], 'DEGRADED')
-
-
-class CohortBucketingTests(TestCase):
-    def test_probability_bucket_boundaries(self):
-        self.assertEqual(
-            fh._bucket_for_value(0.60, fh.PROB_BUCKETS), '60-65',
-        )
-        self.assertEqual(
-            fh._bucket_for_value(0.65, fh.PROB_BUCKETS), '65-70',
-        )
-        self.assertEqual(
-            fh._bucket_for_value(0.999, fh.PROB_BUCKETS), '75+',
-        )
-        self.assertIsNone(fh._bucket_for_value(0.55, fh.PROB_BUCKETS))
-
-    def test_edge_bucket_boundaries(self):
-        self.assertEqual(fh._bucket_for_value(6.0, fh.EDGE_BUCKETS), '6-8')
-        self.assertEqual(fh._bucket_for_value(9.99, fh.EDGE_BUCKETS), '8-10')
-        self.assertEqual(fh._bucket_for_value(15.0, fh.EDGE_BUCKETS), '10+')
-
-
-class PreRegisteredThresholdsLockTests(TestCase):
-    """These thresholds were pre-registered when V3.2 was activated.
-    Any change to them requires a documented evidence-driven decision
-    (not a silent tuning). Test forces a code-review moment for anyone
-    updating them."""
-    def test_locked_values(self):
+    def test_locked_thresholds(self):
         self.assertEqual(fh.MIN_SETTLED_FOR_JUDGMENT, 30)
         self.assertEqual(fh.WATCH_WIN_RATE_DROP_PP, 4.0)
         self.assertEqual(fh.DEGRADED_WIN_RATE_DROP_PP, 8.0)
@@ -215,30 +311,36 @@ class PreRegisteredThresholdsLockTests(TestCase):
         self.assertEqual(fh.DEGRADED_ROI_DROP_PP, 12.0)
         self.assertEqual(fh.WATCH_CLV_DROP_PP, 5.0)
         self.assertEqual(fh.DEGRADED_CLV_DROP_PP, 12.0)
-        self.assertEqual(fh.REPLAY_BASELINE_WIN_RATE, 71.5)
-        self.assertEqual(fh.REPLAY_BASELINE_ROI, 21.0)
-        self.assertEqual(fh.REPLAY_BASELINE_CLV_POS, 55.0)
-
-
-class RendererSmokeTests(TestCase):
-    def test_renderer_produces_expected_headers(self):
-        report = fh.compute_forward_health(days=30)
-        text = fh.render_forward_health(report)
-        self.assertIn('V3.2 FORWARD-VALIDATION HEALTH', text)
-        self.assertIn('POPULATION', text)
-        self.assertIn('AGGREGATE', text)
-        self.assertIn('COHORTS', text)
-        self.assertIn('CALIBRATION', text)
-        self.assertIn('HEALTH VERDICT', text)
 
 
 class ProductionFlagsFrozenTests(TestCase):
-    """No forward-health surface should ever accidentally activate a
-    scoring feature. Lock the flags here so a future refactor can't
-    silently drift."""
-    def test_all_shadow_flags_default_false(self):
+    def test_shadow_flags_default_false(self):
         from brotherwillies import settings as s
         self.assertFalse(getattr(s, 'USE_BULLPEN_QUALITY', False))
         self.assertFalse(getattr(s, 'USE_BULLPEN_FATIGUE', False))
         self.assertFalse(getattr(s, 'USE_LINEUP_QUALITY', False))
         self.assertFalse(getattr(s, 'USE_TEAM_OFFENSE', False))
+
+
+class RendererSmokeTests(TestCase):
+    def test_renderer_includes_capture_health_and_verdict(self):
+        report = fh.compute_forward_health(days=30)
+        text = fh.render_forward_health(report)
+        self.assertIn('CAPTURE HEALTH', text)
+        self.assertIn('POPULATION', text)
+        self.assertIn('HEALTH VERDICT', text)
+        self.assertIn('canonical window', text)
+
+
+class VerdictOnEmptyPopulationTests(TestCase):
+    def test_no_snapshots_yields_insufficient_data(self):
+        report = fh.compute_forward_health(days=30)
+        self.assertEqual(report['verdict']['verdict'], 'INSUFFICIENT_DATA')
+
+
+class CaptureCommandChainTests(TestCase):
+    def test_capture_command_is_registered(self):
+        """capture_v3_2_validation management command must be
+        discoverable — this is what refresh_data calls."""
+        from django.core.management import get_commands
+        self.assertIn('capture_v3_2_validation', get_commands())

@@ -395,6 +395,187 @@ class TeamBattingBackfillRun(models.Model):
         return int((end - self.started_at).total_seconds())
 
 
+class ForwardValidationSnapshot(models.Model):
+    """Autonomous canonical decision-snapshot for V3.2 forward validation.
+
+    Why this exists (2026-08-24 diagnosis):
+      `BettingRecommendation.objects.create()` is called ONLY from
+      `mockbets/views.py::place_mock_bet` and
+      `mockbets/services/bulk_actions.py::_persist_bulk_selection`.
+      Both require Danny to actively place / bulk-add a bet. If no user
+      places bets, no BettingRecommendation rows exist — so
+      `/analytics/v3-2-forward-health/` was returning generated=0 not
+      because V3.2 wasn't producing recommendations, but because the
+      persistence path was gated on user activity.
+
+      Forward validation is a MODEL performance record. It must exist
+      independently of user browsing or betting. This model + the
+      `capture_v3_2_validation_snapshots` command close that gap by
+      persisting one canonical decision-time observation per MLB game
+      inside a well-defined pregame window, driven by refresh_data.
+
+    Canonical capture rule:
+      * game.first_pitch is between now+45min and now+75min (target ~60min)
+      * no snapshot exists yet for (game, engine_version)
+      → run frozen V3.2 through get_recommendation, persist the result
+
+    Immutability:
+      Decision fields (probabilities, pick, odds, edge, status, lane,
+      tier, feature_contributions, lineup_state, etc.) are written ONCE
+      and never mutated. Settlement fields (won, profit_per_dollar,
+      closing_market_prob, clv_pp) are appended by the settlement job
+      after the game reaches status='final'. Enforced by the service
+      layer — the capture command uses .create() only when no snapshot
+      exists for (game, engine_version).
+
+    Populations captured:
+      Every evaluable MLB game gets a snapshot regardless of whether
+      the V3.2 model recommends. decision_class classifies each as:
+        * 'recommended'      — status='recommended' AND lane='core'
+        * 'potential'        — status='recommended' AND lane='qualified'
+        * 'not_recommended'  — status='not_recommended' OR lane='pass'
+        * 'no_signal'        — get_recommendation returned None (no odds, etc.)
+
+      Forward-health headline metrics use decision_class='recommended'.
+      The other classes are retained for research value (gate diagnostics,
+      threshold research, distribution-shift detection) without ever
+      influencing user-facing recommendations.
+
+    Engine version:
+      'v3_2' matches the currently frozen production stack (Recent Form
+      ON, blend 0.55, prob>=0.62, edge>=7pp). ANY change to that stack
+      MUST bump the engine_version string so historical snapshots
+      remain interpretable against the methodology that produced them.
+    """
+    ENGINE_VERSION_CHOICES = [
+        ('v3_2', 'V3.2 (Recent Form ON, blend 0.55, 0.62/7pp)'),
+    ]
+    DECISION_CLASS_CHOICES = [
+        ('recommended', 'Recommended (status=recommended, lane=core)'),
+        ('potential', 'Potential (status=recommended, lane=qualified)'),
+        ('not_recommended', 'Not Recommended'),
+        ('no_signal', 'No Signal (no odds, insufficient data)'),
+    ]
+    ODDS_SOURCE_CHOICES = [
+        ('odds_api', 'The Odds API'),
+        ('espn', 'ESPN (fallback)'),
+        ('unknown', 'Unknown'),
+    ]
+    LINEUP_STATE_CHOICES = [
+        ('unknown', 'Unknown'),
+        ('projected', 'Projected'),
+        ('confirmed', 'Confirmed'),
+        ('updated_after_confirmation', 'Updated After Confirmation'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # --- Immutable decision-time fields (written once at capture) ---
+    mlb_game = models.ForeignKey(
+        'mlb.Game', on_delete=models.CASCADE,
+        related_name='v3_2_forward_snapshots',
+    )
+    engine_version = models.CharField(
+        max_length=16, choices=ENGINE_VERSION_CHOICES, default='v3_2',
+        db_index=True,
+    )
+    captured_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    minutes_to_first_pitch = models.IntegerField(
+        help_text='Wall-clock minutes between captured_at and first_pitch.',
+    )
+
+    # Decision classification.
+    decision_class = models.CharField(
+        max_length=20, choices=DECISION_CLASS_CHOICES, db_index=True,
+    )
+
+    # Pick / probabilities / edge.
+    pick = models.CharField(max_length=200, blank=True, default='')
+    pick_side = models.CharField(
+        max_length=5, blank=True, default='',
+        help_text="'home' / 'away' / '' when no_signal",
+    )
+    odds_american = models.IntegerField(null=True, blank=True)
+    odds_source = models.CharField(
+        max_length=10, choices=ODDS_SOURCE_CHOICES, default='unknown',
+    )
+    odds_captured_at = models.DateTimeField(null=True, blank=True)
+    raw_model_prob = models.FloatField(null=True, blank=True)
+    final_model_prob = models.FloatField(null=True, blank=True)
+    market_prob = models.FloatField(null=True, blank=True)
+    edge_pp = models.FloatField(null=True, blank=True)
+    confidence_score = models.FloatField(null=True, blank=True)
+
+    # Gate / classification / risk.
+    status = models.CharField(max_length=20, blank=True, default='')
+    status_reason = models.CharField(max_length=32, blank=True, default='')
+    tier = models.CharField(max_length=16, blank=True, default='')
+    lane = models.CharField(max_length=16, blank=True, default='')
+    risk_flags = models.JSONField(default=dict, blank=True)
+    risk_score = models.IntegerField(default=0)
+    is_secondary = models.BooleanField(default=False)
+
+    # Market movement.
+    movement_class = models.CharField(max_length=16, blank=True, default='')
+    movement_score = models.FloatField(null=True, blank=True)
+    movement_supports_pick = models.BooleanField(default=False)
+    market_warning = models.BooleanField(default=False)
+
+    # Full feature-attribution payload — same JSON shape used by
+    # BettingRecommendation.feature_contributions.
+    feature_contributions = models.JSONField(default=dict, blank=True)
+
+    # Lineup observational metadata (ZERO scoring authority — recorded
+    # for future research only).
+    lineup_state = models.CharField(
+        max_length=32, choices=LINEUP_STATE_CHOICES, default='unknown',
+    )
+    lineup_snapshot_ref = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text='Reference (id / timestamp) of the latest legitimate '
+                  'pregame lineup snapshot at capture time.',
+    )
+
+    # --- Mutable settlement fields (appended once the game is final) ---
+    settled_at = models.DateTimeField(null=True, blank=True)
+    won = models.BooleanField(null=True, blank=True,
+                              help_text='None until settled; True/False '
+                                        'after; None for push.')
+    profit_per_dollar = models.FloatField(
+        null=True, blank=True,
+        help_text='Hypothetical flat-stake $1 profit at captured odds.',
+    )
+    closing_market_prob = models.FloatField(null=True, blank=True)
+    clv_pp = models.FloatField(
+        null=True, blank=True,
+        help_text='Closing-line value in probability points (positive '
+                  '= beat the close).',
+    )
+    home_score_at_settlement = models.IntegerField(null=True, blank=True)
+    away_score_at_settlement = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-captured_at']
+        indexes = [
+            models.Index(fields=['engine_version', '-captured_at']),
+            models.Index(fields=['decision_class', '-captured_at']),
+            models.Index(fields=['-captured_at', 'engine_version']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mlb_game', 'engine_version'],
+                name='fwd_val_snapshot_game_engine_unique',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f'ForwardValidationSnapshot[{self.engine_version}] '
+            f'game={self.mlb_game_id} class={self.decision_class} '
+            f'@ T-{self.minutes_to_first_pitch}min'
+        )
+
+
 class TeamEloHistory(models.Model):
     """Append-only log of every Elo rating change.
 

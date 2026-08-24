@@ -150,6 +150,17 @@ class Command(BaseCommand):
                         # Non-fatal — lineup collection is prospective
                         # evidence; failure does not block the rest of
                         # the refresh cycle.
+                    # 2026-08-24 forward-validation autonomous capture.
+                    # Idempotent: only creates snapshots for games
+                    # inside the T-60min canonical window that don't
+                    # already have one. Also settles finished games.
+                    # Non-fatal — a capture failure is a monitoring
+                    # signal, not a reason to halt refresh.
+                    try:
+                        call_command('capture_v3_2_validation',
+                                     stdout=self.stdout)
+                    except Exception as e:
+                        _emit(f'capture_v3_2_validation failed: {e}')
                 _emit(f'{sport} done')
                 sport_successes.append(sport)
             except Exception as e:
