@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-08-24 — Team-Offense CLOSED (NO-GO) + V3.2 Forward-Health program
+
+**Strategic pivot**: after the phase-2 isolated analysis (99.9% coverage, 1,652 games) returned `NO_GO_OFFENSE` with 0/4 candidates promoted, the team-offense track is formally closed. The priority shifts from adding features to proving V3.2 performs forward in production while lineup collection accumulates for the next legitimate feature test.
+
+### Team-Offense closure
+- Full evidence trail preserved in [docs/v3_4_team_offense_closure.md](docs/v3_4_team_offense_closure.md).
+- Bounded integration replay was explicitly **NOT** run — no candidate earned promotion.
+- All tooling preserved (TeamBattingSnapshot, backfill, audit, isolated analyzer, v2 bounded replay) for future research. Zero production influence.
+- `USE_TEAM_OFFENSE=false` unchanged.
+
+### V3.2 Forward-Validation Health program (new)
+- `apps/analytics/services/v3_2_forward_health.py` — compares live SYSTEM recommendations (`model_source='house'`, lane-core, settled) against pre-registered replay baseline (~71.5% win, +21% ROI, 55% CLV+).
+- Report includes: population (generated/lane-core/settled/unsettled), aggregate with Wilson95 CI, distribution (per day, odds, edge, prob), cohort splits (probability buckets, edge buckets, home/away, favorite short/mid/underdog), calibration bins, data-integrity findings.
+- Pre-registered thresholds — locked by test:
+  - `MIN_SETTLED_FOR_JUDGMENT = 30` → below this: **INSUFFICIENT_DATA**
+  - **WATCH** on win-rate drop ≥ 4pp OR ROI drop ≥ 5pp OR CLV+ drop ≥ 5pp
+  - **DEGRADED** on win-rate drop ≥ 8pp OR ROI drop ≥ 12pp OR CLV+ drop ≥ 12pp
+- Uses POINT-ESTIMATE drops (not Wilson lower bound) — small-sample lower bounds sit far below any baseline just from variance and would spuriously trigger DEGRADED on healthy data.
+- URL: `GET /analytics/v3-2-forward-health/?days=30` (staff-only, plaintext).
+
+### Immutable decision snapshot — audit result
+`BettingRecommendation` already captures the full decision-time state needed for replay-vs-live cohort matching: `raw_model_prob`, `final_model_prob`, `market_prob`, `model_edge`, `confidence_score`, `pick`, `odds_american`, `line`, `status`, `status_reason`, `tier` (derived), `lane`, `movement_class`, `movement_score`, `movement_supports_pick`, `is_secondary`, `feature_contributions` JSON (inputs + per-feature contributions_pp + probabilities), `shadow_active_mode`, `shadow_alt_data`, `created_at`. Outcome computed from linked Game scores at read time; CLV from `ModelResultSnapshot.closing_market_prob`. **No schema changes required.**
+
+### Lineup collection — cron wiring
+- **`ingest_lineups` now runs inside `refresh_data`** every cycle (short-circuits safely when no games in `[now−1h, now+8h]` window). No separate Railway cron needed. Non-fatal on failure — lineup collection is prospective evidence and must not block the rest of refresh.
+- `USE_LINEUP_QUALITY=false` unchanged. Collection is the feature program; scoring stays gated until the pre-registered sample threshold is reached.
+
+### Research console UX cleanup
+- `/analytics/bullpen-experiment/` renamed to **"MLB Model Research Lab"**. URL preserved for backward compat.
+- Three clearly labeled sections at the top:
+  - **PRODUCTION VALIDATION (V3.2)** — green — link to forward-health report (30d + 60d).
+  - **ACTIVE RESEARCH (lineups)** — yellow — link to lineup coverage + ops.
+  - **CLOSED / HISTORICAL STUDIES** — grey — text banners noting Bullpen NO-GO and Team-Offense NO-GO; explicit "do not rerun casually" markers.
+- Legacy experiment console (bullpen A/B/C + team-offense phase-1/phase-2 trigger buttons) preserved below the new headers for audit reproducibility.
+
+### Tests (14 new — all pass)
+`apps/core/test_v3_2_forward_health.py`:
+- Wilson CI hand-verified case + zero-n degenerate.
+- Outcome computation (home pick wins, away pick wins, unfinished returns None).
+- SYSTEM-only filter — `model_source='user'` recs are excluded from the sample.
+- Verdict rules on synthetic data: INSUFFICIENT_DATA below n=30; HEALTHY/WATCH at baseline; DEGRADED at 50% win rate.
+- Probability and edge bucket boundaries.
+- **Pre-registered threshold LOCK** — any change to the 8 threshold constants forces a test update, making the change a code-review moment rather than a silent tuning.
+- Renderer smoke — all top-level headers present.
+- Production-flag lock — all shadow flags remain false.
+
+**Full regression: 1656 tests / 1 pre-existing feedback ImportError / 0 real failures.**
+
+### Discipline preserved
+- V3.2 production unchanged: gate 0.62/7pp, blend 0.55, Recent Form ON.
+- All shadow flags remain false: bullpen quality/fatigue, lineup quality, team offense.
+- No new model feature. No threshold change. No calibration change.
+- Team offense and bullpen research tracks are CLOSED. Reopening either requires a documented new hypothesis, not a re-run of the existing evidence.
+
+### Operator next-action
+1. Wait ~2 min for Railway to deploy.
+2. Open `https://brotherwillies.com/analytics/bullpen-experiment/` — new Model Research Lab layout.
+3. Click **"Open V3.2 Forward-Health Report (30d)"**. First render will likely show `INSUFFICIENT_DATA` (< 30 settled system recommendations in the window) — that's the correct pre-registered state. As settled samples accumulate over the next 1-3 weeks, the report will transition to HEALTHY / WATCH / DEGRADED without manual re-verdict.
+4. Check `/analytics/lineup-coverage/` — the OPS block should show `last_run_at` within one refresh cycle after this deploy lands (because `ingest_lineups` now chains inside `refresh_data`).
+
+---
+
 ## 2026-08-24 — v3.4 SHADOW: isolated-analysis crash fix + operational visibility
 
 **Root cause (production crash after successful backfill + READY audit)**:

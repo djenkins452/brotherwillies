@@ -105,6 +105,15 @@ urlpatterns = [
         views.force_clear_stale_experiment,
         name='force_clear_stale_experiment',
     ),
+    # 2026-08-24 (post-team-offense NO-GO closure) — V3.2 forward-
+    # validation health. Compares live system recommendations against
+    # the pre-registered replay baseline; produces INSUFFICIENT_DATA /
+    # HEALTHY / WATCH / DEGRADED verdict.
+    path(
+        'v3-2-forward-health/',
+        views.v3_2_forward_health,
+        name='v3_2_forward_health',
+    ),
     # v3.4 team-offense PHASE 2 (post-first-backfill) — read-only audit
     # of the TeamBattingSnapshot state. Reports coverage, missing-pair
     # classification, game-level coverage, per-candidate coverage, and

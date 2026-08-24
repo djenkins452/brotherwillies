@@ -887,6 +887,31 @@ def force_clear_stale_experiment(request):
     return redirect('analytics:bullpen_experiment')
 
 
+def v3_2_forward_health(request):
+    """v3.2 forward-validation health — plaintext report comparing live
+    system recommendations against the pre-registered historical replay
+    baseline. Staff-only, read-only, zero-side-effect.
+
+    Query params:
+      days   — analysis window (default 30; clamped 7-180)
+    """
+    forbidden = _staff_required(request)
+    if forbidden is not None:
+        return forbidden
+    from apps.analytics.services.v3_2_forward_health import (
+        compute_forward_health, render_forward_health,
+    )
+    try:
+        days = int(request.GET.get('days', 30))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(days, 180))
+    report = compute_forward_health(days=days)
+    body = render_forward_health(report)
+    from django.http import HttpResponse
+    return HttpResponse(body, content_type='text/plain; charset=utf-8')
+
+
 def team_batting_audit(request):
     """v3.4 team-offense phase 2 — read-only audit of the
     TeamBattingSnapshot backfill state. Plaintext response.

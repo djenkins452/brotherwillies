@@ -134,6 +134,22 @@ class Command(BaseCommand):
                 if sport in SNAPSHOT_ELIGIBLE_SPORTS:
                     call_command('capture_snapshots', sport=sport, stdout=self.stdout)
                     call_command('resolve_outcomes', sport=sport, stdout=self.stdout)
+                # v3.4 SHADOW (2026-08-24): prospective lineup collection.
+                # ingest_lineups short-circuits (no API call) when no
+                # local MLB Game rows fall in the [-1h, +8h] window, so
+                # chaining it into refresh_data is safe year-round —
+                # off-hours ticks cost one local DB query and exit.
+                # Runs OUTSIDE any USE_LINEUP_QUALITY flag: the flag
+                # only gates scoring, never collection.
+                if sport == 'mlb':
+                    try:
+                        call_command('ingest_lineups',
+                                     trigger='cron', stdout=self.stdout)
+                    except Exception as e:
+                        _emit(f'ingest_lineups failed: {e}')
+                        # Non-fatal — lineup collection is prospective
+                        # evidence; failure does not block the rest of
+                        # the refresh cycle.
                 _emit(f'{sport} done')
                 sport_successes.append(sport)
             except Exception as e:

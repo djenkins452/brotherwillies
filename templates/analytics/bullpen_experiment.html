@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load tz_extras %}
-{% block title %}Bullpen Experiment | Brother Willies{% endblock %}
+{% block title %}MLB Model Research Lab | Brother Willies{% endblock %}
 
 {% block extra_css %}
 {% if auto_refresh_seconds %}
@@ -10,14 +10,103 @@
 
 {% block content %}
 <div class="container" style="padding: 1rem; max-width: 1100px; margin: 0 auto;">
-    <h1 style="margin-bottom: 0.4rem;">v3.3 Bullpen A/B/C Experiment</h1>
-    <p style="color: #888; font-size: 0.9rem; margin-bottom: 1.5rem;">
-        Async version of the <code>?experiment=bullpen</code> replay. Runs off
-        the request thread so a full production 6-month × 3-variant sweep
-        completes without hitting gunicorn's 30-second worker timeout.
-        Shadow-only — bullpen flags remain <strong>OFF</strong> regardless of
-        what this experiment produces.
+    <h1 style="margin-bottom: 0.4rem;">MLB Model Research Lab</h1>
+    <p style="color: #888; font-size: 0.9rem; margin-bottom: 0.8rem;">
+        Central research + operational console. Production remains
+        <strong>V3.2</strong> (Recent Form ON, blend 0.55, probability ≥ 0.62,
+        edge ≥ 7pp). Every shadow flag is OFF regardless of what any
+        experiment on this page produces.
     </p>
+
+    {# High-level navigation into the sections below. #}
+    <div style="margin-bottom: 1.5rem; padding: 0.8rem 1rem; background: #12121c; border: 1px solid #2a2a3a; border-radius: 6px; font-size: 0.85rem;">
+        <div style="display:flex; gap:1.2rem; flex-wrap:wrap; color:#bbb;">
+            <a href="#production-validation" style="color:#22c55e; text-decoration:none;">▸ PRODUCTION VALIDATION (V3.2)</a>
+            <a href="#active-research" style="color:#eab308; text-decoration:none;">▸ ACTIVE RESEARCH (lineups)</a>
+            <a href="#closed-research" style="color:#888; text-decoration:none;">▸ CLOSED / HISTORICAL STUDIES (bullpen, team offense)</a>
+        </div>
+    </div>
+
+    {# ----- PRODUCTION VALIDATION section ----- #}
+    <section id="production-validation" style="margin-bottom: 1.5rem; padding: 1rem; background: #0e1a12; border: 1px solid #2f4a2f; border-radius: 6px;">
+        <h2 style="font-size: 1.05rem; margin-bottom: 0.4rem; color:#86efac;">
+            PRODUCTION VALIDATION — V3.2 Forward Health
+        </h2>
+        <p style="color:#aaa; font-size: 0.85rem; margin: 0 0 0.6rem;">
+            Compares live system recommendations (<code>model_source=house</code>,
+            lane-core, settled) against the pre-registered replay baseline
+            (~71–72% win / +21–22% ROI / ~55% CLV+). Mechanical
+            <strong>INSUFFICIENT_DATA / HEALTHY / WATCH / DEGRADED</strong>
+            verdict — no operator judgment applied.
+        </p>
+        <a href="{% url 'analytics:v3_2_forward_health' %}?days=30" target="_blank"
+           style="padding:0.5rem 1rem; background:#0f2e1c; color:#fff;
+                  border:1px solid #22c55e; border-radius:4px;
+                  text-decoration:none; font-size:0.9rem;">
+            Open V3.2 Forward-Health Report (30d)
+        </a>
+        <a href="{% url 'analytics:v3_2_forward_health' %}?days=60" target="_blank"
+           style="padding:0.5rem 1rem; background:#0e1a12; color:#86efac;
+                  border:1px solid #22c55e; border-radius:4px;
+                  text-decoration:none; font-size:0.9rem; margin-left:0.4rem;">
+            60d window
+        </a>
+    </section>
+
+    {# ----- ACTIVE RESEARCH section ----- #}
+    <section id="active-research" style="margin-bottom: 1.5rem; padding: 1rem; background: #1a1a08; border: 1px solid #4a4a1f; border-radius: 6px;">
+        <h2 style="font-size: 1.05rem; margin-bottom: 0.4rem; color:#fde68a;">
+            ACTIVE RESEARCH — Confirmed Lineup Collection
+        </h2>
+        <p style="color:#aaa; font-size: 0.85rem; margin: 0 0 0.6rem;">
+            Prospective evidence collection for the next legitimate feature
+            test. <code>USE_LINEUP_QUALITY</code> remains
+            <strong>FALSE</strong>. The lineup poller now runs INSIDE
+            <code>refresh_data</code> (short-circuits when no games in
+            window), so it fires alongside every scheduled refresh with
+            no separate Railway cron.
+        </p>
+        <a href="{% url 'analytics:lineup_coverage' %}" target="_blank"
+           style="padding:0.5rem 1rem; background:#2e2e08; color:#fff;
+                  border:1px solid #eab308; border-radius:4px;
+                  text-decoration:none; font-size:0.9rem;">
+            Open Lineup Collection Coverage + Ops Report
+        </a>
+    </section>
+
+    {# ----- CLOSED RESEARCH section header ----- #}
+    <section id="closed-research" style="margin-bottom: 1rem; padding: 1rem; background: #16161e; border: 1px solid #333; border-radius: 6px;">
+        <h2 style="font-size: 1.05rem; margin-bottom: 0.4rem; color:#c4b5fd;">
+            CLOSED / HISTORICAL STUDIES
+        </h2>
+        <div style="padding:0.55rem 0.75rem; background:#1a1a1a;
+                    border-left:3px solid #6b7280; border-radius:4px;
+                    color:#d4d4d8; font-size:0.83rem;">
+            <strong style="color:#e5e7eb;">v3.3 Bullpen</strong> — NO-GO
+            (walk-forward failed 2/6 ship criteria).
+            <code>USE_BULLPEN_QUALITY=false</code>,
+            <code>USE_BULLPEN_FATIGUE=false</code>. Do not rerun casually.
+        </div>
+        <div style="margin-top:0.4rem; padding:0.55rem 0.75rem; background:#1a1a1a;
+                    border-left:3px solid #6b7280; border-radius:4px;
+                    color:#d4d4d8; font-size:0.83rem;">
+            <strong style="color:#e5e7eb;">v3.4 Team Offense (phases 1 &amp; 2)</strong> —
+            NO-GO. Phase-1 30d runs/game degraded win/ROI in direct replay.
+            Phase-2 isolated OPS/OBP/SLG/blend analysis on 99.9% coverage
+            showed <strong>NO_GO_OFFENSE</strong> — 0/4 candidates promoted.
+            <code>USE_TEAM_OFFENSE=false</code>. Do not run the bounded
+            integration replay. Do not tune weights.
+        </div>
+        <p style="color:#888; font-size: 0.78rem; margin: 0.6rem 0 0;">
+            Trigger buttons for closed research below remain enabled for
+            future audit reruns / reproducibility, but are not part of
+            active work.
+        </p>
+    </section>
+
+    <h2 style="font-size:0.95rem; margin: 1.5rem 0 0.5rem; color:#888; text-transform:uppercase; letter-spacing:0.04em;">
+        Legacy experiment console (closed studies + isolated-analysis tooling)
+    </h2>
 
     {% if messages %}
         {% for m in messages %}
